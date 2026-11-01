@@ -15,7 +15,7 @@ the adapter implements them and what is still approximate.
 | `ObservationBuilder` | `Observation` for one seat, `Privileged` for the log |
 | `ObservedAiController` | Forge AI that reports what it does: the opponent's actions for the agent seats' streams, and for agent seats every wrapped method it answers as an intended delegation |
 | `RlPlayerController` | Agent seats. Asks agent-core for priority, targets of cast spells / activated abilities, attackers, blockers, mulligan, bottom cards, play/draw |
-| `DecisionClient` | The connection to agent-core (gRPC comes with the agent-core server) |
+| `DecisionClient` | The connection to agent-core: `GrpcDecisionClient` (Hello + one bidirectional stream per game; a failed stream fails every later call of that game, recorded as an unintended fallback) |
 | `ForgeRandom` | Per-thread seeded `MyRandom` (inheritable: Forge AI spawns a thread per decision) |
 
 ## Tables
@@ -29,14 +29,19 @@ the adapter implements them and what is still approximate.
 
 ## Harnesses (test sources, not run by mvn install; working directory forge/forge-gui)
 
+Each harness takes an optional last argument for reaching agent-core: `spawn` (default: a separate agent-core JVM on
+a free localhost port, over gRPC), `host:port` (a running agent-core) or `local` (agent-core's game handling
+in-process, no gRPC; `LocalDecisionClient`).
+
 - `harness.RandomGames` (default exec main): random policy in seat 0 vs Forge AI. PASS needs zero unintended
   fallbacks, protocol errors, unmapped names and (with a log dir) malformed logs.
 - `harness.AdapterDeterminism`: the same matches twice in one JVM with the same seeds; every game log must be
   byte-identical.
 - `harness.LogReplay`: plays matches with logs, then replays each from its logs alone (`ReplayDecisionClient`
   answers with agent-core's logged responses, same seed); every request and every game log must match.
-- `RandomDecisionClient` stands in for agent-core: uniform random, multi-selects step by step, honours the Q15
-  combination rules, checks sequence numbers and `applied_seq`.
+- The random policy is agent-core's `RandomPolicy` (uniform, multi-selects step by step, honours the Q15 combination
+  rules); agent-core's `GameSession` checks sequence numbers, snapshots and `applied_seq` and closes the game's
+  stream on a protocol error.
 
 ## Not done / approximate in this slice
 
@@ -52,6 +57,8 @@ the adapter implements them and what is still approximate.
   design's replay also scripts the opponent from the log, so that it survives Forge AI changes: not built yet.
 
 ## Results (2026-11-02, IzzetProwess random vs EsperBlink Forge AI)
+
+In-process stand-in for agent-core (before the gRPC server):
 
 - RandomGames 1000 matches / 2198 games, 53 min: unintended fallbacks 0, refusals 0, protocol errors 0, unmapped 0.
 - AdapterDeterminism 20 matches: identical 20, different 0.

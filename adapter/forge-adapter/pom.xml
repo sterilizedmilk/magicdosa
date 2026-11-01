@@ -35,6 +35,11 @@
       <groupId>forge</groupId>
       <artifactId>forge-gui-desktop</artifactId>
     </dependency>
+    <!-- GrpcDecisionClient -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty-shaded</artifactId>
+    </dependency>
   </dependencies>
   <build>
     <plugins>

@@ -22,6 +22,8 @@
     <!-- Forge = the forge submodule (pinned commit), installed to the local repo by scripts/install-forge.ps1 -->
     <forge.version>2.0.16-SNAPSHOT</forge.version>
     <protobuf.version>4.28.3</protobuf.version>
+    <!-- adapter <-> agent-core transport (session.proto service AgentCore) -->
+    <grpc.version>1.68.1</grpc.version>
   </properties>
 
   <dependencyManagement>
@@ -45,6 +47,19 @@
         <groupId>com.google.protobuf</groupId>
         <artifactId>protobuf-java</artifactId>
         <version>${protobuf.version}</version>
+      </dependency>
+      <!-- Forge's version (forge-core/pom.xml); grpc would otherwise pull an older one in -->
+      <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.3.1-android</version>
+      </dependency>
+      <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-bom</artifactId>
+        <version>${grpc.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>

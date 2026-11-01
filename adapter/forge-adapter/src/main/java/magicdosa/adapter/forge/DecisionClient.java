@@ -7,8 +7,8 @@ import magicdosa.protocol.v1.Hello;
 import magicdosa.protocol.v1.HelloReply;
 
 /**
- * The adapter's connection to agent-core (design: 설계에 미치는 영향 통신; Q12). The gRPC implementation comes with the
- * agent-core server; tests use an in-process client. Calls for one game come from that game's thread, in order.
+ * The adapter's connection to agent-core (design: 설계에 미치는 영향 통신; Q12): {@link GrpcDecisionClient}, or in
+ * process in test harnesses. Calls for one game come from that game's thread, in order.
  */
 public interface DecisionClient {
     /** Game-start handshake; the game is not played unless accepted. */

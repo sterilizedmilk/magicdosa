@@ -16,6 +16,21 @@
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
     </dependency>
+    <!-- generated AgentCoreGrpc stubs; each side adds its own transport (grpc-netty-shaded) -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.tomcat</groupId>
+      <artifactId>annotations-api</artifactId>
+      <version>6.0.53</version>
+      <scope>provided</scope>
+    </dependency>
     <!-- tests: JSON mapping used by external engines -->
     <dependency>
       <groupId>com.google.protobuf</groupId>
@@ -47,10 +62,12 @@
         <configuration>
           <protoSourceRoot>${project.basedir}/../proto</protoSourceRoot>
           <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+          <pluginId>grpc-java</pluginId>
+          <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
         </configuration>
         <executions>
           <execution>
-            <goals><goal>compile</goal></goals>
+            <goals><goal>compile</goal><goal>compile-custom</goal></goals>
           </execution>
         </executions>
       </plugin>

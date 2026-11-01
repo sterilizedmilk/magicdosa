@@ -216,6 +216,8 @@ enum SearchSkipReason {
   SEARCH_SKIP_REASON_SHADOW_RECOVERY_FAILED = 1;
   // The policy was confident enough to pass without search (Q14; threshold set after measurement).
   SEARCH_SKIP_REASON_POLICY_CONFIDENT = 2;
+  // The stage has no search yet (phase 1: random policy, no shadow game).
+  SEARCH_SKIP_REASON_NOT_AVAILABLE = 3;
 }
 
 // Optional diagnostics (design: "후보별 확률, 가치, 전략별 승률").

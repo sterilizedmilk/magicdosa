@@ -8,7 +8,6 @@ import magicdosa.adapter.forge.CardKeys;
 import magicdosa.adapter.forge.DecisionStats;
 import magicdosa.adapter.forge.ForgeMatchRunner;
 import magicdosa.adapter.forge.ObservedAiController;
-import magicdosa.adapter.forge.RandomDecisionClient;
 import magicdosa.agent.DeckFiles;
 import magicdosa.protocol.v1.Mode;
 
@@ -21,9 +20,10 @@ import java.util.Set;
 /**
  * Phase-1 gate (CLAUDE.md "지금 단계"): a uniform random policy in seat 0 against Forge AI plays N Bo3 matches through
  * the forge-adapter; there must be no unintended fallback, no protocol error and no unmapped card or ability.
- * Sequential, one JVM. Main program in the test sources, so mvn install does not run it:
+ * Sequential. By default agent-core runs as a separate JVM over gRPC (see {@link AgentConnection} for the last
+ * argument: spawn, host:port or local). Main program in the test sources, so mvn install does not run it:
  *
- * <pre>mvn -pl adapter/forge-adapter exec:exec "-Dexec.args=&lt;abs decks dir&gt; IzzetProwess.dck EsperBlink.dck 20 &lt;abs log dir or -&gt;"</pre>
+ * <pre>mvn -pl adapter/forge-adapter exec:exec "-Dexec.args=&lt;abs decks dir&gt; IzzetProwess.dck EsperBlink.dck 20 &lt;abs log dir or -&gt; [spawn]"</pre>
  */
 public final class RandomGames {
     private RandomGames() {}
@@ -32,6 +32,7 @@ public final class RandomGames {
         String deckDir = args[0];
         int matches = Integer.parseInt(args[3]);
         Path logDir = args.length > 4 && !args[4].equals("-") ? Path.of(args[4]) : null;
+        String agentSpec = args.length > 5 ? args[5] : "spawn";
 
         System.setProperty("java.awt.headless", "true");
         System.setProperty("java.util.Arrays.useLegacyMergeSort", "true");
@@ -41,8 +42,8 @@ public final class RandomGames {
         Deck deck1 = DeckFiles.load(new File(deckDir, args[2]));
 
         CardKeys keys = CardKeys.load();
-        RandomDecisionClient client = new RandomDecisionClient();
-        ForgeMatchRunner runner = new ForgeMatchRunner(client, keys, Mode.MODE_TRAINING, "forge@87cb532", false);
+        AgentConnection agent = AgentConnection.open(agentSpec);
+        ForgeMatchRunner runner = new ForgeMatchRunner(agent.client(), keys, Mode.MODE_TRAINING, "forge@87cb532", false);
         DecisionStats total = new DecisionStats();
         int[] won = new int[2];
         int games = 0;
@@ -62,6 +63,8 @@ public final class RandomGames {
             }
         }
         long ms = System.currentTimeMillis() - start;
+        agent.close();
+        int protocolErrors = agent.protocolErrorCount();
         System.out.printf("matches=%d games=%d agentWins=%d forgeAiWins=%d seconds=%.1f%n", matches, games, won[0], won[1], ms / 1000.0);
         System.out.println("decided by agent: " + total.decided() + " (auto passes " + total.autoPasses() + ")");
         System.out.println("intended delegations: " + total.delegated());
@@ -71,16 +74,16 @@ public final class RandomGames {
         System.out.println("unintended fallbacks: " + total.fallbacks().size() + " " + fallbacks);
         System.out.println("engine refusals asked again (not fallbacks): " + total.rejected());
         total.notes().forEach((k, v) -> System.out.println("  " + v + "x " + k));
-        System.out.println("protocol errors: " + client.protocolErrors().size() + " "
-            + client.protocolErrors().subList(0, Math.min(10, client.protocolErrors().size())));
+        List<String> listed = agent.protocolErrors();
+        System.out.println("protocol errors seen by agent-core: " + (protocolErrors < 0 ? "not reported" : protocolErrors) + " "
+            + listed.subList(0, Math.min(10, listed.size())));
         System.out.println("unmapped: " + keys.unmapped().size());
         keys.unmapped().forEach(u -> System.out.println("  " + u));
-        System.out.println("events=" + client.events() + " decisions=" + client.decisions());
         List<String> logProblems = logDir == null ? List.of() : LogCheck.check(logDir);
         if (logDir != null) {
             System.out.println("log problems: " + logProblems.size() + " " + logProblems.subList(0, Math.min(10, logProblems.size())));
         }
-        boolean pass = logProblems.isEmpty() && errors == 0 && total.fallbacks().isEmpty() && client.protocolErrors().isEmpty()
+        boolean pass = logProblems.isEmpty() && errors == 0 && total.fallbacks().isEmpty() && protocolErrors == 0
             && keys.unmapped().isEmpty() && total.errors() == 0;
         System.out.println("RESULT " + (pass ? "PASS" : "FAIL"));
         System.exit(pass ? 0 : 1);

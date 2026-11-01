@@ -1,18 +1,14 @@
-package magicdosa.adapter.forge;
+package magicdosa.agent.policy;
 
-import magicdosa.protocol.Versions;
-import magicdosa.protocol.v1.AdapterMessage;
 import magicdosa.protocol.v1.Candidate;
 import magicdosa.protocol.v1.Decider;
 import magicdosa.protocol.v1.DecisionRequest;
 import magicdosa.protocol.v1.DecisionResponse;
 import magicdosa.protocol.v1.DecisionStep;
-import magicdosa.protocol.v1.Event;
-import magicdosa.protocol.v1.Hello;
-import magicdosa.protocol.v1.HelloReply;
 import magicdosa.protocol.v1.Method;
 import magicdosa.protocol.v1.PairLimit;
 import magicdosa.protocol.v1.Prior;
+import magicdosa.protocol.v1.SearchSkipReason;
 import magicdosa.protocol.v1.SelectionConstraints;
 import magicdosa.protocol.v1.StepCandidate;
 
@@ -21,63 +17,28 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.SplittableRandom;
+import java.util.function.IntConsumer;
+import java.util.function.IntPredicate;
 
 /**
- * In-process stand-in for agent-core with a uniform random policy (phase-1 gate: random policy, zero unintended
- * fallbacks). Multi-selects are made one step at a time with "done" (Q9). It also checks what the adapter sends:
- * per-seat sequence numbers must be gapless and a decision's applied_seq must be the last event sent.
+ * Uniform random policy (phase-1 gate: random policy, zero unintended fallbacks). Recorded as the model with a uniform
+ * prior and no search ({@link SearchSkipReason#SEARCH_SKIP_REASON_NOT_AVAILABLE}). Multi-selects are made one step at a
+ * time with "done" (Q9); pair selections (attackers, blockers) keep the combination rules of the constraints (Q15).
+ * Random numbers come from the request's seed only.
  */
-public final class RandomDecisionClient implements DecisionClient {
-    private final Map<String, Long> lastSeq = new HashMap<>();
-    private final List<String> protocolErrors = new ArrayList<>();
-    private long events;
-    private long decisions;
+public final class RandomPolicy implements Policy {
+    private static final Method UNIFORM = Method.newBuilder().setPrior(Prior.PRIOR_UNIFORM)
+        .setSkipped(SearchSkipReason.SEARCH_SKIP_REASON_NOT_AVAILABLE).build();
 
-    public List<String> protocolErrors() {
-        return protocolErrors;
-    }
-
-    public long events() {
-        return events;
-    }
-
-    public long decisions() {
-        return decisions;
+    @Override
+    public String modelVersion() {
+        return "random";
     }
 
     @Override
-    public HelloReply hello(Hello hello) {
-        boolean ok = hello.getProtocolVersion() == Versions.PROTOCOL;
-        return HelloReply.newBuilder().setAccepted(ok).setProtocolVersion(Versions.PROTOCOL).setEncoderVersion(1)
-            .setModelVersion("random").setReason(ok ? "" : "protocol version").build();
-    }
-
-    @Override
-    public synchronized void send(AdapterMessage message) {
-        if (message.hasEvent()) {
-            Event e = message.getEvent();
-            String key = e.getGameId() + "/" + e.getViewerSeat();
-            long expected = lastSeq.getOrDefault(key, 0L) + 1;
-            if (e.getSeq() != expected) {
-                protocolErrors.add(key + ": seq " + e.getSeq() + " after " + (expected - 1));
-            }
-            lastSeq.put(key, e.getSeq());
-            events++;
-        }
-    }
-
-    @Override
-    public synchronized DecisionResponse decide(DecisionRequest request) {
-        decisions++;
-        String key = request.getGameId() + "/" + request.getSeat();
-        if (request.getAppliedSeq() != lastSeq.getOrDefault(key, 0L)) {
-            protocolErrors.add(key + ": decision " + request.getDecisionId() + " applied_seq " + request.getAppliedSeq()
-                + " but last event " + lastSeq.getOrDefault(key, 0L));
-        }
-        if (request.getCandidatesCount() == 0) {
-            protocolErrors.add(key + ": decision " + request.getDecisionId() + " without candidates");
-        }
+    public DecisionResponse decide(DecisionRequest request) {
         SplittableRandom rnd = new SplittableRandom(request.getSeed());
         SelectionConstraints c = request.getConstraints();
         List<Integer> target = c.getRequiredIdsCount() > 0 || c.getPairLimitsCount() > 0
@@ -88,7 +49,6 @@ public final class RandomDecisionClient implements DecisionClient {
         for (int i = 0; i < request.getCandidatesCount(); i++) {
             remaining.add(i);
         }
-        Method uniform = Method.newBuilder().setPrior(Prior.PRIOR_UNIFORM).build();
         int picked = 0;
         while (picked < c.getMax() && !remaining.isEmpty()) {
             boolean doneAllowed = picked >= c.getMin() && !(c.getMin() == 1 && c.getMax() == 1);
@@ -98,7 +58,7 @@ public final class RandomDecisionClient implements DecisionClient {
             } else {
                 pick = rnd.nextInt(remaining.size() + (doneAllowed ? 1 : 0));
             }
-            DecisionStep.Builder step = DecisionStep.newBuilder().setDecider(Decider.DECIDER_MODEL).setMethod(uniform);
+            DecisionStep.Builder step = DecisionStep.newBuilder().setDecider(Decider.DECIDER_MODEL).setMethod(UNIFORM);
             for (int i : remaining) {
                 step.addCandidates(StepCandidate.newBuilder().setIndex(i));
             }
@@ -146,10 +106,10 @@ public final class RandomDecisionClient implements DecisionClient {
         for (int i = 0; i < n; i++) {
             order.add(i);
         }
-        Collections.shuffle(order, new java.util.Random(rnd.nextLong()));
+        Collections.shuffle(order, new Random(rnd.nextLong()));
         List<Integer> chosen = new ArrayList<>();
         Map<Long, Integer> uses = new HashMap<>();
-        java.util.function.IntPredicate fits = i -> {
+        IntPredicate fits = i -> {
             if (chosen.contains(i)) {
                 return false;
             }
@@ -161,7 +121,7 @@ public final class RandomDecisionClient implements DecisionClient {
             }
             return true;
         };
-        java.util.function.IntConsumer add = i -> {
+        IntConsumer add = i -> {
             chosen.add(i);
             for (long id : pairIds(request.getCandidates(i))) {
                 uses.merge(id, 1, Integer::sum);
