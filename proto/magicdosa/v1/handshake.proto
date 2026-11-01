@@ -1,0 +1,23 @@
+// magicdosa protocol, version 1. Only the game-start handshake is defined so far;
+// decision requests, the event stream and the turn-start snapshot follow the design doc.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// Sent by an engine adapter when a game starts. agent-core refuses the game when any version differs.
+message Hello {
+  uint32 protocol_version = 1;   // bumped on every schema change
+  string adapter = 2;            // "forge-adapter", "xmage-adapter", "arena-advisor"
+  string engine_version = 3;     // e.g. the Forge commit from FORGE_VERSION
+}
+
+message HelloReply {
+  bool accepted = 1;
+  uint32 protocol_version = 2;
+  uint32 encoder_version = 3;    // agent-core's encoder (tensor layout)
+  string model_version = 4;      // loaded model; records the encoder version it was trained with
+  string reason = 5;             // set when not accepted
+}

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magicdosa"
+version = "0.1.0.dev0"
+description = "magicdosa training: reads agent-core's Arrow shards, trains the policy/value nets, exports ONNX"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pyarrow",
+    "protobuf",
+]
+
+[project.optional-dependencies]
+train = ["torch", "onnx"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["magicdosa*"]

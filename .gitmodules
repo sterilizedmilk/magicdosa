@@ -1,0 +1,5 @@
+[submodule "forge"]
+	path = forge
+	url = https://github.com/Card-Forge/forge.git
+	branch = master
+	shallow = true

@@ -1,0 +1,3 @@
+* text=auto
+*.dck text eol=lf
+*.proto text eol=lf
