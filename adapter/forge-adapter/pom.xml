@@ -11,14 +11,44 @@
   </parent>
   <artifactId>magicdosa-forge-adapter</artifactId>
   <description>Real Forge games for training, connected to agent-core</description>
+  <properties>
+    <!-- the forge submodule; Forge reads res/ from forge-gui -->
+    <forge.home>${project.basedir}/../../forge</forge.home>
+    <!-- harnesses are main programs in the test sources, so mvn install does not run them -->
+    <exec.mainClass>magicdosa.adapter.forge.harness.RandomGames</exec.mainClass>
+    <decks.dir>${project.basedir}/../../decks</decks.dir>
+    <!-- paths in exec.args must be absolute: the JVM runs in forge-gui -->
+    <exec.args>${decks.dir} IzzetProwess.dck EsperBlink.dck 20 -</exec.args>
+    <jvm.args>-Xmx3g -Dfile.encoding=UTF-8</jvm.args>
+  </properties>
   <dependencies>
     <dependency>
       <groupId>magicdosa</groupId>
       <artifactId>magicdosa-protocol</artifactId>
+    </dependency>
+    <!-- GameCreation: every Forge game in a JVM is created under one lock -->
+    <dependency>
+      <groupId>magicdosa</groupId>
+      <artifactId>magicdosa-agent-core</artifactId>
     </dependency>
     <dependency>
       <groupId>forge</groupId>
       <artifactId>forge-gui-desktop</artifactId>
     </dependency>
   </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <executable>java</executable>
+          <classpathScope>test</classpathScope>
+          <workingDirectory>${forge.home}/forge-gui</workingDirectory>
+          <commandlineArgs>${jvm.args} -classpath %classpath ${exec.mainClass} ${exec.args}</commandlineArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>

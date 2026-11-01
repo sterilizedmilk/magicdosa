@@ -36,8 +36,13 @@ groupId `magicdosa`, Java 17, Maven.
 mvn install                          # 전체 빌드 (첫 빌드에서 의존성 조회 실패가 캐시됐으면 -U)
 mvn -pl agent-core exec:exec         # 재현 하네스 (기본: decks/ IzzetProwess vs EsperBlink, 40매치 순차 2회 + 8스레드 처리량)
 mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.bench.ShadowBench" "-Dexec.args=<절대경로 decks> 200"
+mvn -pl adapter/forge-adapter exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, 비의도 폴백 0이면 PASS)
+mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
+mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
 cd python; pip install -e ".[dev]"
 ```
+
+forge-adapter 구현 메모(구성, 대응표 생성, 아직 근사인 부분)는 `docs/forge-adapter.md`.
 
 - 이 PC에는 PATH에 `mvn`·`java`가 없다. IntelliJ 내장 Maven(`E:\IntelliJ\IntelliJ IDEA 2026.2.3\plugins\maven-plugin\lib\maven3\bin`)과
   `JAVA_HOME=E:\jdk\jdk17`을 셸에서 잡아 쓴다.

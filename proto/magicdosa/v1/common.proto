@@ -1,7 +1,7 @@
 // Shared identifiers and enums. Section references ("design: ...") point to the design doc
 // (https://claude.ai/artifact/E92JE6JZxX2YA8PbQCm8gS); "protocol" means its 엔진 독립성 > 프로토콜 section and
 // "Qn" the decisions of 2026-11-02 in "1단계 프로토콜 설계 질문" (https://claude.ai/artifact/REeQ22B7Pbths95ensfD8D),
-// summarized in the design doc's "프로토콜 세부 결정" table.
+// summarized in the design doc's "프로토콜 세부 결정" table. Q15-Q16 were added there while building the forge-adapter.
 syntax = "proto3";
 
 package magicdosa.v1;
@@ -67,6 +67,8 @@ message PrintedAbility {
 
 // A keyword ability, independent of the card: name and parameters, e.g. cycling {2}, flashback {R}. Several keywords
 // on one line ("Flying, vigilance") are separate keys.
+// The intrinsic mana ability of a basic land type (CR 305.6: "{T}: Add {R}" of a Mountain, a shockland, ...), which has
+// no oracle paragraph of its own, is keyed the same way: name "basic_land_mana", params the mana, e.g. ["{R}"] (Q16).
 message KeywordAbility {
   string name = 1;               // lower-case keyword name, e.g. "cycling"
   repeated string params = 2;    // parameters as printed, e.g. ["{2}"]

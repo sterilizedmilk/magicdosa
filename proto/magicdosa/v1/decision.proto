@@ -33,15 +33,42 @@ message DecisionRequest {
   repeated Candidate candidates = 9; // legal actions from the engine; agent-core never invents candidates
   SelectionConstraints constraints = 10;
   DecisionContext context = 11;
+  // Earlier answers to this same decision that the engine refused, oldest first (Q15). A refused answer is not a
+  // fallback: the adapter asks again with a new decision_id and the refusals listed here. After a few refusals the
+  // adapter gives up and records an unintended fallback (FALLBACK_REASON_ILLEGAL_ACTION).
+  repeated Rejection rejections = 12;
+}
+
+message Rejection {
+  uint64 decision_id = 1;           // the refused request
+  repeated uint32 chosen = 2;       // the refused selection (indices into the candidates, which are unchanged)
+  string reason = 3;                // the engine's reason, for debugging only (not encoded)
 }
 
 // How many candidates to pick and whether order matters (design: "선택 제약(최소·최대 개수, 순서 여부)").
 // Single choice: min = max = 1. Multi-selects are answered one step at a time with an explicit "done" (Q9).
 // MANA_PAYMENT ignores min/max: steps continue until the cost in DecisionContext.mana_cost is paid (Q6).
+//
+// Pair selections (attackers, blockers) also carry the rules that make a combination legal, which single candidates
+// cannot show (Q15): creatures that must attack if able, menace-like minimum blockers, how many attackers a blocker
+// may block. The engine can still refuse a combination these rules do not cover (see DecisionRequest.rejections).
 message SelectionConstraints {
   uint32 min = 1;
   uint32 max = 2;
   bool ordered = 3;
+  // Objects that must appear in at least one chosen pair (e.g. a creature that attacks each combat if able).
+  repeated uint64 required_ids = 4;
+  // Per-object limits on the chosen pairs that include it. Objects not listed have no limit beyond min/max.
+  repeated PairLimit pair_limits = 5;
+}
+
+message PairLimit {
+  uint64 id = 1;
+  // If the object is in any chosen pair, it must be in at least this many (menace: blocked by two or more). 0 = none.
+  uint32 min_if_any = 2;
+  // At most this many chosen pairs include it (an attacker attacks one defender; a blocker blocks one attacker
+  // unless it can block more). 0 = no limit.
+  uint32 max = 3;
 }
 
 // What the decision is about, for non-priority choices.
@@ -222,6 +249,9 @@ message DecisionRecord {
   FallbackReason fallback_reason = 4;
   repeated uint32 applied = 5;      // candidate indices actually applied to the game
   string engine_decision = 6;       // engine method name, e.g. Forge PlayerController method
+  // Set when the engine refused agent-core's selection (Q15); the decision was asked again (see Rejection). Not a
+  // fallback; counted separately.
+  string rejection = 7;
 }
 
 // A decision of a seat agent-core does not decide for (a Forge AI opponent), for the log (Q11). Its effect on the
