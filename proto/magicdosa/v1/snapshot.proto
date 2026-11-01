@@ -1,0 +1,29 @@
+// Turn-start snapshot (design: protocol 턴 시작 스냅샷; 시뮬레이션 엔진 > 구조 "턴 시작 재생성").
+// Sent at the start of every turn, before the untap step, on each seat's stream. It is the base from which agent-core
+// rebuilds that seat's shadow game; the turn's events are then reapplied on top of it.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/observation.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// State that outlives a turn is required here (design: "턴을 넘어 남는 상태 ... 필수로 담는다"). It lives in the
+// observation's ordinary fields:
+// - suspend / time counters: counters on the exiled objects;
+// - delayed triggers and lasting effects: Observation.effects (at turn start only effects that outlive a turn remain);
+// - companion use, monarch, initiative, extra turns, ...: PlayerState.designations; day/night: GameGlobal.day_night;
+// - mana that does not empty: PlayerState.mana_pool.
+message TurnStartSnapshot {
+  string game_id = 1;
+  uint32 seat = 2;                  // the stream (viewer seat) this snapshot belongs to
+  // Event sequence number this snapshot reflects: events with seq <= this are already included.
+  uint64 seq = 3;
+  // The full observation for the seat: current IDs of every object and effect (hidden objects without oracle_id).
+  Observation observation = 4;
+  // Engine-specific state the fields above cannot express (design: "엔진별 특수 상태"). Keys are namespaced by
+  // engine, e.g. "forge/...". Values are engine-defined strings.
+  map<string, string> engine_state = 5;
+}

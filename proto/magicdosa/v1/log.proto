@@ -1,0 +1,49 @@
+// Game log: the source of truth for training data (design: 학습 전략과 보상 학습 데이터 경로; 결정론 수준 디버깅
+// "로그 재생"; 설계 검토 7 and 9; Q11). The adapter writes one log per game as a length-delimited stream of LogRecord,
+// header first, then records in sequence order. agent-core writes no log. External-engine adapters use the same format
+// with no Privileged. Tensors (Arrow shards) are a per-encoder-version cache rebuilt from these logs.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/common.proto";
+import "magicdosa/v1/decision.proto";
+import "magicdosa/v1/events.proto";
+import "magicdosa/v1/observation.proto";
+import "magicdosa/v1/session.proto";
+import "magicdosa/v1/snapshot.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+message LogRecord {
+  oneof record {
+    LogHeader header = 1;
+    Event event = 2;                       // every agent seat's stream, tagged by Event.viewer_seat
+    TurnStartSnapshot snapshot = 3;
+    DecisionRecord decision = 4;           // request, agent-core's response verbatim (steps, decider, method), outcome
+    OpponentDecision opponent_decision = 5;
+    // Hidden state (hands, library order after each shuffle, current decks), so the game can be replayed and critic /
+    // belief labels rebuilt. design: "로그에는 처음부터 ... privileged 블록을 남겨".
+    PrivilegedRecord privileged = 6;
+    GameOver game_over = 7;
+  }
+}
+
+// Every log and training sample carries the three versions (design: protocol 버전 검증) plus the Forge commit,
+// model versions per module and deck versions (설계 검토 7).
+message LogHeader {
+  uint32 protocol_version = 1;
+  uint32 encoder_version = 2;
+  string model_version = 3;
+  string adapter = 4;
+  string engine_version = 5;        // e.g. Forge commit
+  Mode mode = 6;
+  string match_id = 7;
+  string game_id = 8;
+  uint32 game_number = 9;
+  uint64 game_seed = 10;            // engine seed (shuffles); training seeds are never reused
+  repeated MatchPlayer players = 11;
+  repeated string player_kinds = 12; // per seat: "agent:<model>", "forge-ai", "forge-ai-flatmc", ...
+  repeated uint32 agent_seats = 13;
+}

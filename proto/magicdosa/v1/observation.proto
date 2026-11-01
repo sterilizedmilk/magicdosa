@@ -1,0 +1,263 @@
+// What one player can see (design: 관측 스키마, protocol 결정 요청 / 선택 필드 / 학습 전용 블록).
+// Derived features (확정 정보: probabilities, combat lethality, available-mana analysis, ...) are computed by
+// agent-core and are not part of the protocol, except the optional engine-provided fields marked below.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/common.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// Match-level context (design: 관측 스키마 "매치 컨텍스트", Bo3 매치 처리). Both 75-card lists are public at match start.
+message MatchContext {
+  string match_id = 1;
+  uint32 game_number = 2;          // 1..3
+  repeated MatchPlayer players = 3; // index == seat
+  optional uint32 starting_seat = 4; // seat that plays first in this game (unset before the play/draw choice)
+}
+
+message MatchPlayer {
+  uint32 seat = 1;
+  string deck_name = 2;
+  string deck_version = 3;           // design: 설계 검토 7, record the deck version
+  repeated CardCount main = 4;       // registered main deck (60)
+  repeated CardCount sideboard = 5;  // registered sideboard (15)
+  // The 60 cards this player plays in the current game. Always set for the viewer; for the opponent in games
+  // 2 and 3 it is unknown and left empty (agent-core's belief samples it).
+  repeated CardCount current_deck = 6;
+  uint32 games_won = 7;              // match score before this game
+}
+
+// One player's observation (design: protocol 결정 요청 "결정하는 플레이어 시점의 관측(볼 수 있는 것만)").
+// Hidden objects keep their entity IDs (prev_id chains need them) but carry no oracle_id.
+message Observation {
+  uint32 viewer_seat = 1;
+  MatchContext match = 2;
+  GameGlobal game = 3;
+  repeated PlayerState players = 4;   // index == seat
+  repeated GameObject objects = 5;    // every object the viewer can name, in all zones (see GameObject.zone)
+  repeated StackItem stack = 6;       // top of stack first
+  CombatState combat = 7;             // set during combat steps
+  // Effects living in the game state (Q5). Optional: some engines cannot list them. `effects_provided` tells an
+  // empty list from a missing one; fingerprints compare effects only when provided.
+  bool effects_provided = 8;
+  repeated Effect effects = 9;
+}
+
+// design: 관측 스키마 "게임 전역".
+message GameGlobal {
+  uint32 turn = 1;                  // 1-based game turn number
+  Step step = 2;
+  uint32 active_seat = 3;
+  optional uint32 priority_seat = 4; // unset when nobody holds priority (e.g. pregame decisions)
+  DayNight day_night = 5;           // game state, not a player designation (Q13)
+}
+
+enum DayNight {
+  DAY_NIGHT_NONE = 0;               // day/night not yet introduced in this game
+  DAY_NIGHT_DAY = 1;
+  DAY_NIGHT_NIGHT = 2;
+}
+
+// design: 관측 스키마 "게임 전역" (라이프·독·기타 카운터, 이번 턴 대지 플레이 여부) and zone sizes.
+message PlayerState {
+  uint32 seat = 1;
+  int32 life = 2;
+  repeated Counter counters = 3;      // player counters: poison, energy, experience, ...
+  uint32 lands_played_this_turn = 4;
+  uint32 hand_size = 5;
+  uint32 library_size = 6;
+  uint32 mulligans = 7;               // mulligans taken this game
+  // Mana pool (Q6). Part of fingerprint L1; unemptied mana that survives the turn is in the turn-start snapshot.
+  repeated PoolMana mana_pool = 8;
+  // Player-level state that can outlive a turn, in one general form (Q13): the monarch, the initiative, the city's
+  // blessing, the Ring's temptation level, dungeon progress, companion put into hand, extra / skipped turns, ...
+  repeated Designation designations = 9;
+  // Optional engine-provided field (design: protocol 선택 필드). agent-core computes or leaves it when absent.
+  optional uint32 spells_cast_this_turn = 10;
+}
+
+// Mana in a pool (Q6).
+message PoolMana {
+  string color = 1;                 // W U B R G C
+  uint32 amount = 2;
+  uint64 source_id = 3;             // object that produced it (0 when not tied to an object)
+  string restriction = 4;           // spending restriction in engine-neutral words, e.g. "creature spells only"; empty = none
+  bool persists = 5;                // does not empty between steps
+}
+
+// A designation on a player (Q13). Names are lower-case snake_case, e.g. "monarch", "initiative", "citys_blessing",
+// "ring_tempted" (value = level), "dungeon" (text = dungeon, value = room), "companion_used", "extra_turns" (value),
+// "skip_next_turn". Player counters stay in PlayerState.counters.
+message Designation {
+  string name = 1;
+  int64 value = 2;
+  string text = 3;
+  uint64 source_id = 4;             // object that gave it, when relevant
+}
+
+// A game object in some zone (design: 관측 스키마 전장/묘지·추방/손패/라이브러리).
+message GameObject {
+  uint64 id = 1;                    // entity ID
+  Zone zone = 2;
+  uint32 owner_seat = 3;
+  uint32 controller_seat = 4;
+  // Scryfall oracle_id; empty while the identity is hidden from the viewer (opponent hand, libraries, face-down).
+  // Tokens use the Scryfall token card's oracle_id (Q3); copy tokens use the copied card's key with `copy` set.
+  string oracle_id = 5;
+  uint32 face = 6;                  // face shown (1 = front); 0 while hidden
+  // Zone position: graveyard order (0 = bottom, as the order cards were put there) and known library positions
+  // (0 = top). Unset where order carries no meaning (battlefield, hand, exile).
+  optional uint32 position = 7;
+  bool token = 8;
+  bool copy = 9;                    // a copy (copy token, or a permanent copying another): oracle_id/face are the copied card's
+  bool face_down = 10;              // face-down exile / morph / manifest
+  // Set when a token's oracle_id could not be found (Q3): the creating ability's key + token ordinal (from 1).
+  // Such tokens are logged for review.
+  TokenFallbackKey token_fallback = 11;
+  // Characteristics as they are now. Always set for tokens (Q3); optional for other objects.
+  Characteristics characteristics = 12;
+
+  // Battlefield state.
+  bool tapped = 13;
+  bool summoning_sick = 14;
+  repeated Counter counters = 15;
+  uint64 attached_to_id = 16;       // aura/equipment/fortification host; 0 = none
+  optional int32 power = 17;        // current, after effects
+  optional int32 toughness = 18;
+  int32 damage = 19;                // damage marked this turn
+  // Abilities the object has from other sources; the key names the granting card's ability.
+  repeated GrantedAbility granted_abilities = 20;
+  // Optional engine-provided field (design: protocol 선택 필드 "공격 가능 여부").
+  optional bool can_attack = 21;
+}
+
+message TokenFallbackKey {
+  AbilityKey created_by = 1;
+  uint32 ordinal = 2;
+}
+
+message Characteristics {
+  string name = 1;
+  repeated string types = 2;        // supertypes, card types and subtypes as printed, e.g. ["Creature", "Goblin"]
+  repeated string colors = 3;       // W U B R G
+  optional int32 power = 4;         // printed / defined P/T (current values are on GameObject)
+  optional int32 toughness = 5;
+  repeated KeywordAbility keywords = 6;
+}
+
+message GrantedAbility {
+  AbilityKey key = 1;
+  uint64 granted_by_id = 2;         // entity ID of the granting object, when it is an object
+}
+
+// A spell or ability on the stack (design: protocol 능력 키 "스택 위 능력 인스턴스는 엔티티 ID, 능력 키, 출처 ID").
+message StackItem {
+  uint64 id = 1;                    // entity ID of the spell (the card on the stack) or ability instance
+  oneof key {
+    SpellKey spell = 2;             // spells: card face + cast method (Q2)
+    AbilityKey ability = 3;         // activated / triggered abilities
+  }
+  StackItemKind kind = 4;
+  // Source object ID as it was when the ability was activated or triggered, even if the source has since changed
+  // zone (fetchland). For spells, the spell's own ID.
+  uint64 source_id = 5;
+  uint32 controller_seat = 6;
+  repeated ObjectRef targets = 7;
+  repeated uint32 modes = 8;        // chosen mode indices (0-based, oracle order)
+  optional int64 x = 9;
+  uint64 copy_of_id = 10;           // for copies: the copied spell / ability
+  uint64 effect_id = 11;            // for a delayed trigger: the Effect it was registered as
+}
+
+enum StackItemKind {
+  STACK_ITEM_KIND_UNSPECIFIED = 0;
+  STACK_ITEM_KIND_SPELL = 1;
+  STACK_ITEM_KIND_ACTIVATED = 2;
+  STACK_ITEM_KIND_TRIGGERED = 3;
+}
+
+message CombatState {
+  repeated Attack attacks = 1;
+  repeated Block blocks = 2;
+}
+
+message Attack {
+  uint64 attacker_id = 1;
+  ObjectRef defender = 2;           // player, planeswalker or battle
+}
+
+message Block {
+  uint64 blocker_id = 1;
+  uint64 attacker_id = 2;
+}
+
+// An effect that lives in the game state rather than on an object (Q5): a pending delayed trigger, a continuous
+// effect left by a resolved spell or ability ("indestructible this turn", "until your next turn", indefinite control
+// change), a prevention / replacement shield. Static abilities of permanents are named by source ID + ability key and
+// are not Effects; emblems are command-zone objects with IDs of their own.
+message Effect {
+  uint64 id = 1;                    // issued from the entity ID counter when the effect is created
+  EffectKind kind = 2;
+  AbilityKey ability = 3;           // ability that created it
+  uint64 source_id = 4;             // source as it was when the effect was created
+  uint32 controller_seat = 5;
+  repeated ObjectRef affected = 6;
+  EffectDuration duration = 7;
+  string description = 8;           // engine text, for debugging and diffs only (not encoded)
+}
+
+enum EffectKind {
+  EFFECT_KIND_UNSPECIFIED = 0;
+  EFFECT_KIND_DELAYED_TRIGGER = 1;
+  EFFECT_KIND_CONTINUOUS = 2;
+  EFFECT_KIND_SHIELD = 3;           // prevention / replacement shield
+}
+
+enum EffectDuration {
+  EFFECT_DURATION_UNSPECIFIED = 0;
+  EFFECT_DURATION_UNTIL_END_OF_TURN = 1;
+  EFFECT_DURATION_UNTIL_YOUR_NEXT_TURN = 2;
+  EFFECT_DURATION_UNTIL_END_OF_YOUR_NEXT_TURN = 3;
+  EFFECT_DURATION_INDEFINITE = 4;
+  EFFECT_DURATION_WHILE_CONDITION = 5;   // "for as long as ..."
+  EFFECT_DURATION_UNTIL_USED = 6;        // shields and delayed triggers that end when they apply / fire
+}
+
+// Hidden information for training only (design: protocol 학습 전용 블록; Q10, Q11). Never in a seat's event stream
+// or in a decision request: the adapter keeps it in its log and hands it to agent-core only in GameOver, where it is
+// used for critic and belief labels. agent-core rejects it in MODE_INFERENCE.
+message Privileged {
+  // Identity of every object hidden from either seat (hands, libraries, face-down cards).
+  repeated HiddenIdentity identities = 1;
+  // Library order per seat, top first (entity IDs). Index == seat.
+  repeated LibraryOrder libraries = 2;
+  // Each seat's current 60 (the opponent's is the belief label for games 2 and 3). Index == seat.
+  repeated DeckList current_decks = 3;
+}
+
+message HiddenIdentity {
+  uint64 id = 1;
+  string oracle_id = 2;
+  uint32 face = 3;
+}
+
+message LibraryOrder {
+  uint32 seat = 1;
+  repeated uint64 ids = 2;          // top first
+}
+
+message DeckList {
+  uint32 seat = 1;
+  repeated CardCount cards = 2;
+}
+
+// Hidden state at one point of the game: at each decision request and after each shuffle.
+message PrivilegedRecord {
+  uint64 seq = 1;                   // event sequence number (of the stream of `seat`) the state corresponds to
+  uint32 seat = 2;
+  uint64 decision_id = 3;           // set when recorded for a decision request; 0 otherwise
+  Privileged privileged = 4;
+}

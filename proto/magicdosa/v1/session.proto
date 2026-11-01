@@ -1,0 +1,71 @@
+// adapter <-> agent-core transport (design: 설계에 미치는 영향 통신; Q12). After Hello (unary), each game opens one
+// bidirectional stream. In self-play both seats' messages travel on the same stream, tagged with their seat.
+// Details (flow control, reconnects) are settled with the gRPC server; the gRPC codegen plugin is not set up yet.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/decision.proto";
+import "magicdosa/v1/events.proto";
+import "magicdosa/v1/handshake.proto";
+import "magicdosa/v1/observation.proto";
+import "magicdosa/v1/snapshot.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+service AgentCore {
+  rpc Handshake(Hello) returns (HelloReply);
+  rpc Play(stream AdapterMessage) returns (stream AgentMessage);
+}
+
+// adapter -> agent-core: events, turn-start snapshots, decision requests and the game end, in sequence order.
+message AdapterMessage {
+  oneof message {
+    Event event = 1;
+    TurnStartSnapshot snapshot = 2;
+    DecisionRequest decision_request = 3;
+    GameOver game_over = 4;
+  }
+}
+
+// agent-core -> adapter: decision responses and resend requests.
+message AgentMessage {
+  oneof message {
+    DecisionResponse decision_response = 1;
+    ResendRequest resend_request = 2;
+  }
+}
+
+// Asks the adapter to resend a seat's stream from `from_seq` (Q12). Order within a gRPC stream is guaranteed, so this
+// is only needed after a reconnect. The adapter buffers, per game and seat, the current turn's turn-start snapshot and
+// the events after it: it resends from `from_seq` when buffered, otherwise from the turn-start snapshot, and agent-core
+// rebuilds the shadow game.
+message ResendRequest {
+  string game_id = 1;
+  uint32 seat = 2;
+  uint64 from_seq = 3;
+}
+
+// Game end: result plus, in MODE_TRAINING, the hidden information recorded during the game (Q11, Q13). This is the only
+// message that carries Privileged to agent-core; agent-core then writes the game's Arrow shard. In MODE_INFERENCE
+// `privileged` must be empty or agent-core rejects the message.
+message GameOver {
+  string game_id = 1;
+  optional uint32 winner_seat = 2;  // unset for a draw
+  GameEndReason reason = 3;
+  uint32 turns = 4;
+  repeated PrivilegedRecord privileged = 5; // hidden state at each decision request and shuffle, in seq order
+}
+
+// design: 학습 전략과 보상 (value label); 설계 검토 4 (draws and timeouts are counted separately).
+enum GameEndReason {
+  GAME_END_REASON_UNSPECIFIED = 0;
+  GAME_END_REASON_LIFE = 1;
+  GAME_END_REASON_POISON = 2;
+  GAME_END_REASON_DECKED = 3;
+  GAME_END_REASON_CARD_EFFECT = 4;   // "you win the game" / "you lose the game"
+  GAME_END_REASON_CONCEDE = 5;
+  GAME_END_REASON_DRAW = 6;          // simultaneous loss, game draw effects
+  GAME_END_REASON_TIMEOUT = 7;       // simulation step / turn limit
+}

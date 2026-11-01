@@ -1,0 +1,310 @@
+// Event stream (design: protocol 사건 스트림 / 사건 동기화; Q10). Sent separately from decision requests, in real
+// time, with in-game sequence numbers and no reply. Three layers: actions (required), information reveals
+// (required), state changes (auxiliary: input for action inference on engines without actions, otherwise a
+// cross-check against the shadow game).
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/common.proto";
+import "magicdosa/v1/observation.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// One event as seen by one seat (Q10). There is one stream, and one shadow game, per (game, seat) that agent-core
+// decides for (two in self-play); seats agent-core does not decide for (a Forge AI opponent) get no stream.
+// A stream carries only what its seat can see; Privileged never goes into it.
+message Event {
+  string game_id = 1;
+  uint32 viewer_seat = 2;
+  // In-game sequence number, gapless and increasing from 1 per (game, seat). DecisionRequest.applied_seq and
+  // TurnStartSnapshot.seq refer to it. Order within a gRPC stream is guaranteed, so gaps only follow a reconnect
+  // (see ResendRequest).
+  uint64 seq = 3;
+  uint32 turn = 4;
+  Step step = 5;
+  // True when the engine made this choice by itself without asking the player (e.g. Arena auto-tap, automatic
+  // priority passes). design: 설계에 미치는 영향 결정 단위 차이 "엔진 처리"; 설계 검토 2.
+  bool engine_handled = 6;
+
+  oneof body {
+    // Layer 1: actions.
+    PlayLand play_land = 10;
+    CastSpell cast_spell = 11;
+    ActivateAbility activate_ability = 12;
+    ActivateManaAbility activate_mana_ability = 13;
+    DeclareAttackers declare_attackers = 14;
+    DeclareBlockers declare_blockers = 15;
+    MulliganChoice mulligan = 16;
+    BottomCards bottom_cards = 17;
+    PlayOrDrawChoice play_or_draw = 18;
+    PassPriority pass_priority = 19;
+    ResolutionChoice resolution_choice = 20;
+    TriggerOrderChoice trigger_order = 21;
+
+    // Layer 2: information reveals.
+    CardRevealed card_revealed = 30;
+
+    // Layer 3: state changes, plus the events that issue entity IDs.
+    ZoneMove zone_move = 40;
+    ObjectCreated object_created = 41;
+    AbilityTriggered ability_triggered = 42;
+    EffectCreated effect_created = 43;
+    EffectEnded effect_ended = 44;
+    DamageDealt damage = 45;
+    LifeChanged life = 46;
+    CountersChanged counters = 47;
+    TapChanged tap = 48;
+    LibraryShuffled library_shuffled = 49;
+    ManaAdded mana_added = 50;
+    ManaSpent mana_spent = 51;
+    ManaPoolEmptied mana_pool_emptied = 52;
+    DesignationsChanged designations = 53;
+    DayNightChanged day_night = 54;
+  }
+}
+
+// ---- Layer 1: actions ----
+
+message PlayLand {
+  uint32 seat = 1;
+  uint64 card_id = 2;               // ID before the play
+  CardFaceKey land = 3;             // Q2: (oracle_id, face)
+}
+
+// Casting a spell: card, targets, modes and X (design: 사건 스트림 ① "주문 시전·능력 활성화와 그 대상·모드·X 값").
+// The move to the stack is also reported as a ZoneMove in layer 3.
+message CastSpell {
+  uint32 seat = 1;
+  uint64 card_id = 2;               // ID before casting
+  uint64 spell_id = 3;              // new ID on the stack
+  SpellKey spell = 4;               // card face + cast method (Q2)
+  repeated ObjectRef targets = 5;
+  repeated uint32 modes = 6;        // 0-based, oracle order
+  optional int64 x = 7;
+  repeated ManaPayment payment = 8; // mana used to pay the costs (Q6)
+  repeated uint64 cost_ids = 9;     // objects sacrificed / discarded / exiled / tapped as a cost
+}
+
+message ActivateAbility {
+  uint32 seat = 1;
+  uint64 source_id = 2;
+  uint64 ability_id = 3;            // new ID of the ability on the stack
+  AbilityKey ability = 4;
+  repeated ObjectRef targets = 5;
+  repeated uint32 modes = 6;
+  optional int64 x = 7;
+  repeated ManaPayment payment = 8;
+  repeated uint64 cost_ids = 9;
+}
+
+// A mana ability activated outside any payment, e.g. floating mana in advance (Q6). Mana abilities get no ID.
+message ActivateManaAbility {
+  uint32 seat = 1;
+  uint64 source_id = 2;
+  AbilityKey ability = 3;
+  repeated ManaUnit produced = 4;
+}
+
+// One piece of a payment, in payment order (Q6): either a mana ability activated while paying or mana spent from the
+// pool. Side effects (a painland's life loss) follow as ordinary layer-3 events.
+message ManaPayment {
+  oneof source {
+    ManaAbilityUse ability = 1;
+    PoolMana pool = 2;
+  }
+}
+
+message ManaAbilityUse {
+  uint64 source_id = 1;
+  AbilityKey ability = 2;
+  repeated ManaUnit produced = 3;
+}
+
+message DeclareAttackers {
+  uint32 seat = 1;
+  repeated Attack attacks = 2;
+}
+
+message DeclareBlockers {
+  uint32 seat = 1;
+  repeated Block blocks = 2;
+}
+
+message MulliganChoice {
+  uint32 seat = 1;
+  bool keep = 2;
+}
+
+// London mulligan: the cards put on the bottom. The opponent's stream sees IDs and count only.
+message BottomCards {
+  uint32 seat = 1;
+  repeated uint64 card_ids = 2;
+}
+
+message PlayOrDrawChoice {
+  uint32 seat = 1;
+  bool play = 2;
+}
+
+message PassPriority {
+  uint32 seat = 1;
+}
+
+// A choice made while a spell or ability resolves (sacrifice, discard, search, mode/X chosen on resolution, ...).
+message ResolutionChoice {
+  uint32 seat = 1;
+  DecisionType type = 2;
+  uint64 resolving_id = 3;          // stack item being resolved (0 for state-based / turn-based choices)
+  repeated ObjectRef chosen = 4;    // chosen objects / players, in choice order
+  repeated uint32 options = 5;      // chosen option indices for CHOOSE_OPTION
+  optional int64 x = 6;
+  string engine_prompt = 7;         // engine's text for the choice, for debugging only
+}
+
+// Order in which simultaneously triggered abilities are put on the stack (first = put on the stack first).
+message TriggerOrderChoice {
+  uint32 seat = 1;
+  repeated uint64 ability_ids = 2;
+}
+
+// ---- Layer 2: information reveals ----
+
+// The identity of a hidden object was shown to some players (design: 사건 스트림 ② "숨은 카드의 정체가 드러난 순간").
+// `revealed_to_seats` is always set (Q10). When a card is shown to one seat only (e.g. seat 0 casts Thoughtseize and
+// looks at seat 1's hand), seat 0's stream gets the identity and seat 1's stream gets the same event without
+// oracle_id, recording only that seat 0 saw it.
+message CardRevealed {
+  uint64 id = 1;
+  string oracle_id = 2;             // empty in streams of seats that did not see it
+  uint32 face = 3;
+  Zone zone = 4;
+  RevealReason reason = 5;
+  repeated uint32 revealed_to_seats = 6;
+}
+
+enum RevealReason {
+  REVEAL_REASON_UNSPECIFIED = 0;
+  REVEAL_REASON_OWN_DRAW = 1;            // the owner drew it
+  REVEAL_REASON_PLAYED_FROM_HIDDEN = 2;  // cast / played from hand or another hidden zone
+  REVEAL_REASON_REVEALED = 3;            // revealed by an effect
+  REVEAL_REASON_SEARCHED = 4;            // found by a search
+  REVEAL_REASON_LEFT_LIBRARY = 5;        // moved from library to a public zone
+  REVEAL_REASON_LOOKED_AT = 6;           // looked at (scry, surveil, look at top N, looking at a hand)
+}
+
+// ---- Layer 3: state changes ----
+
+// A card moved zones and got a new entity ID (CR 400.7).
+message ZoneMove {
+  uint64 id = 1;                    // new ID
+  uint64 prev_id = 2;               // ID in the previous zone
+  Zone from = 3;
+  Zone to = 4;
+  uint32 owner_seat = 5;
+  uint32 controller_seat = 6;
+  string oracle_id = 7;             // empty when the destination hides it from this stream's seat
+  uint32 face = 8;
+  optional uint32 position = 9;     // library position (0 = top) when known
+  bool face_down = 10;
+}
+
+// A token, or a copy of a spell / ability, was created (gets an ID at creation).
+message ObjectCreated {
+  uint64 id = 1;
+  ObjectCreatedKind kind = 2;
+  Zone zone = 3;
+  uint32 owner_seat = 4;
+  uint32 controller_seat = 5;
+  string oracle_id = 6;             // tokens: Scryfall token oracle_id, or the copied card's for copy tokens (Q3)
+  uint32 face = 7;
+  uint64 copy_of_id = 8;
+  uint64 source_id = 9;             // object whose effect created it
+  TokenFallbackKey token_fallback = 10;
+  Characteristics characteristics = 11;
+}
+
+enum ObjectCreatedKind {
+  OBJECT_CREATED_KIND_UNSPECIFIED = 0;
+  OBJECT_CREATED_KIND_TOKEN = 1;
+  OBJECT_CREATED_KIND_COPY_TOKEN = 2;
+  OBJECT_CREATED_KIND_SPELL_COPY = 3;
+  OBJECT_CREATED_KIND_ABILITY_COPY = 4;
+}
+
+// A triggered ability triggered and got its ID now, before it is put on the stack, so that trigger-order
+// candidates can point at it.
+message AbilityTriggered {
+  uint64 ability_id = 1;
+  AbilityKey ability = 2;
+  uint64 source_id = 3;             // source as it was when it triggered
+  uint32 controller_seat = 4;
+  uint64 effect_id = 5;             // set when a delayed trigger (an Effect) fired
+}
+
+// An effect living in the game state was created and got its ID (Q5), e.g. a delayed trigger was registered.
+message EffectCreated {
+  Effect effect = 1;
+}
+
+message EffectEnded {
+  uint64 effect_id = 1;
+}
+
+message DamageDealt {
+  uint64 source_id = 1;
+  ObjectRef target = 2;
+  int32 amount = 3;
+  bool combat = 4;
+}
+
+message LifeChanged {
+  uint32 seat = 1;
+  int32 delta = 2;
+  int32 life = 3;                   // life after the change
+}
+
+// Counters on an object or a player changed; `counters` is the full set after the change.
+message CountersChanged {
+  ObjectRef target = 1;
+  repeated Counter counters = 2;
+}
+
+message TapChanged {
+  uint64 id = 1;
+  bool tapped = 2;
+}
+
+// The library was shuffled. Entity IDs stay (no zone change) but the order is unknown again: the shadow game
+// reshuffles that library from belief. The real order goes into the adapter's log only (PrivilegedRecord).
+message LibraryShuffled {
+  uint32 seat = 1;
+}
+
+// Mana entered a pool: from a mana ability or from a resolving spell / ability (Desperate Ritual) (Q6).
+message ManaAdded {
+  uint32 seat = 1;
+  repeated PoolMana mana = 2;
+}
+
+// Mana left a pool by being spent.
+message ManaSpent {
+  uint32 seat = 1;
+  repeated PoolMana mana = 2;
+}
+
+// A pool emptied at the end of a step (mana that persists stays).
+message ManaPoolEmptied {
+  uint32 seat = 1;
+}
+
+// A player's designations changed; `designations` is the full set after the change (Q13).
+message DesignationsChanged {
+  uint32 seat = 1;
+  repeated Designation designations = 2;
+}
+
+message DayNightChanged {
+  DayNight day_night = 1;
+}

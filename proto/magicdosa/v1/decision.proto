@@ -1,0 +1,233 @@
+// Decision request and response (design: protocol 결정 요청 / 결정 응답 / 사건 동기화 / 재현성; 행동 스키마;
+// 결정 모듈 구조 "결정 주체 원칙"; 평가 방법 > 폴백 검증; Q6–Q9, Q14).
+syntax = "proto3";
+
+package magicdosa.v1;
+
+import "magicdosa/v1/common.proto";
+import "magicdosa/v1/observation.proto";
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// Sent by the adapter whenever an agent seat must decide. Every decision type goes through this request, including
+// mana payment and trigger order (design: 결정 주체 원칙); the adapter never answers on its own except as an
+// unintended fallback (DecisionRecord).
+//
+// Priority stop rule (설계 검토 2, Q14): a PRIORITY request is sent only when at least one candidate other than pass
+// exists, not counting mana abilities. Other priority points are passed by the engine and reported as PassPriority
+// events with Event.engine_handled. Points where something can be done (an instant or a fetchland in the opponent's
+// end step) are always asked; agent-core, not the protocol, decides how much to search there.
+message DecisionRequest {
+  uint32 protocol_version = 1;
+  string game_id = 2;
+  uint64 decision_id = 3;           // increasing per game; links request, response and log record
+  uint32 seat = 4;                  // deciding player
+  // Event sequence number (of this seat's stream) the request is asked against: agent-core waits until its shadow
+  // game has applied every event up to and including this one before searching.
+  uint64 applied_seq = 5;
+  // Seed for agent-core's search randomness (design: 재현성), so a game can be reproduced across two JVMs.
+  uint64 seed = 6;
+  DecisionType type = 7;
+  Observation observation = 8;      // the deciding seat's view only; never Privileged (Q11)
+  repeated Candidate candidates = 9; // legal actions from the engine; agent-core never invents candidates
+  SelectionConstraints constraints = 10;
+  DecisionContext context = 11;
+}
+
+// How many candidates to pick and whether order matters (design: "선택 제약(최소·최대 개수, 순서 여부)").
+// Single choice: min = max = 1. Multi-selects are answered one step at a time with an explicit "done" (Q9).
+// MANA_PAYMENT ignores min/max: steps continue until the cost in DecisionContext.mana_cost is paid (Q6).
+message SelectionConstraints {
+  uint32 min = 1;
+  uint32 max = 2;
+  bool ordered = 3;
+}
+
+// What the decision is about, for non-priority choices.
+message DecisionContext {
+  uint64 source_id = 1;             // spell / ability being cast, activated or resolved
+  oneof key {
+    SpellKey spell = 2;
+    AbilityKey ability = 3;
+  }
+  string mana_cost = 4;             // MANA_PAYMENT: the cost still to pay, e.g. "{1}{R}"
+  string engine_prompt = 5;         // engine's own wording, for debugging only (not encoded)
+}
+
+// One legal action. Objects are referenced by entity ID (design: "후보 목록(엔티티 ID 참조)").
+message Candidate {
+  oneof action {
+    PlayLandCandidate play_land = 1;
+    CastSpellCandidate cast_spell = 2;
+    ActivateAbilityCandidate activate_ability = 3;
+    PassCandidate pass = 4;
+    ObjectRef target = 5;
+    Attack attack = 6;              // (creature, attacked player / planeswalker / battle) pair
+    Block block = 7;
+    OptionCandidate option = 8;
+    uint64 card_id = 9;             // CHOOSE_CARDS, BOTTOM_CARDS
+    ManaSourceCandidate mana_source = 10;
+    PoolMana pool_mana = 11;        // MANA_PAYMENT: spend this mana from the pool
+    uint64 triggered_ability_id = 12; // TRIGGER_ORDER: ID issued when the ability triggered
+    bool keep = 13;                 // MULLIGAN: true = keep, false = mulligan
+    bool play = 14;                 // PLAY_OR_DRAW: true = play first
+    SideboardSwap sideboard_swap = 15;
+  }
+}
+
+message PlayLandCandidate {
+  uint64 card_id = 1;
+  CardFaceKey land = 2;             // Q2: (oracle_id, face)
+}
+
+message CastSpellCandidate {
+  uint64 card_id = 1;
+  SpellKey spell = 2;               // card face + cast method (Q2)
+}
+
+message ActivateAbilityCandidate {
+  uint64 source_id = 1;
+  AbilityKey ability = 2;
+  bool mana_ability = 3;            // does not count as a non-pass candidate for the stop rule (Q14)
+}
+
+message PassCandidate {
+}
+
+// A mode, X value or other enumerated choice.
+message OptionCandidate {
+  uint32 index = 1;                 // mode index (0-based, oracle order) or engine option index
+  optional int64 x = 2;             // set for X-value choices
+  string label = 3;                 // engine text, for debugging only
+}
+
+// MANA_PAYMENT: one mana source that can contribute to the remaining cost (Q6). A mana ability that chooses a color
+// gives one candidate per color. Fully identical sources (same card, same state, e.g. several basic Mountains) are
+// one candidate listing all of them; the adapter taps the first unused one.
+message ManaSourceCandidate {
+  repeated uint64 source_ids = 1;
+  AbilityKey ability = 2;
+  repeated ManaUnit produced = 3;
+}
+
+// Between games: bring `in` from the sideboard and take `out` from the current deck.
+message SideboardSwap {
+  string in_oracle_id = 1;
+  string out_oracle_id = 2;
+}
+
+// agent-core's answer (Q9). One request, one response; the response records every selection step.
+message DecisionResponse {
+  string game_id = 1;
+  uint64 decision_id = 2;
+  // The final selection: the steps' choices in order, without "done", as indices into DecisionRequest.candidates.
+  // The adapter passes only this to the engine.
+  repeated uint32 chosen = 3;
+  // One step per pick; a single-pick decision has one step. Kept in the log from the start, because visit ratios
+  // exist only at play time (design: 학습 전략과 보상 "프로토타입 우선"). Each step is one Arrow sample.
+  repeated DecisionStep steps = 4;
+}
+
+// One pick of a (possibly multi-select) decision. Order is free; search merges branches that reach the same set
+// (transposition detection).
+message DecisionStep {
+  // This step's candidates: the request's candidates still available (already chosen ones removed; for MANA_PAYMENT
+  // the sources that can still contribute) plus "done" where the selection may stop.
+  repeated StepCandidate candidates = 1;
+  uint32 chosen = 2;                // index into `candidates`
+  repeated float visit_ratio = 3;   // parallel to `candidates`, sums to 1; empty when no search ran
+  Decider decider = 4;
+  Method method = 5;
+  Diagnostics diagnostics = 6;
+}
+
+message StepCandidate {
+  oneof candidate {
+    uint32 index = 1;               // index into DecisionRequest.candidates
+    bool done = 2;                  // stop selecting
+  }
+}
+
+// Who decided (Q7; design: 폴백 검증). Used to validate evaluations: any UNINTENDED_FALLBACK invalidates one.
+enum Decider {
+  DECIDER_UNSPECIFIED = 0;
+  DECIDER_MODEL = 1;                // agent-core's model (policy head and/or search)
+  // Intended delegation: the shadow game's Forge AI decided (early stages, e.g. mana payment following Forge AI's plan).
+  DECIDER_INTENDED_DELEGATION = 2;
+  // Unintended fallback: agent-core did not answer and the adapter's engine AI / default decided.
+  // Set only by the adapter, in DecisionRecord.
+  DECIDER_UNINTENDED_FALLBACK = 3;
+}
+
+// How the model decided (Q7, Q8): the prior plus whether search ran.
+message Method {
+  Prior prior = 1;
+  oneof search {
+    SearchRun ran = 2;
+    SearchSkipReason skipped = 3;   // decided by the network alone (탐색 생략); not a fallback
+  }
+}
+
+enum Prior {
+  PRIOR_UNSPECIFIED = 0;
+  PRIOR_LEARNED_HEAD = 1;
+  PRIOR_UNIFORM = 2;
+}
+
+// IS-MCTS run (design: 학습 전략과 보상 초기 탐색). Budgets are node counts, never time (Q8).
+message SearchRun {
+  uint64 nodes = 1;
+  uint32 determinizations = 2;      // belief samples searched
+  float root_value = 3;
+}
+
+// No time-based reason for now (Q8); real-time limits come later, after measurement.
+enum SearchSkipReason {
+  SEARCH_SKIP_REASON_UNSPECIFIED = 0;
+  // Fingerprint mismatch the turn replay could not fix, or the shadow game could not be rebuilt.
+  SEARCH_SKIP_REASON_SHADOW_RECOVERY_FAILED = 1;
+  // The policy was confident enough to pass without search (Q14; threshold set after measurement).
+  SEARCH_SKIP_REASON_POLICY_CONFIDENT = 2;
+}
+
+// Optional diagnostics (design: "후보별 확률, 가치, 전략별 승률").
+message Diagnostics {
+  repeated float policy_prob = 1;   // parallel to the step's candidates
+  optional float value = 2;         // observation-only value network, win probability for the deciding seat
+  repeated StrategyValue strategy_values = 3;
+}
+
+message StrategyValue {
+  string strategy = 1;              // per-deck strategy name (design: 거시 전략 가치망)
+  float win_probability = 2;
+}
+
+// Why the adapter fell back (design: 폴백 검증 "폴백 사유").
+enum FallbackReason {
+  FALLBACK_REASON_UNSPECIFIED = 0;
+  FALLBACK_REASON_TIMEOUT = 1;
+  FALLBACK_REASON_COMMUNICATION_ERROR = 2;
+  FALLBACK_REASON_ILLEGAL_ACTION = 3;
+  FALLBACK_REASON_UNSUPPORTED_DECISION_TYPE = 4;
+  FALLBACK_REASON_MODEL_NOT_LOADED = 5;
+}
+
+// What actually happened for one agent-seat decision, as recorded in the adapter's log (design: 폴백 검증 "결정별 기록";
+// Q11). The response is agent-core's message verbatim.
+message DecisionRecord {
+  DecisionRequest request = 1;
+  DecisionResponse response = 2;    // unset when agent-core did not answer
+  Decider decider = 3;              // final decider; UNINTENDED_FALLBACK when the adapter decided
+  FallbackReason fallback_reason = 4;
+  repeated uint32 applied = 5;      // candidate indices actually applied to the game
+  string engine_decision = 6;       // engine method name, e.g. Forge PlayerController method
+}
+
+// A decision of a seat agent-core does not decide for (a Forge AI opponent), for the log (Q11). Its effect on the
+// game is in the events.
+message OpponentDecision {
+  uint32 seat = 1;
+  string engine_decision = 2;
+  string description = 3;           // engine's description of the choice
+}

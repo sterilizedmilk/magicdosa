@@ -1,17 +1,24 @@
-// magicdosa protocol, version 1. Only the game-start handshake is defined so far;
-// decision requests, the event stream and the turn-start snapshot follow the design doc.
+// Game-start handshake (design: protocol 버전 검증). agent-core refuses the game when any version differs; it
+// never falls back to playing on.
 syntax = "proto3";
 
 package magicdosa.v1;
 
+import "magicdosa/v1/common.proto";
+
 option java_package = "magicdosa.protocol.v1";
 option java_multiple_files = true;
 
-// Sent by an engine adapter when a game starts. agent-core refuses the game when any version differs.
+// Sent by an engine adapter when a game starts (unary call, Q12). agent-core refuses the game when any version differs.
 message Hello {
   uint32 protocol_version = 1;   // bumped on every schema change
   string adapter = 2;            // "forge-adapter", "xmage-adapter", "arena-advisor"
   string engine_version = 3;     // e.g. the Forge commit from FORGE_VERSION
+  string game_id = 4;            // ID used by every event, snapshot and decision of this game
+  Mode mode = 5;                 // MODE_INFERENCE: agent-core rejects any Privileged block
+  repeated uint32 agent_seats = 6; // seats agent-core decides for (both in self-play)
+  string match_id = 7;           // ties games 1-3 of a Bo3 together (sideboarding, match result) (Q13)
+  uint32 game_number = 8;        // 1..3
 }
 
 message HelloReply {

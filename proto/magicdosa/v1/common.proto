@@ -1,0 +1,159 @@
+// Shared identifiers and enums. Section references ("design: ...") point to the design doc
+// (https://claude.ai/artifact/E92JE6JZxX2YA8PbQCm8gS); "protocol" means its 엔진 독립성 > 프로토콜 section and
+// "Qn" the decisions of 2026-11-02 in "1단계 프로토콜 설계 질문" (https://claude.ai/artifact/REeQ22B7Pbths95ensfD8D),
+// summarized in the design doc's "프로토콜 세부 결정" table.
+syntax = "proto3";
+
+package magicdosa.v1;
+
+option java_package = "magicdosa.protocol.v1";
+option java_multiple_files = true;
+
+// Entity IDs are uint64 in every message (fields named `*_id` / `id` / `*_ids`). Rules (design: protocol 엔티티 ID, Q4):
+// - An entity ID names one game object within one game. It never means a card kind. 0 means "none".
+// - One counter per game, starting at 1, issued by the adapter in event order. The adapter keeps the mapping to
+//   engine-internal IDs.
+// - Per CR 400.7 an object that changes zone is a new object: a new ID every time a card enters a zone (tokens,
+//   copies and spells put on the stack included); ZoneMove.prev_id links the old one. Hidden moves (an opponent's
+//   draw) get new IDs too; a later reveal links the identity through the prev_id chain.
+// - Simultaneous issue order: simultaneous moves by ascending previous ID; simultaneous creations (several tokens)
+//   in the order the effect creates them; simultaneous triggers by APNAP, then ascending source ID, then ability key
+//   (independent of the trigger-order decision).
+// - Abilities on the stack are objects with IDs: activated abilities when put on the stack, triggered abilities at
+//   the moment they trigger, copies when created. Mana abilities and static abilities get no ID.
+// - Effects that live in the game state rather than on an object get IDs from the same counter (Q5, see Effect).
+
+// A player, by seat. Seats are fixed for the whole match (0 and 1, in MatchContext.players order) and absolute,
+// never relative to the viewer.
+message PlayerRef {
+  uint32 seat = 1;
+}
+
+// Anything a target, attack or reference can point at: a game object or a player.
+message ObjectRef {
+  oneof ref {
+    uint64 entity_id = 1;
+    uint32 player_seat = 2;
+  }
+}
+
+// One face of a card (Q1, Q2). Scryfall gives every face of a double-faced, split or adventure card the same
+// oracle_id, so the face number is part of the key. Faces count from 1 (front = 1; single-faced cards are always 1).
+// Used for land plays and as the base of SpellKey.
+message CardFaceKey {
+  string oracle_id = 1;   // Scryfall oracle_id
+  uint32 face = 2;
+}
+
+// Engine-neutral name of an ability (design: protocol 능력 키; Q1). The entity ID of an ability instance is separate.
+// Granted abilities (equipment, auras, "... gains/has ...") are named by the key of the granting card's ability.
+message AbilityKey {
+  oneof key {
+    PrintedAbility printed = 1;
+    KeywordAbility keyword = 2;
+  }
+}
+
+// A printed, non-keyword ability: (oracle_id, face, ordinal). The ordinal counts, from 1, only the non-keyword
+// ability paragraphs of that face's oracle text; one paragraph is one ability. A modal spell is one ability (the chosen
+// modes are recorded as the decision's choice). Ability-word abilities ("Landfall —") count as ordinary abilities;
+// reminder text is ignored. Example: Kari Zev's attack trigger = (Kari Zev, 1, 1); Bonecrusher Giant's targeting
+// trigger = (…, 1, 1), its Stomp face's ability = (…, 2, 1).
+message PrintedAbility {
+  string oracle_id = 1;
+  uint32 face = 2;
+  uint32 index = 3;
+}
+
+// A keyword ability, independent of the card: name and parameters, e.g. cycling {2}, flashback {R}. Several keywords
+// on one line ("Flying, vigilance") are separate keys.
+message KeywordAbility {
+  string name = 1;               // lower-case keyword name, e.g. "cycling"
+  repeated string params = 2;    // parameters as printed, e.g. ["{2}"]
+}
+
+// Names a spell (Q2): the card face plus how it was cast. `cast_method` is the key of whatever permitted the
+// alternative way of casting, unset for a normal cast. Examples: flashback = keyword flashback{R}; Fireblast's
+// alternative cost = (Fireblast, 1, 1); cast from the graveyard via Snapcaster Mage = (Snapcaster Mage, 1, 1);
+// cast from suspend = keyword suspend{1}{R}. Adventure spells and MDFC back faces use face = 2.
+message SpellKey {
+  CardFaceKey card = 1;
+  AbilityKey cast_method = 2;
+}
+
+// Comprehensive Rules zones. ZONE_OUTSIDE_GAME holds sideboard / companion cards.
+enum Zone {
+  ZONE_UNSPECIFIED = 0;
+  ZONE_LIBRARY = 1;
+  ZONE_HAND = 2;
+  ZONE_BATTLEFIELD = 3;
+  ZONE_GRAVEYARD = 4;
+  ZONE_STACK = 5;
+  ZONE_EXILE = 6;
+  ZONE_COMMAND = 7;
+  ZONE_OUTSIDE_GAME = 8;
+  ZONE_NONE = 9;          // not in any zone: source of a newly created token/copy, destination of a ceased token
+}
+
+// Turn structure (design: 관측 스키마, 게임 전역 "페이즈/스텝").
+enum Step {
+  STEP_UNSPECIFIED = 0;
+  STEP_PREGAME = 1;       // play/draw choice and mulligans
+  STEP_UNTAP = 2;
+  STEP_UPKEEP = 3;
+  STEP_DRAW = 4;
+  STEP_MAIN1 = 5;
+  STEP_BEGIN_COMBAT = 6;
+  STEP_DECLARE_ATTACKERS = 7;
+  STEP_DECLARE_BLOCKERS = 8;
+  STEP_FIRST_STRIKE_DAMAGE = 9;
+  STEP_COMBAT_DAMAGE = 10;
+  STEP_END_COMBAT = 11;
+  STEP_MAIN2 = 12;
+  STEP_END = 13;
+  STEP_CLEANUP = 14;
+}
+
+// A counter type and amount, e.g. {"+1/+1", 2}, {"time", 4}, {"poison", 1}, {"energy", 3}.
+message Counter {
+  string kind = 1;    // engine-neutral counter name as in the Comprehensive Rules / oracle text, lower-case
+  int32 count = 2;
+}
+
+// An amount of mana of one color (`color` is one of W U B R G C).
+message ManaUnit {
+  string color = 1;
+  uint32 amount = 2;
+}
+
+// A card list entry by Scryfall oracle_id (design: protocol 카드 식별자).
+message CardCount {
+  string oracle_id = 1;
+  uint32 count = 2;
+}
+
+// Engine-neutral decision types (design: 행동 스키마 table). Every decision is "type + candidates -> pointer
+// choice"; multi-selects are made one candidate at a time (DecisionResponse.steps, Q9).
+enum DecisionType {
+  DECISION_TYPE_UNSPECIFIED = 0;
+  DECISION_TYPE_PRIORITY = 1;            // play land, cast spell, activate ability, pass
+  DECISION_TYPE_TARGET = 2;              // legal target entities / players
+  DECISION_TYPE_DECLARE_ATTACKERS = 3;   // (attacker, attacked) pairs + done
+  DECISION_TYPE_DECLARE_BLOCKERS = 4;    // (blocker, attacker) pairs + done
+  DECISION_TYPE_CHOOSE_OPTION = 5;       // mode / X value / enumerated choice
+  DECISION_TYPE_CHOOSE_CARDS = 6;        // discard, search, scry order, ...
+  DECISION_TYPE_MANA_PAYMENT = 7;        // one mana source (or pool mana) per step until the cost is paid (Q6)
+  DECISION_TYPE_TRIGGER_ORDER = 8;       // trigger order and other rare enumerated choices
+  DECISION_TYPE_MULLIGAN = 9;            // keep / mulligan
+  DECISION_TYPE_BOTTOM_CARDS = 10;       // London mulligan: cards to put on the bottom
+  DECISION_TYPE_PLAY_OR_DRAW = 11;       // play / draw
+  DECISION_TYPE_SIDEBOARD = 12;          // (card in, card out) pairs + done
+}
+
+// Whether the game feeds training (privileged data allowed) or plays for real (privileged data refused).
+// design: protocol 학습 전용 블록.
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_TRAINING = 1;
+  MODE_INFERENCE = 2;
+}
