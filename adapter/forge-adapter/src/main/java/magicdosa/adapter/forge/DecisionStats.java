@@ -17,14 +17,63 @@ public final class DecisionStats {
     private final List<String> fallbacks = new ArrayList<>();
     private int autoPasses;
     int translationErrors;
+    /** Priority decisions whose left-out actions were checked against Forge's own pool payment, and omissions found. */
+    int candidateChecks;
+    int candidateOmissions;
     int sendFailures;
 
     void decided(DecisionType type) {
         decided.merge(type, 1, Integer::sum);
     }
 
-    void delegated(String engineDecision) {
+    private final Map<String, Integer> unclassified = new TreeMap<>();
+
+    /** A decision method not classified yet was called (Forge AI answered). */
+    void unclassified(String method) {
+        unclassified.merge(method, 1, Integer::sum);
+    }
+
+    public Map<String, Integer> unclassified() {
+        return unclassified;
+    }
+
+    void delegated(String engineDecision, DecisionType type) {
         delegated.merge(engineDecision, 1, Integer::sum);
+        delegatedByType.merge(type, 1, Integer::sum);
+    }
+
+    private final Map<DecisionType, Integer> delegatedByType = new TreeMap<>();
+    private final Map<DecisionType, Integer> rejectedByType = new TreeMap<>();
+    /** Q14: PRIORITY requests, and those with a candidate other than pass and mana abilities. */
+    int priorityAsks;
+    int priorityAsksWithAction;
+    /** Time the adapter waited for agent-core's answers (gRPC and agent-core), for the throughput baseline. */
+    long decideNanos;
+    /** Priority windows where the same action reached the repeat cap (runaway loops; 2026-11-06 plan section 4). */
+    int safetyCaps;
+
+    public Map<DecisionType, Integer> delegatedByType() {
+        return delegatedByType;
+    }
+
+    public Map<DecisionType, Integer> rejectedByType() {
+        return rejectedByType;
+    }
+
+    public int priorityAsks() {
+        return priorityAsks;
+    }
+
+    public int priorityAsksWithAction() {
+        return priorityAsksWithAction;
+    }
+
+    public long decideNanos() {
+        return decideNanos;
+    }
+
+    public int safetyCaps() {
+        return safetyCaps;
     }
 
     void fallback(String what) {
@@ -34,9 +83,24 @@ public final class DecisionStats {
     private final Map<String, Integer> notes = new TreeMap<>();
     private final Map<String, Integer> rejected = new TreeMap<>();
 
+    /**
+     * Why the engine refused an answer (2026-11-06, deck item 1). An ignored constraint is an agent-core bug: the
+     * answer broke a rule the request stated. A missing constraint is a rule the request could not state (or a
+     * candidate the adapter offered that was not playable after all). An engine bug is a refusal of a legal answer.
+     */
+    public enum RejectionKind { MISSING_CONSTRAINT, IGNORED_CONSTRAINT, ENGINE_BUG }
+
+    private final Map<RejectionKind, Integer> rejectionKinds = new TreeMap<>();
+
     /** An answer the engine refused and that was asked again (Q15). */
-    void rejected(String engineDecision) {
-        rejected.merge(engineDecision, 1, Integer::sum);
+    void rejected(String engineDecision, DecisionType type, RejectionKind kind) {
+        rejectedByType.merge(type, 1, Integer::sum);
+        rejected.merge(engineDecision + ": " + kind, 1, Integer::sum);
+        rejectionKinds.merge(kind, 1, Integer::sum);
+    }
+
+    public int rejections(RejectionKind kind) {
+        return rejectionKinds.getOrDefault(kind, 0);
     }
 
     public Map<String, Integer> rejected() {
@@ -72,6 +136,14 @@ public final class DecisionStats {
         return autoPasses;
     }
 
+    public int candidateChecks() {
+        return candidateChecks;
+    }
+
+    public int candidateOmissions() {
+        return candidateOmissions;
+    }
+
     public int errors() {
         return translationErrors + sendFailures;
     }
@@ -80,11 +152,21 @@ public final class DecisionStats {
     public void add(DecisionStats o) {
         o.decided.forEach((k, v) -> decided.merge(k, v, Integer::sum));
         o.delegated.forEach((k, v) -> delegated.merge(k, v, Integer::sum));
+        o.unclassified.forEach((k, v) -> unclassified.merge(k, v, Integer::sum));
+        o.delegatedByType.forEach((k, v) -> delegatedByType.merge(k, v, Integer::sum));
+        o.rejectedByType.forEach((k, v) -> rejectedByType.merge(k, v, Integer::sum));
+        priorityAsks += o.priorityAsks;
+        priorityAsksWithAction += o.priorityAsksWithAction;
+        decideNanos += o.decideNanos;
+        safetyCaps += o.safetyCaps;
         fallbacks.addAll(o.fallbacks);
         o.notes.forEach((k, v) -> notes.merge(k, v, Integer::sum));
         o.rejected.forEach((k, v) -> rejected.merge(k, v, Integer::sum));
+        o.rejectionKinds.forEach((k, v) -> rejectionKinds.merge(k, v, Integer::sum));
         autoPasses += o.autoPasses;
         translationErrors += o.translationErrors;
+        candidateChecks += o.candidateChecks;
+        candidateOmissions += o.candidateOmissions;
         sendFailures += o.sendFailures;
     }
 }

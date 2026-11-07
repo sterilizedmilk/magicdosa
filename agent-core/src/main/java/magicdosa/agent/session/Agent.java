@@ -19,6 +19,10 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class Agent {
     private final Policy policy;
+    /** Writes each finished game's training samples (Arrow shards); null when shards are off. */
+    private final magicdosa.agent.encoder.ShardWriter shards;
+    private final AtomicLong shardsWritten = new AtomicLong();
+    private final AtomicLong shardErrors = new AtomicLong();
     private final Map<String, Hello> accepted = new ConcurrentHashMap<>();
     private final Map<String, GameSession> open = new ConcurrentHashMap<>();
     private final AtomicLong refused = new AtomicLong();
@@ -28,7 +32,20 @@ public final class Agent {
     private final List<String> protocolErrors = new ArrayList<>();
 
     public Agent(Policy policy) {
+        this(policy, null);
+    }
+
+    public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards) {
         this.policy = policy;
+        this.shards = shards;
+    }
+
+    magicdosa.agent.encoder.ShardWriter shards() {
+        return shards;
+    }
+
+    void shardWritten(boolean ok) {
+        (ok ? shardsWritten : shardErrors).incrementAndGet();
     }
 
     /** Accepts the game only when every version matches and the hello is complete; never plays on otherwise. */
@@ -104,6 +121,8 @@ public final class Agent {
     /** One line for the agent-core console. */
     public String summary() {
         return "games finished=" + finished.get() + " refused=" + refused.get() + " open=" + open.size() + " events="
-            + events.get() + " decisions=" + decisions.get() + " protocolErrors=" + protocolErrors().size();
+            + events.get() + " decisions=" + decisions.get() + " protocolErrors=" + protocolErrors().size()
+            + (shards == null ? "" : " shards=" + shardsWritten.get() + " shardErrors=" + shardErrors.get()
+                + " oov=" + shards.vocabulary().oovCount() + " " + shards.vocabulary().oovValues().keySet());
     }
 }

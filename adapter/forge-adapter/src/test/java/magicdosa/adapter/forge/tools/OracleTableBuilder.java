@@ -39,6 +39,8 @@ import java.util.zip.GZIPInputStream;
  */
 public final class OracleTableBuilder {
     private static final Pattern TOKEN_SCRIPT = Pattern.compile("TokenScript\\$\\s*([A-Za-z0-9_,]+)");
+    /** Empower makes its token in Forge's effect code: script u_empower_<type> (EmpowerEffect). */
+    private static final Pattern EMPOWER = Pattern.compile("\\$ Empower\\b[^\\n]*?\\bType\\$ ([A-Za-z]+)");
     private static final Pattern DECK_LINE = Pattern.compile("^(\\d+)\\s+(.+?)(\\|.*)?$");
 
     private OracleTableBuilder() {}
@@ -94,7 +96,12 @@ public final class OracleTableBuilder {
                 missing.add("forge script " + name);
                 continue;
             }
-            Matcher m = TOKEN_SCRIPT.matcher(Files.readString(script, StandardCharsets.UTF_8));
+            String text = Files.readString(script, StandardCharsets.UTF_8);
+            Matcher e = EMPOWER.matcher(text);
+            while (e.find()) {
+                tokenScripts.add("u_empower_" + e.group(1).toLowerCase(Locale.ROOT));
+            }
+            Matcher m = TOKEN_SCRIPT.matcher(text);
             while (m.find()) {
                 for (String s : m.group(1).split(",")) {
                     tokenScripts.add(s.trim());

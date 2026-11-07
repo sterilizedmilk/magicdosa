@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -27,6 +28,7 @@ import java.util.regex.Pattern;
 final class AgentConnection implements AutoCloseable {
     private static final Pattern LISTENING = Pattern.compile("agent-core listening on port (\\d+)");
     private static final Pattern ERRORS = Pattern.compile("protocolErrors=(\\d+)");
+    private static final Pattern SHARDS = Pattern.compile("shards=(\\d+) shardErrors=(\\d+) oov=(\\d+)(.*)");
 
     private final DecisionClient client;
     private final Process process;
@@ -51,8 +53,13 @@ final class AgentConnection implements AutoCloseable {
 
     private static AgentConnection spawn() throws IOException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        Process p = new ProcessBuilder(java, "-Xmx1g", "-cp", System.getProperty("java.class.path"),
-            "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes").redirectErrorStream(true).start();
+        List<String> cmd = new ArrayList<>(List.of(java, "-Xmx1g", "--add-opens=java.base/java.nio=ALL-UNNAMED",
+            "-cp", System.getProperty("java.class.path"), "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes"));
+        String shards = System.getProperty("magicdosa.shards");
+        if (shards != null) {
+            cmd.addAll(List.of("--shards", shards)); // training samples (Arrow) of every finished game
+        }
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8));
         String line;
         int port = -1;
@@ -103,6 +110,17 @@ final class AgentConnection implements AutoCloseable {
         }
         Matcher m = ERRORS.matcher(summary);
         return m.find() ? Integer.parseInt(m.group(1)) : -1; // -1: agent-core did not report
+    }
+
+    /** With shards on (-Dmagicdosa.shards): "written, errors, vocabulary misses [values]", else null. Call after close. */
+    String shardReport() {
+        Matcher m = SHARDS.matcher(summary);
+        return m.find() ? m.group(1) + " written, " + m.group(2) + " errors, oov " + m.group(3) + m.group(4) : null;
+    }
+
+    boolean shardsClean() {
+        Matcher m = SHARDS.matcher(summary);
+        return !m.find() || (m.group(2).equals("0") && m.group(3).equals("0"));
     }
 
     List<String> protocolErrors() {

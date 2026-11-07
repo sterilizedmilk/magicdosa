@@ -27,6 +27,9 @@ import java.util.concurrent.TimeUnit;
  * unintended fallback, never a silent continuation. agent-core closes the stream after the game over.
  */
 public final class AgentCoreServer {
+    /** Largest message agent-core accepts. */
+    static final int MAX_MESSAGE_BYTES = 256 << 20;
+
     private final Server server;
 
     private AgentCoreServer(Server server) {
@@ -37,6 +40,8 @@ public final class AgentCoreServer {
     public static AgentCoreServer start(int port, Agent agent) throws IOException {
         Server server = NettyServerBuilder.forAddress(new InetSocketAddress(InetAddress.getLoopbackAddress(), port),
             InsecureServerCredentials.create())
+            // a game over carries the hidden state recorded at every decision of the game (Q11): long games exceed 4 MB
+            .maxInboundMessageSize(MAX_MESSAGE_BYTES)
             .addService(service(agent)).build().start();
         return new AgentCoreServer(server);
     }

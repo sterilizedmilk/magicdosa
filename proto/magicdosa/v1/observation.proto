@@ -28,6 +28,9 @@ message MatchPlayer {
   // 2 and 3 it is unknown and left empty (agent-core's belief samples it).
   repeated CardCount current_deck = 6;
   uint32 games_won = 7;              // match score before this game
+  // On the opponents' entries: their cards the viewer saw in earlier games of this match, by the most copies seen in
+  // any one game (design: 관측 스키마 매치 컨텍스트 "이전 게임에서 확인된 상대 카드").
+  repeated CardCount seen_in_earlier_games = 8;
 }
 
 // One player's observation (design: protocol 결정 요청 "결정하는 플레이어 시점의 관측(볼 수 있는 것만)").
@@ -44,6 +47,17 @@ message Observation {
   // empty list from a missing one; fingerprints compare effects only when provided.
   bool effects_provided = 8;
   repeated Effect effects = 9;
+  // The viewer's spells and abilities that need more mana than the pool holds but could be paid if the viewer made
+  // it from its sources (approximate). Castable ones are the PRIORITY candidates instead.
+  repeated PotentialCast potential_casts = 10;
+}
+
+message PotentialCast {
+  uint64 source_id = 1;             // card to cast, or the source of the ability
+  oneof key {
+    SpellKey spell = 2;
+    AbilityKey ability = 3;
+  }
 }
 
 // design: 관측 스키마 "게임 전역".
@@ -77,6 +91,7 @@ message PlayerState {
   repeated Designation designations = 9;
   // Optional engine-provided field (design: protocol 선택 필드). agent-core computes or leaves it when absent.
   optional uint32 spells_cast_this_turn = 10;
+  optional uint32 controlled_by_seat = 11; // set while another player controls this player (deck item 4)
 }
 
 // Mana in a pool (Q6).
@@ -132,6 +147,24 @@ message GameObject {
   repeated GrantedAbility granted_abilities = 20;
   // Optional engine-provided field (design: protocol 선택 필드 "공격 가능 여부").
   optional bool can_attack = 21;
+  // A library card whose place the viewer knows (E3: scry, surveil, a card put on top or bottom); its oracle_id is set
+  // when the viewer knows which card it is.
+  LibraryPosition library_position = 22;
+}
+
+// Where a library card is, as far as a seat knows (E3). Counted from the end it was put at; a group is cards put on
+// the bottom in an order the seat does not know (Monumental Henge, Narset, Consult the Star Charts).
+message LibraryPosition {
+  oneof position {
+    uint32 from_top = 1;              // 0 = top card
+    uint32 from_bottom = 2;           // 0 = bottom card
+    BottomGroup bottom_group = 3;
+  }
+}
+
+message BottomGroup {
+  uint32 group = 1;                 // per game and seat, from 1
+  uint32 size = 2;
 }
 
 message TokenFallbackKey {

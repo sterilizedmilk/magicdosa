@@ -12,6 +12,7 @@ import magicdosa.protocol.v1.Mode;
 import magicdosa.protocol.v1.TurnStartSnapshot;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,6 +26,7 @@ public final class GameSession {
     private final Policy policy;
     private final Map<Integer, Long> lastSeq = new HashMap<>();
     private long lastDecisionId;
+    private final List<magicdosa.agent.encoder.ShardWriter.Decided> decided = new java.util.ArrayList<>();
     private long events;
     private long decisions;
     private boolean over;
@@ -103,7 +105,11 @@ public final class GameSession {
         }
         lastDecisionId = r.getDecisionId();
         decisions++;
-        return policy.decide(r);
+        DecisionResponse response = policy.decide(r);
+        if (agent.shards() != null) {
+            decided.add(new magicdosa.agent.encoder.ShardWriter.Decided(r, response));
+        }
+        return response;
     }
 
     private void gameOver(GameOver g) throws ProtocolException {
@@ -113,6 +119,16 @@ public final class GameSession {
             throw error("privileged data in inference mode");
         }
         over = true;
+        if (agent.shards() != null) {
+            try {
+                agent.shards().write(hello, decided, g);
+                agent.shardWritten(true);
+            } catch (java.io.IOException | RuntimeException e) {
+                agent.shardWritten(false);
+                System.err.println("agent-core: shard of " + hello.getGameId() + " not written: " + e);
+            }
+            decided.clear();
+        }
         agent.finished(this, events, decisions);
     }
 

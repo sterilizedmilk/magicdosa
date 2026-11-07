@@ -145,11 +145,18 @@ enum DecisionType {
   DECISION_TYPE_CHOOSE_OPTION = 5;       // mode / X value / enumerated choice
   DECISION_TYPE_CHOOSE_CARDS = 6;        // discard, search, scry order, ...
   DECISION_TYPE_MANA_PAYMENT = 7;        // one mana source (or pool mana) per step until the cost is paid (Q6)
-  DECISION_TYPE_TRIGGER_ORDER = 8;       // trigger order and other rare enumerated choices
+  DECISION_TYPE_TRIGGER_ORDER = 8;       // order of simultaneous triggers: ordered, every one picked; first picked resolves first
   DECISION_TYPE_MULLIGAN = 9;            // keep / mulligan
   DECISION_TYPE_BOTTOM_CARDS = 10;       // London mulligan: cards to put on the bottom
   DECISION_TYPE_PLAY_OR_DRAW = 11;       // play / draw
   DECISION_TYPE_SIDEBOARD = 12;          // (card in, card out) pairs + done
+  // Naming a card or a type (2026-11-06, deck item 6): card names from both players' 75, creature types from the
+  // deciding player's 75 (Disruptor Flute, Cavern of Souls).
+  DECISION_TYPE_NAME = 13;
+  // Combat damage of one source among several recipients (2026-11-06, deck item 3): one request per recipient, in
+  // entity ID order, the amount 0 .. min(lethal damage, damage left); what is left goes automatically (trample: to
+  // the player or planeswalker once every blocker has lethal damage; otherwise to the last recipient).
+  DECISION_TYPE_DAMAGE_ASSIGNMENT = 14;
 }
 
 // Whether the game feeds training (privileged data allowed) or plays for real (privileged data refused).

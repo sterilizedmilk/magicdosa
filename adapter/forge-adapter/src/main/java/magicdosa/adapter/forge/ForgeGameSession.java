@@ -22,13 +22,19 @@ import forge.game.event.GameEventPlayerCounters;
 import forge.game.event.GameEventPlayerDamaged;
 import forge.game.event.GameEventPlayerLivesChanged;
 import forge.game.event.GameEventPlayerPoisoned;
+import forge.game.event.GameEventManaPool;
+import forge.game.event.GameEventScry;
 import forge.game.event.GameEventShuffle;
+import forge.game.event.GameEventSurveil;
+import forge.game.event.EventValueChangeType;
+import forge.game.player.GameLossReason;
 import forge.game.event.GameEventSpellAbilityCast;
 import forge.game.event.GameEventTurnBegan;
 import forge.game.mana.Mana;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
+import forge.game.zone.MagicStack;
 import forge.game.zone.ZoneType;
 import magicdosa.protocol.Versions;
 import magicdosa.protocol.v1.AbilityKey;
@@ -78,18 +84,34 @@ import magicdosa.protocol.v1.ResolutionChoice;
 import magicdosa.protocol.v1.RevealReason;
 import magicdosa.protocol.v1.SelectionConstraints;
 import magicdosa.protocol.v1.TapChanged;
+import magicdosa.protocol.v1.ActivateManaAbility;
+import magicdosa.protocol.v1.DesignationsChanged;
+import magicdosa.protocol.v1.EffectCreated;
+import magicdosa.protocol.v1.EffectEnded;
+import magicdosa.protocol.v1.KnownLibraryCard;
+import magicdosa.protocol.v1.LibraryArranged;
+import magicdosa.protocol.v1.LibraryPosition;
+import magicdosa.protocol.v1.ManaAdded;
+import magicdosa.protocol.v1.ManaPoolEmptied;
+import magicdosa.protocol.v1.ManaSpent;
+import magicdosa.protocol.v1.PoolMana;
+import magicdosa.protocol.v1.TriggeredAbilityRemoved;
+import magicdosa.protocol.v1.TriggeredAbilityStacked;
 import magicdosa.protocol.v1.TurnStartSnapshot;
 import magicdosa.protocol.v1.ZoneMove;
 import magicdosa.protocol.v1.Candidate;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SplittableRandom;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -123,6 +145,13 @@ public final class ForgeGameSession {
 
     private final EntityIds ids = new EntityIds();
     private final ObservationBuilder observations = new ObservationBuilder(this);
+    private final GameFacts facts = new GameFacts(this);
+    /** Who has seen each object, by entity ID (Q10: an object seen by a new seat is reported to every stream). */
+    private final Map<Long, Set<Integer>> seers = new HashMap<>();
+    /** Set by Forge's "mana pool cleared" event: the next pool change is the pool emptying. */
+    private boolean poolsCleared;
+    /** Per seat, the cards it just arranged (scry, surveil), for the LibraryArranged event of its own stream. */
+    private final Map<Integer, List<Card>> arrangedBy = new HashMap<>();
     private final Map<Integer, Long> seq = new HashMap<>();
     private final Map<Integer, Set<Long>> visibleIds = new HashMap<>();
     private final Map<Integer, Integer> mulligans = new HashMap<>();
@@ -131,6 +160,34 @@ public final class ForgeGameSession {
     private long decisions;
     private int snapshotTurn = -1;
     private final DecisionStats stats = new DecisionStats();
+    private final Map<Integer, List<magicdosa.protocol.v1.PotentialCast>> potentialCasts = new HashMap<>();
+    /** Per agent seat: the opponents' cards (Forge card id -> oracle_id) it saw in this game. */
+    private final Map<Integer, Map<Integer, String>> seenOpponentCards = new HashMap<>();
+    private Map<Integer, Map<String, Integer>> seenInEarlierGames = Map.of();
+
+    /**
+     * Forge fires no event when an ability triggers: triggered abilities wait in the stack's simultaneous-entry list
+     * until a player would receive priority. The list is private; it is only read here, never changed.
+     */
+    private static final Field SIMULTANEOUS_ENTRIES;
+
+    static {
+        try {
+            SIMULTANEOUS_ENTRIES = MagicStack.class.getDeclaredField("simultaneousStackEntryList");
+            SIMULTANEOUS_ENTRIES.setAccessible(true);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /** Triggered abilities that triggered and are not on the stack yet, by ID. */
+    private final Map<Long, SpellAbility> waitingTriggers = new LinkedHashMap<>();
+    private final Map<Long, Long> triggerSources = new HashMap<>();
+    /** Forge SpellAbility ids a controller is putting on the stack right now (out of the waiting list, not stacked yet). */
+    private final Map<Integer, SpellAbility> beingStacked = new LinkedHashMap<>();
+    /** While a controller plays something, state changes wait here until its action event is out (see events.proto). */
+    private int actionDepth;
+    private final List<Event.Builder> deferred = new ArrayList<>();
 
     public ForgeGameSession(Game game, String matchId, int gameNumber, List<Deck> registeredDecks, int[] gamesWon,
                             Set<Integer> agentSeats, DecisionClient client, CardKeys keys, GameLogWriter log, Mode mode,
@@ -181,6 +238,14 @@ public final class ForgeGameSession {
         return game;
     }
 
+    GameFacts facts() {
+        return facts;
+    }
+
+    ObservationBuilder observationBuilder() {
+        return observations;
+    }
+
     EntityIds ids() {
         return ids;
     }
@@ -229,6 +294,37 @@ public final class ForgeGameSession {
         return mulligans.getOrDefault(seat, 0);
     }
 
+    /** What the seat could cast with more mana, as its controller last computed it (observation, approximate). */
+    void potentialCasts(Player p, List<magicdosa.protocol.v1.PotentialCast> casts) {
+        potentialCasts.put(seat(p), casts);
+    }
+
+    List<magicdosa.protocol.v1.PotentialCast> potentialCasts(int seat) {
+        return potentialCasts.getOrDefault(seat, List.of());
+    }
+
+    /** Per agent seat, the opponents' cards it saw in earlier games of the match (observation, match context). */
+    void seenInEarlierGames(Map<Integer, Map<String, Integer>> seen) {
+        seenInEarlierGames = seen;
+    }
+
+    Map<String, Integer> seenInEarlierGames(int viewer) {
+        return seenInEarlierGames.getOrDefault(viewer, Map.of());
+    }
+
+    /** The opponents' cards the seat saw in this game, by oracle_id. */
+    public Map<String, Integer> seenOpponentCards(int viewer) {
+        Map<String, Integer> out = new java.util.TreeMap<>();
+        seenOpponentCards.getOrDefault(viewer, Map.of()).values().forEach(o -> out.merge(o, 1, Integer::sum));
+        return out;
+    }
+
+    private void saw(int viewer, Card c) {
+        if (c.getOwner() != player(viewer) && !c.isToken()) {
+            seenOpponentCards.computeIfAbsent(viewer, k -> new HashMap<>()).put(c.getId(), keys.oracleId(c));
+        }
+    }
+
     void tookMulligan(Player p) {
         mulligans.merge(seat(p), 1, Integer::sum);
     }
@@ -275,19 +371,115 @@ public final class ForgeGameSession {
     // ---- event streams ----
 
     /** Builds an event body per agent seat ({@code body} may leave the builder untouched to skip that seat). */
-    private void emit(boolean engineHandled, java.util.function.BiConsumer<Integer, Event.Builder> body) {
+    private void emit(boolean engineHandled, BiConsumer<Integer, Event.Builder> body) {
         for (int viewer : agentSeats) {
             Event.Builder b = Event.newBuilder();
             body.accept(viewer, b);
             if (b.getBodyCase() == Event.BodyCase.BODY_NOT_SET) {
                 continue;
             }
-            long s = seq.merge(viewer, 1L, Long::sum);
-            b.setGameId(gameId).setViewerSeat(viewer).setSeq(s)
-                .setTurn(game.getPhaseHandler().getTurn()).setStep(ObservationBuilder.step(game)).setEngineHandled(engineHandled);
-            Event e = b.build();
-            send(AdapterMessage.newBuilder().setEvent(e).build());
-            log.write(LogRecord.newBuilder().setEvent(e).build());
+            b.setGameId(gameId).setViewerSeat(viewer).setTurn(game.getPhaseHandler().getTurn())
+                .setStep(ObservationBuilder.step(game)).setEngineHandled(engineHandled);
+            if (actionDepth > 0) {
+                deferred.add(b); // built now, numbered when published
+            } else {
+                publish(b);
+            }
+        }
+    }
+
+    private void publish(Event.Builder b) {
+        Event e = b.setSeq(seq.merge(b.getViewerSeat(), 1L, Long::sum)).build();
+        send(AdapterMessage.newBuilder().setEvent(e).build());
+        log.write(LogRecord.newBuilder().setEvent(e).build());
+    }
+
+    /** An action event: published before the state changes held back since the action began, which follow it. */
+    private void emitAction(Consumer<Event.Builder> body) {
+        emitNow(body);
+        flushDeferred();
+    }
+
+    /**
+     * Shows {@code cards} to a seat: one about to choose among them (a search, the top of a library), or one Forge
+     * reveals them to (Thoughtseize). The seat's stream learns their identities once per object (CardRevealed,
+     * LOOKED_AT); the other streams learn that it saw them, with the identity only where their own seat sees it (Q10).
+     */
+    void showTo(Player p, Collection<? extends Card> cards) {
+        syncZones();
+        int viewer = seat(p);
+        for (Card c : cards) {
+            long id = ids.idOf(c);
+            if (id == 0 || c.getZone() == null) {
+                continue;
+            }
+            Set<Integer> who = seers.computeIfAbsent(id, k -> new java.util.TreeSet<>(seatsSeeing(c)));
+            boolean newSeer = who.add(viewer);
+            for (int stream : agentSeats) {
+                boolean itSees = who.contains(stream);
+                if (stream == viewer) {
+                    if (!visibleIds.get(viewer).add(id)) {
+                        continue; // already seen
+                    }
+                    saw(viewer, c);
+                } else if (!newSeer) {
+                    continue;
+                }
+                // the chooser learns the card; other streams learn that it was seen (Q10), named only where seen
+                CardRevealed.Builder r = CardRevealed.newBuilder().setId(id)
+                    .setZone(ObservationBuilder.zone(c.getZone().getZoneType())).setReason(RevealReason.REVEAL_REASON_LOOKED_AT)
+                    .addAllRevealedToSeats(who);
+                if (itSees) {
+                    r.setOracleId(keys.oracleId(c)).setFace(keys.face(c));
+                }
+                emit(false, (seat, b) -> {
+                    if (seat == stream) {
+                        b.setCardRevealed(r);
+                    }
+                });
+            }
+        }
+    }
+
+    /** An action a controller reports in the middle of playing something (e.g. the order it puts triggers in). */
+    void reportAction(Consumer<Event.Builder> body) {
+        syncZones();
+        emitAction(body);
+    }
+
+    long triggerId(SpellAbility sa) {
+        return ids.triggerId(sa);
+    }
+
+    /** Published at once, ahead of anything held back. */
+    private void emitNow(Consumer<Event.Builder> body) {
+        int depth = actionDepth;
+        actionDepth = 0;
+        emitAll(false, body);
+        actionDepth = depth;
+    }
+
+    private void flushDeferred() {
+        List<Event.Builder> held = new ArrayList<>(deferred);
+        deferred.clear();
+        held.forEach(this::publish);
+    }
+
+    /**
+     * A controller starts playing something (casting, activating, playing a land, putting triggers on the stack).
+     * Until the matching action event, the zone moves and other changes it causes are held back.
+     */
+    void beginAction() {
+        if (actionDepth == 0) {
+            syncZones(); // what happened before belongs to no action
+        }
+        actionDepth++;
+    }
+
+    void endAction() {
+        syncZones();
+        if (--actionDepth == 0) {
+            flushDeferred();
         }
     }
 
@@ -318,12 +510,26 @@ public final class ForgeGameSession {
                     .setOwnerSeat(seat(c.getOwner())).setControllerSeat(seat(c.getController()))));
                 continue;
             }
+            if (m.prevId() == 0 && m.to() == ZoneType.Stack && c.isCopiedSpell()) {
+                // a copy of a spell is created on the stack, not cast
+                emit(false, (viewer, b) -> b.setObjectCreated(ObjectCreated.newBuilder().setId(m.newId())
+                    .setKind(ObjectCreatedKind.OBJECT_CREATED_KIND_SPELL_COPY).setZone(magicdosa.protocol.v1.Zone.ZONE_STACK)
+                    .setOwnerSeat(seat(c.getOwner())).setControllerSeat(seat(c.getController()))
+                    .setOracleId(keys.oracleId(c)).setFace(keys.face(c))));
+                continue;
+            }
             if (m.prevId() == 0 && m.to() != ZoneType.Library && game.getAge() != forge.game.GameStage.BeforeMulligan
                     && c.isToken()) {
-                emit(false, (viewer, b) -> b.setObjectCreated(ObjectCreated.newBuilder().setId(m.newId())
+                ObjectCreated.Builder oc = ObjectCreated.newBuilder().setId(m.newId())
                     .setKind(c.isCloned() ? ObjectCreatedKind.OBJECT_CREATED_KIND_COPY_TOKEN : ObjectCreatedKind.OBJECT_CREATED_KIND_TOKEN)
                     .setZone(ObservationBuilder.zone(m.to())).setOwnerSeat(seat(c.getOwner()))
-                    .setControllerSeat(seat(c.getController())).setOracleId(keys.oracleId(c)).setFace(keys.face(c))));
+                    .setControllerSeat(seat(c.getController())).setOracleId(keys.oracleId(c)).setFace(keys.face(c))
+                    .setCharacteristics(observations.characteristicsOf(c));
+                var fallback = observations.tokenFallback(c);
+                if (fallback != null) {
+                    oc.setTokenFallback(fallback); // Q3: no Scryfall token found
+                }
+                emit(false, (viewer, b) -> b.setObjectCreated(oc));
                 continue;
             }
             emit(false, (viewer, b) -> {
@@ -332,7 +538,8 @@ public final class ForgeGameSession {
                     .setFrom(m.prevId() == 0 ? magicdosa.protocol.v1.Zone.ZONE_NONE : ObservationBuilder.zone(m.from()))
                     .setTo(ObservationBuilder.zone(m.to())).setOwnerSeat(seat(c.getOwner()))
                     .setControllerSeat(seat(c.getController())).setFaceDown(c.isFaceDown());
-                if (vis) {
+                boolean sawIt = m.to() == ZoneType.Library && m.prevId() != 0 && visibleIds.get(viewer).contains(m.prevId());
+                if (vis || sawIt) {
                     z.setOracleId(keys.oracleId(c)).setFace(keys.face(c));
                     if (m.to() == ZoneType.Library) {
                         z.setPosition(c.getZone().getCards().indexOf(c));
@@ -341,6 +548,19 @@ public final class ForgeGameSession {
                 b.setZoneMove(z);
             });
         }
+        // E3: a seat that saw a card before it went into a library knows where it is
+        for (int viewer : agentSeats) {
+            List<Card> into = new ArrayList<>();
+            for (EntityIds.Move m : moves) {
+                if (m.to() == ZoneType.Library && m.prevId() != 0 && visibleIds.get(viewer).contains(m.prevId())) {
+                    into.add(m.card());
+                }
+            }
+            if (!into.isEmpty()) {
+                facts.movedIntoLibrary(viewer, into);
+            }
+        }
+        facts.prune();
         // reveals: objects whose identity the viewer sees now and did not see before
         for (int viewer : agentSeats) {
             Player v = player(viewer);
@@ -351,6 +571,7 @@ public final class ForgeGameSession {
                     continue;
                 }
                 seen.add(id);
+                saw(viewer, c);
                 long prev = ids.prevIdOf(id);
                 boolean wasHidden = prev == 0 ? c.getZone().is(ZoneType.Library) || c.getZone().is(ZoneType.Hand)
                     : !seen.contains(prev);
@@ -358,17 +579,258 @@ public final class ForgeGameSession {
                     continue;
                 }
                 RevealReason reason = revealReason(c, v, prev);
-                long seqNow = seq.merge(viewer, 1L, Long::sum);
-                Event e = Event.newBuilder().setGameId(gameId).setViewerSeat(viewer).setSeq(seqNow)
-                    .setTurn(game.getPhaseHandler().getTurn()).setStep(ObservationBuilder.step(game))
-                    .setCardRevealed(CardRevealed.newBuilder().setId(id).setOracleId(keys.oracleId(c)).setFace(keys.face(c))
-                        .setZone(ObservationBuilder.zone(c.getZone().getZoneType())).setReason(reason)
-                        .addAllRevealedToSeats(seatsSeeing(c)))
-                    .build();
-                send(AdapterMessage.newBuilder().setEvent(e).build());
-                log.write(LogRecord.newBuilder().setEvent(e).build());
+                CardRevealed.Builder r = CardRevealed.newBuilder().setId(id).setOracleId(keys.oracleId(c)).setFace(keys.face(c))
+                    .setZone(ObservationBuilder.zone(c.getZone().getZoneType())).setReason(reason)
+                    .addAllRevealedToSeats(seatsSeeing(c));
+                emit(false, (seat, b) -> {
+                    if (seat == viewer) {
+                        b.setCardRevealed(r);
+                    }
+                });
             }
         }
+        revealFacts();
+        syncFacts();
+        pollTriggers();
+    }
+
+    /**
+     * Q10: when a seat starts seeing a hidden object (Thoughtseize looking at a hand), every stream hears of it; streams
+     * of seats that do not see it get the fact without the identity.
+     */
+    private void revealFacts() {
+        for (Card c : EntityIds.allCards(game)) {
+            long id = ids.idOf(c);
+            if (id == 0 || c.getZone() == null) {
+                continue;
+            }
+            Set<Integer> now = new java.util.TreeSet<>(seatsSeeing(c));
+            Set<Integer> before = seers.get(id);
+            if (before != null) {
+                now.addAll(before); // who has seen an object only grows (showTo adds seats Forge does not track)
+            }
+            seers.put(id, now);
+            if (before == null || before.containsAll(now)
+                    || !(c.getZone().is(ZoneType.Hand) || c.getZone().is(ZoneType.Library))) {
+                continue;
+            }
+            for (int viewer : agentSeats) {
+                if (now.contains(viewer) && !before.contains(viewer)) {
+                    continue; // that stream got the reveal itself
+                }
+                CardRevealed.Builder r = CardRevealed.newBuilder().setId(id).setZone(ObservationBuilder.zone(c.getZone().getZoneType()))
+                    .setReason(RevealReason.REVEAL_REASON_LOOKED_AT).addAllRevealedToSeats(now);
+                if (now.contains(viewer)) {
+                    r.setOracleId(keys.oracleId(c)).setFace(keys.face(c));
+                }
+                emit(false, (seat, b) -> {
+                    if (seat == viewer) {
+                        b.setCardRevealed(r);
+                    }
+                });
+            }
+        }
+    }
+
+    /** Effects (Q5), mana pools (Q6) and designations (Q13) that changed since the last look. */
+    private void syncFacts() {
+        GameFacts.EffectChanges changes = facts.syncEffects();
+        for (var e : changes.created()) {
+            emitAll(false, b -> b.setEffectCreated(EffectCreated.newBuilder().setEffect(e)));
+        }
+        for (long id : changes.ended()) {
+            emitAll(false, b -> b.setEffectEnded(EffectEnded.newBuilder().setEffectId(id)));
+        }
+        boolean cleared = poolsCleared;
+        poolsCleared = false;
+        for (Player p : game.getRegisteredPlayers()) {
+            int s = seat(p);
+            List<PoolMana> now = observations.poolList(p);
+            GameFacts.PoolChange change = facts.pool(s, now);
+            if (!change.removed().isEmpty()) {
+                if (cleared && now.isEmpty()) {
+                    emitAll(false, b -> b.setManaPoolEmptied(ManaPoolEmptied.newBuilder().setSeat(s)));
+                } else {
+                    emitAll(false, b -> b.setManaSpent(ManaSpent.newBuilder().setSeat(s).addAllMana(change.removed())));
+                }
+            }
+            if (!change.added().isEmpty()) {
+                emitAll(false, b -> b.setManaAdded(ManaAdded.newBuilder().setSeat(s).addAllMana(change.added())));
+            }
+            var designations = observations.designations(p);
+            if (facts.designationsChanged(s, designations)) {
+                emitAll(false, b -> b.setDesignations(DesignationsChanged.newBuilder().setSeat(s).addAllDesignations(designations)));
+            }
+        }
+    }
+
+    /** A seat arranged the top of a library (scry, surveil): kept for the LibraryArranged event of its stream. */
+    void arranged(Player decider, List<Card> top, List<Card> bottom) {
+        int s = seat(decider);
+        facts.arranged(s, top, bottom);
+        List<Card> all = new ArrayList<>(top);
+        all.addAll(bottom);
+        arrangedBy.put(s, all);
+    }
+
+    private void libraryArranged(Player owner, int toTop, int toBottom, int toGraveyard) {
+        int s = seat(owner);
+        emit(false, (viewer, b) -> {
+            LibraryArranged.Builder a = LibraryArranged.newBuilder().setSeat(s).setLookedAt(toTop + toBottom + toGraveyard)
+                .setToTop(toTop).setToBottom(toBottom).setToGraveyard(toGraveyard);
+            for (Card c : arrangedBy.getOrDefault(viewer, List.of())) {
+                LibraryPosition pos = facts.position(viewer, c);
+                if (pos != null) {
+                    a.addCards(KnownLibraryCard.newBuilder().setId(ids.idOf(c)).setPosition(pos));
+                }
+            }
+            b.setLibraryArranged(a);
+        });
+        arrangedBy.clear();
+    }
+
+    /** A mana ability activated as a priority action or while paying during resolution (Q6), after it resolved. */
+    void manaAbilityActivated(Player p, SpellAbility sa) {
+        ActivateManaAbility.Builder a = ActivateManaAbility.newBuilder().setSeat(seat(p))
+            .setSourceId(ids.idOf(sa.getHostCard()));
+        AbilityKey key = keys.abilityKey(sa);
+        if (key != null) {
+            a.setAbility(key);
+        }
+        if (sa.getManaPart() != null) {
+            for (Mana m : sa.getManaPart().getLastManaProduced()) {
+                a.addProduced(ManaUnit.newBuilder().setColor(ObservationBuilder.colorLetter(m.getColor())).setAmount(1));
+            }
+        }
+        reportAction(b -> b.setActivateManaAbility(a));
+    }
+
+    /** Chosen modes of a modal spell or ability: 0-based indices in oracle order (Q1). */
+    List<Integer> modes(SpellAbility sa) {
+        SpellAbility root = sa.getRootAbility();
+        List<Integer> out = new ArrayList<>();
+        if (root.getChosenList() == null) {
+            return out;
+        }
+        List<forge.game.spellability.AbilitySub> all = root.getAdditionalAbilityList("Choices");
+        for (var chosen : root.getChosenList()) {
+            int i = all.indexOf(chosen);
+            if (i < 0) {
+                for (int j = 0; j < all.size(); j++) {
+                    if (all.get(j).getDescription().equals(chosen.getDescription())) {
+                        i = j;
+                        break;
+                    }
+                }
+            }
+            if (i >= 0) {
+                out.add(i);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<SpellAbility> simultaneousEntries() {
+        try {
+            return new ArrayList<>((List<SpellAbility>) SIMULTANEOUS_ENTRIES.get(game.getStack()));
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private Player controllerOf(SpellAbility sa) {
+        return sa.getActivatingPlayer() != null ? sa.getActivatingPlayer() : sa.getHostCard().getController();
+    }
+
+    private boolean onStack(SpellAbility sa) {
+        for (SpellAbilityStackInstance si : game.getStack()) {
+            if (si.getSpellAbility().getId() == sa.getId()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Issues IDs to abilities that triggered since the last look (design: 엔티티 ID "유발된 순간"; Q4 order: APNAP, then
+     * source ID, then ability key) and reports triggered abilities that left without being put on the stack.
+     */
+    private void pollTriggers() {
+        List<SpellAbility> waiting = simultaneousEntries();
+        waiting.addAll(beingStacked.values()); // Forge takes a player's entries out of the list before handing them over
+        List<SpellAbility> fresh = new ArrayList<>();
+        Set<Integer> waitingIds = new HashSet<>();
+        for (SpellAbility sa : waiting) {
+            waitingIds.add(sa.getId());
+            if (sa.isTrigger() && !ids.hasTriggerId(sa)) {
+                fresh.add(sa);
+            }
+        }
+        if (!fresh.isEmpty()) {
+            Player turn = game.getPhaseHandler().getPlayerTurn();
+            List<Player> apnap = turn == null ? game.getRegisteredPlayers() : game.getPlayersInTurnOrder(turn);
+            Map<Integer, Long> sources = new HashMap<>();
+            Map<Integer, String> keyNames = new HashMap<>();
+            for (SpellAbility sa : fresh) {
+                sources.put(sa.getId(), triggerSource(sa));
+                AbilityKey k = keys.abilityKey(sa);
+                keyNames.put(sa.getId(), k == null ? "" : k.toString());
+            }
+            fresh.sort(java.util.Comparator.comparingInt((SpellAbility sa) -> apnap.indexOf(controllerOf(sa)))
+                .thenComparingLong(sa -> sources.get(sa.getId()))
+                .thenComparing(sa -> keyNames.get(sa.getId())));
+            for (SpellAbility sa : fresh) {
+                announceTrigger(sa, sources.get(sa.getId()));
+            }
+        }
+        for (Map.Entry<Long, SpellAbility> e : new ArrayList<>(waitingTriggers.entrySet())) {
+            SpellAbility sa = e.getValue();
+            if (!waitingIds.contains(sa.getId()) && !onStack(sa)) {
+                waitingTriggers.remove(e.getKey());
+                emitAll(false, b -> b.setTriggerRemoved(TriggeredAbilityRemoved.newBuilder().setAbilityId(e.getKey())));
+            }
+        }
+    }
+
+    /** The source as it was when the ability triggered: before a move that made it trigger (dies, leaves). */
+    private long triggerSource(SpellAbility sa) {
+        Card host = sa.getHostCard();
+        long id = ids.idOf(host);
+        return movedInLastSync.contains(host.getId()) && ids.prevIdOf(id) != 0 ? ids.prevIdOf(id) : id;
+    }
+
+    private void announceTrigger(SpellAbility sa, long sourceId) {
+        announceTrigger(sa, sourceId, false);
+    }
+
+    private void announceTrigger(SpellAbility sa, long sourceId, boolean now) {
+        long id = ids.trigger(sa);
+        waitingTriggers.put(id, sa);
+        triggerSources.put(id, sourceId);
+        long effectId = sa.isTrigger() ? facts.effectIdOf(sa.getTrigger()) : 0;
+        AbilityTriggered.Builder t = AbilityTriggered.newBuilder().setAbilityId(id).setSourceId(sourceId).setEffectId(effectId)
+            .setControllerSeat(seat(controllerOf(sa)));
+        AbilityKey key = keys.abilityKey(sa);
+        if (key != null) {
+            t.setAbility(key);
+        }
+        if (now) {
+            emitNow(b -> b.setAbilityTriggered(t));
+        } else {
+            emitAll(false, b -> b.setAbilityTriggered(t));
+        }
+    }
+
+    /** A controller takes these entries out of the waiting list to put them on the stack (or drop them). */
+    void beginStacking(List<SpellAbility> entries) {
+        entries.forEach(sa -> beingStacked.put(sa.getId(), sa));
+        beginAction(); // announces entries that triggered without a look in between
+    }
+
+    void endStacking(List<SpellAbility> entries) {
+        entries.forEach(sa -> beingStacked.remove(sa.getId()));
+        endAction(); // entries not put on the stack are reported removed
     }
 
     private RevealReason revealReason(Card c, Player viewer, long prevId) {
@@ -429,6 +891,11 @@ public final class ForgeGameSession {
         if (snapshotTurn < 0) {
             return; // nothing is streamed before the first snapshot
         }
+        boolean action = event instanceof GameEventSpellAbilityCast || event instanceof GameEventLandPlayed
+            || event instanceof GameEventAttackersDeclared || event instanceof GameEventBlockersDeclared;
+        if (action) {
+            actionDepth++; // IDs are issued now; the changes that came with the action follow its event
+        }
         syncZones();
         if (event instanceof GameEventSpellAbilityCast e) {
             castOrActivate(e);
@@ -436,7 +903,7 @@ public final class ForgeGameSession {
             Card land = game.findByView(e.land());
             long id = ids.idOf(land);
             Player p = land.getController();
-            emitAll(false, b -> b.setPlayLand(PlayLand.newBuilder().setSeat(seat(p)).setCardId(ids.prevIdOf(id))
+            emitAction(b -> b.setPlayLand(PlayLand.newBuilder().setSeat(seat(p)).setCardId(ids.prevIdOf(id))
                 .setLand(keys.faceKey(land, land.getCurrentState()))));
         } else if (event instanceof GameEventAttackersDeclared e) {
             Combat combat = game.getPhaseHandler().getCombat();
@@ -445,7 +912,7 @@ public final class ForgeGameSession {
                 for (Card a : combat.getAttackers()) {
                     d.addAttacks(Attack.newBuilder().setAttackerId(ids.idOf(a)).setDefender(ref(combat.getDefenderByAttacker(a))));
                 }
-                emitAll(false, b -> b.setDeclareAttackers(d));
+                emitAction(b -> b.setDeclareAttackers(d));
             }
         } else if (event instanceof GameEventBlockersDeclared e) {
             Combat combat = game.getPhaseHandler().getCombat();
@@ -459,7 +926,7 @@ public final class ForgeGameSession {
                         }
                     }
                 }
-                emitAll(false, b -> b.setDeclareBlockers(d));
+                emitAction(b -> b.setDeclareBlockers(d));
             }
         } else if (event instanceof GameEventCardDamaged e) {
             Card target = game.findByView(e.card());
@@ -486,13 +953,26 @@ public final class ForgeGameSession {
         } else if (event instanceof GameEventCardTapped e) {
             Card c = game.findByView(e.card());
             emitAll(false, b -> b.setTap(TapChanged.newBuilder().setId(ids.idOf(c)).setTapped(e.tapped())));
+        } else if (event instanceof GameEventManaPool e) {
+            if (e.mode() == EventValueChangeType.Cleared) {
+                poolsCleared = true;
+                syncFacts();
+            }
+        } else if (event instanceof GameEventScry e) {
+            libraryArranged(game.getPlayer(e.player()), e.toTop(), e.toBottom(), 0);
+        } else if (event instanceof GameEventSurveil e) {
+            libraryArranged(game.getPlayer(e.player()), e.toLibrary(), 0, e.toGraveyard());
         } else if (event instanceof GameEventShuffle e) {
             Player p = game.getPlayer(e.player());
+            facts.shuffled(p);
             emitAll(false, b -> b.setLibraryShuffled(LibraryShuffled.newBuilder().setSeat(seat(p))));
             recordPrivileged(0);
         } else if (event instanceof GameEventDayTimeChanged e) {
             emitAll(false, b -> b.setDayNight(DayNightChanged.newBuilder()
                 .setDayNight(e.daytime() ? DayNight.DAY_NIGHT_DAY : DayNight.DAY_NIGHT_NIGHT)));
+        }
+        if (action) {
+            endAction();
         }
     }
 
@@ -524,37 +1004,54 @@ public final class ForgeGameSession {
         long hostId = ids.idOf(host);
         // the source as it was when activated: before a cost (sacrifice) moved it
         long sourceId = movedInLastSync.contains(host.getId()) && !sa.isSpell() ? ids.prevIdOf(hostId) : hostId;
-        ids.setSource(si, sourceId);
+        ids.setSource(si, sa.isTrigger() ? triggerSources.getOrDefault(ids.triggerId(sa), sourceId) : sourceId);
         List<ObjectRef> targets = targets(sa);
+        if (sa.isCopied()) {
+            // copies are created, not cast: a spell copy was reported as ObjectCreated when it appeared on the stack
+            if (!sa.isSpell()) {
+                long copyId = ids.abilityId(si);
+                emitAll(false, b -> b.setObjectCreated(ObjectCreated.newBuilder().setId(copyId)
+                    .setKind(ObjectCreatedKind.OBJECT_CREATED_KIND_ABILITY_COPY).setZone(magicdosa.protocol.v1.Zone.ZONE_STACK)
+                    .setOwnerSeat(seat).setControllerSeat(seat).setSourceId(sourceId)));
+            }
+            return;
+        }
         if (sa.isSpell()) {
             CastSpell.Builder c = CastSpell.newBuilder().setSeat(seat).setCardId(ids.prevIdOf(hostId)).setSpellId(hostId)
-                .setSpell(keys.spellKey(sa)).addAllTargets(targets).addAllPayment(payment(sa));
+                .setSpell(keys.spellKey(sa)).addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa));
             if (sa.getXManaCostPaid() != null) {
                 c.setX(sa.getXManaCostPaid());
             }
-            emitAll(false, b -> b.setCastSpell(c));
+            emitAction(b -> b.setCastSpell(c));
+            return;
+        }
+        if (sa.isTrigger()) {
+            if (!ids.hasTriggerId(sa)) {
+                // not seen while waiting (put on the stack without passing the simultaneous-entry list)
+                stats.note("trigger ID issued at stacking: " + host.getName());
+                announceTrigger(sa, sourceId, true);
+            }
+            long abilityId = ids.abilityId(si);
+            waitingTriggers.remove(abilityId);
+            TriggeredAbilityStacked.Builder t = TriggeredAbilityStacked.newBuilder().setSeat(seat).setAbilityId(abilityId)
+                .addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa));
+            if (sa.getXManaCostPaid() != null) {
+                t.setX(sa.getXManaCostPaid());
+            }
+            emitAction(b -> b.setTriggerStacked(t));
             return;
         }
         long abilityId = ids.abilityId(si);
         AbilityKey key = keys.abilityKey(sa);
-        if (sa.isTrigger()) {
-            AbilityTriggered.Builder t = AbilityTriggered.newBuilder().setAbilityId(abilityId).setSourceId(sourceId)
-                .setControllerSeat(seat);
-            if (key != null) {
-                t.setAbility(key);
-            }
-            emitAll(false, b -> b.setAbilityTriggered(t));
-            return;
-        }
         ActivateAbility.Builder a = ActivateAbility.newBuilder().setSeat(seat).setSourceId(sourceId).setAbilityId(abilityId)
-            .addAllTargets(targets).addAllPayment(payment(sa));
+            .addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa));
         if (key != null) {
             a.setAbility(key);
         }
         if (sa.getXManaCostPaid() != null) {
             a.setX(sa.getXManaCostPaid());
         }
-        emitAll(false, b -> b.setActivateAbility(a));
+        emitAction(b -> b.setActivateAbility(a));
     }
 
     private List<ManaPayment> payment(SpellAbility sa) {
@@ -582,6 +1079,11 @@ public final class ForgeGameSession {
 
     /** A resolution choice made for {@code p}: events for the streams and the delegation / opponent record. */
     void delegated(Player p, String engineDecision, DecisionType type, Collection<? extends GameObject> chosen) {
+        delegated(p, isAgent(p), engineDecision, type, chosen);
+    }
+
+    /** {@code asAgent} false: an opponent's choice, also when an opponent controls an agent seat (deck item 4). */
+    void delegated(Player p, boolean asAgent, String engineDecision, DecisionType type, Collection<? extends GameObject> chosen) {
         syncZones();
         if (chosen != null && !chosen.isEmpty()) {
             ResolutionChoice.Builder r = ResolutionChoice.newBuilder().setSeat(seat(p)).setType(type)
@@ -591,8 +1093,8 @@ public final class ForgeGameSession {
             }
             emitAll(false, b -> b.setResolutionChoice(r));
         }
-        if (isAgent(p)) {
-            stats.delegated(engineDecision);
+        if (asAgent) {
+            stats.delegated(engineDecision, type);
             log.write(LogRecord.newBuilder().setDecision(DecisionRecord.newBuilder()
                 .setDecider(Decider.DECIDER_INTENDED_DELEGATION).setEngineDecision(engineDecision)).build());
         } else {
@@ -601,34 +1103,65 @@ public final class ForgeGameSession {
         }
     }
 
+    /**
+     * A decision method no classification covers yet (Forge AI answered). Counted for agent seats so the gap shows
+     * (2026-11-06: no unrecorded decision may remain); logged like an intended delegation.
+     */
+    void unclassified(Player p, String method) {
+        if (!isAgent(p)) {
+            return;
+        }
+        stats.unclassified(method);
+        log.write(LogRecord.newBuilder().setDecision(DecisionRecord.newBuilder()
+            .setDecider(Decider.DECIDER_INTENDED_DELEGATION).setEngineDecision("unclassified:" + method)).build());
+    }
+
     // ---- decisions ----
 
     /** Asks agent-core. The returned response, when present, satisfies the constraints. */
     Asked ask(Player p, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
               DecisionContext context) {
-        return ask(p, type, candidates, constraints, context, List.of());
+        return ask(p, p, type, candidates, constraints, context, List.of());
+    }
+
+    Asked ask(Player p, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
+              DecisionContext context, List<Rejection> rejections) {
+        return ask(p, p, type, candidates, constraints, context, rejections);
     }
 
     /** Asks again after the engine refused earlier answers to the same decision (Q15). */
-    Asked ask(Player p, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
+    /** {@code decider} decides for {@code acting}: itself, or a player it controls (deck item 4). */
+    Asked ask(Player decider, Player acting, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
               DecisionContext context, List<Rejection> rejections) {
+        Player p = decider;
         syncZones();
         if (snapshotTurn < 0) {
             snapshot();
         }
         int seat = seat(p);
         long decisionId = ++decisions;
-        DecisionRequest request = DecisionRequest.newBuilder()
+        DecisionRequest.Builder requestBuilder = DecisionRequest.newBuilder()
             .setProtocolVersion(Versions.PROTOCOL).setGameId(gameId).setDecisionId(decisionId).setSeat(seat)
             .setAppliedSeq(seq.get(seat)).setSeed(seeds.nextLong()).setType(type)
             .setObservation(observations.build(seat)).addAllCandidates(candidates).setConstraints(constraints)
             .setContext(context == null ? DecisionContext.getDefaultInstance() : context)
-            .addAllRejections(rejections)
-            .build();
+            .addAllRejections(rejections);
+        if (acting != decider) {
+            requestBuilder.setActingSeat(seat(acting));
+        }
+        DecisionRequest request = requestBuilder.build();
         recordPrivileged(decisionId, seat);
+        if (type == DecisionType.DECISION_TYPE_PRIORITY) {
+            stats.priorityAsks++;
+            if (candidates.stream().anyMatch(c -> !c.hasPass() && !(c.hasActivateAbility() && c.getActivateAbility().getManaAbility()))) {
+                stats.priorityAsksWithAction++;
+            }
+        }
         DecisionResponse response;
+        long waitStart = System.nanoTime(); // measurement only (throughput report), never part of a decision
         try {
             response = client.decide(request);
+            stats.decideNanos += System.nanoTime() - waitStart;
         } catch (Exception e) {
             return new Asked(request, null, FallbackReason.FALLBACK_REASON_COMMUNICATION_ERROR);
         }
@@ -663,11 +1196,24 @@ public final class ForgeGameSession {
 
     /** Logs what happened for a decision that was asked. */
     /** Logs an answer the engine refused (Q15); the decision is asked again. Not a fallback. */
-    void recordRejected(Asked asked, String engineDecision, String reason) {
-        stats.rejected(engineDecision);
+    void recordRejected(Asked asked, String engineDecision, String reason, DecisionStats.RejectionKind kind) {
+        stats.rejected(engineDecision, asked.request().getType(), kind);
         log.write(LogRecord.newBuilder().setDecision(DecisionRecord.newBuilder().setRequest(asked.request())
             .setResponse(asked.response()).setDecider(Decider.DECIDER_MODEL).setEngineDecision(engineDecision)
-            .setRejection(reason)).build());
+            .setRejection(kind + ": " + reason)).build());
+    }
+
+    /** The seat chose an action past the repeat cap: it passes instead, recorded as a safety cap (not a fallback). */
+    void recordSafetyCap(Asked asked, String engineDecision, Candidate chosen) {
+        safetyCap(engineDecision + ": " + chosen.getActionCase());
+        log.write(LogRecord.newBuilder().setDecision(DecisionRecord.newBuilder().setRequest(asked.request())
+            .setResponse(asked.response()).setDecider(Decider.DECIDER_MODEL).addApplied(0)
+            .setEngineDecision("safety_cap:" + engineDecision)).build());
+    }
+
+    void safetyCap(String what) {
+        stats.safetyCaps++;
+        stats.note("safety cap: " + what);
     }
 
     void record(Asked asked, List<Integer> applied, String engineDecision, boolean fellBack, FallbackReason reason) {
@@ -701,6 +1247,34 @@ public final class ForgeGameSession {
         }
     }
 
+    /** Why the game ended (Q13): the loser's loss reason, or a card that wins the game. */
+    private GameEndReason endReason(GameOutcome outcome) {
+        if (outcome.getWinCondition() == forge.game.GameEndReason.WinsGameSpellEffect) {
+            return GameEndReason.GAME_END_REASON_CARD_EFFECT;
+        }
+        for (Player p : game.getRegisteredPlayers()) {
+            if (p.getOutcome() == null || p.getOutcome().lossState == null) {
+                continue;
+            }
+            GameLossReason r = p.getOutcome().lossState;
+            switch (r) {
+                case LifeReachedZero:
+                    return GameEndReason.GAME_END_REASON_LIFE;
+                case Poisoned:
+                    return GameEndReason.GAME_END_REASON_POISON;
+                case Milled:
+                    return GameEndReason.GAME_END_REASON_DECKED;
+                case Conceded:
+                    return GameEndReason.GAME_END_REASON_CONCEDE;
+                case SpellEffect:
+                    return GameEndReason.GAME_END_REASON_CARD_EFFECT;
+                default:
+                    break;
+            }
+        }
+        return GameEndReason.GAME_END_REASON_LIFE;
+    }
+
     /** Sends the game end (with privileged data in training mode) and logs it. Call after the game is over. */
     public GameOver finish() {
         syncZones();
@@ -717,7 +1291,7 @@ public final class ForgeGameSession {
             if (winner != null) {
                 g.setWinnerSeat(seat(winner));
             }
-            g.setReason(GameEndReason.GAME_END_REASON_LIFE);
+            g.setReason(endReason(outcome));
         } else {
             g.setReason(GameEndReason.GAME_END_REASON_DRAW);
         }

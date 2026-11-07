@@ -74,8 +74,9 @@ final class ObservationBuilder {
         if (combat != null) {
             b.setCombat(combat(combat));
         }
-        // Q5: effects are optional; this adapter does not list them yet
-        return b.setEffectsProvided(false).build();
+        b.addAllEffects(session.facts().effects()); // Q5: Forge can list every effect
+        b.addAllPotentialCasts(session.potentialCasts(viewerSeat));
+        return b.setEffectsProvided(true).build();
     }
 
     MatchContext matchContext(int viewerSeat) {
@@ -93,6 +94,9 @@ final class ObservationBuilder {
                 .setGamesWon(session.gamesWon(seat));
             if (seat == viewerSeat) {
                 mp.addAllCurrentDeck(counts(session.player(seat).getRegisteredPlayer().getDeck().getMain().toFlatList()));
+            } else {
+                session.seenInEarlierGames(viewerSeat).forEach((oracle, n) ->
+                    mp.addSeenInEarlierGames(CardCount.newBuilder().setOracleId(oracle).setCount(n)));
             }
             b.addPlayers(mp);
         }
@@ -159,24 +163,45 @@ final class ObservationBuilder {
             .setLibrarySize(p.getCardsIn(ZoneType.Library).size())
             .setMulligans(session.mulligans(session.seat(p)))
             .setSpellsCastThisTurn(p.getSpellsCastThisTurn());
+        if (p.isControlled()) {
+            b.setControlledBySeat(session.seat(p.getControllingPlayer()));
+        }
         for (CounterType type : p.getCounters().elementSet()) {
             b.addCounters(Counter.newBuilder().setKind(counterName(type)).setCount(p.getCounters().count(type)));
         }
-        ManaPool pool = p.getManaPool();
-        for (Mana m : pool) {
-            b.addManaPool(poolMana(m));
+        b.addAllManaPool(poolList(p));
+        b.addAllDesignations(designations(p));
+        return b.build();
+    }
+
+    List<PoolMana> poolList(Player p) {
+        List<PoolMana> out = new java.util.ArrayList<>();
+        for (Mana m : p.getManaPool()) {
+            out.add(poolMana(m));
         }
+        return out;
+    }
+
+    /** Player state that outlives a turn, in one general form (Q13). Counters such as energy are PlayerState.counters. */
+    List<Designation> designations(Player p) {
+        List<Designation> out = new java.util.ArrayList<>();
         Game game = session.game();
         if (game.getMonarch() == p) {
-            b.addDesignations(Designation.newBuilder().setName("monarch"));
+            out.add(Designation.newBuilder().setName("monarch").build());
         }
         if (game.getHasInitiative() == p) {
-            b.addDesignations(Designation.newBuilder().setName("initiative"));
+            out.add(Designation.newBuilder().setName("initiative").build());
         }
         if (p.hasBlessing()) {
-            b.addDesignations(Designation.newBuilder().setName("citys_blessing"));
+            out.add(Designation.newBuilder().setName("citys_blessing").build());
         }
-        return b.build();
+        if (p.getNumRingTemptedYou() > 0) {
+            out.add(Designation.newBuilder().setName("ring_tempted").setValue(p.getNumRingTemptedYou()).build());
+        }
+        if (!p.getCompletedDungeons().isEmpty()) {
+            out.add(Designation.newBuilder().setName("dungeons_completed").setValue(p.getCompletedDungeons().size()).build());
+        }
+        return out;
     }
 
     PoolMana poolMana(Mana m) {
@@ -185,7 +210,24 @@ final class ObservationBuilder {
             .setAmount(1)
             .setSourceId(session.ids().idOf(m.getSourceCard()))
             .setPersists(m.isPersistentMana())
+            .setRestriction(restriction(m))
             .build();
+    }
+
+    /** A spending restriction in the card's own words ("Spend this mana only to ..."), empty when none. */
+    private static String restriction(Mana m) {
+        if (m.getManaAbility() == null || m.getManaAbility().getManaRestrictions() == null
+                || m.getManaAbility().getManaRestrictions().isEmpty()) {
+            return "";
+        }
+        SpellAbility source = m.getManaAbility().getSourceSA();
+        String text = source == null ? "" : source.getDescription();
+        int at = text.indexOf("Spend this mana only");
+        if (at >= 0) {
+            int end = text.indexOf('.', at);
+            return text.substring(at, end < 0 ? text.length() : end + 1);
+        }
+        return m.getManaAbility().getManaRestrictions();
     }
 
     static String colorLetter(byte color) {
@@ -230,14 +272,28 @@ final class ObservationBuilder {
             .setControllerSeat(session.seat(c.getController()))
             .setToken(c.isToken())
             .setFaceDown(c.isFaceDown());
-        if (visible) {
+        int viewerSeat = session.seat(viewer);
+        boolean known = z == ZoneType.Library && session.facts().knows(viewerSeat, c); // E3: scried, put back
+        if (visible || known) {
             b.setOracleId(session.keys().oracleId(c)).setFace(session.keys().face(c)).setCopy(c.isCloned());
             if (c.isToken()) {
                 b.setCharacteristics(characteristics(c));
+                var fallback = tokenFallback(c);
+                if (fallback != null) {
+                    b.setTokenFallback(fallback);
+                }
             }
         }
         if (z == ZoneType.Graveyard || (z == ZoneType.Library && visible)) {
             b.setPosition(c.getZone().getCards().indexOf(c));
+        }
+        if (z == ZoneType.Library) {
+            var pos = session.facts().position(viewerSeat, c);
+            if (pos != null) {
+                b.setLibraryPosition(pos);
+            } else if (visible) {
+                b.setLibraryPosition(magicdosa.protocol.v1.LibraryPosition.newBuilder().setFromTop(c.getZone().getCards().indexOf(c)));
+            }
         }
         if (z == ZoneType.Battlefield) {
             b.setTapped(c.isTapped()).setSummoningSick(c.isSick()).setDamage(c.getDamage())
@@ -250,6 +306,34 @@ final class ObservationBuilder {
             }
         }
         return b.build();
+    }
+
+    Characteristics characteristicsOf(Card c) {
+        return characteristics(c);
+    }
+
+    /**
+     * Q3: a token Scryfall's table does not name is identified by the ability that made it and the token's place in
+     * that ability's token list (from 1). Null for a named token.
+     */
+    magicdosa.protocol.v1.TokenFallbackKey tokenFallback(Card c) {
+        if (!c.isToken() || !session.keys().oracleId(c).isEmpty()) {
+            return null;
+        }
+        SpellAbility made = c.getTokenSpawningAbility();
+        magicdosa.protocol.v1.TokenFallbackKey.Builder f = magicdosa.protocol.v1.TokenFallbackKey.newBuilder().setOrdinal(1);
+        if (made != null) {
+            var key = session.keys().abilityKey(made.getRootAbility());
+            if (key != null) {
+                f.setCreatedBy(key);
+            }
+            String scripts = made.getParamOrDefault("TokenScript", "");
+            String mine = session.keys().tokenScriptOf(c);
+            List<String> list = java.util.Arrays.asList(scripts.split(","));
+            int i = mine == null ? -1 : list.indexOf(mine);
+            f.setOrdinal(i < 0 ? 1 : i + 1);
+        }
+        return f.build();
     }
 
     private Characteristics characteristics(Card c) {
@@ -283,7 +367,7 @@ final class ObservationBuilder {
                 b.setAbility(key);
             }
         }
-        b.addAllTargets(session.targets(sa));
+        b.addAllTargets(session.targets(sa)).addAllModes(session.modes(sa));
         if (sa.getXManaCostPaid() != null) {
             b.setX(sa.getXManaCostPaid());
         }

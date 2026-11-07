@@ -2,6 +2,11 @@
 // time, with in-game sequence numbers and no reply. Three layers: actions (required), information reveals
 // (required), state changes (auxiliary: input for action inference on engines without actions, otherwise a
 // cross-check against the shadow game).
+//
+// Order: an action comes before the state changes it causes. CastSpell comes before the ZoneMove that put the card on
+// the stack and before the cost payments (taps, sacrifices, discards); PlayLand before the land's ZoneMove;
+// TriggeredAbilityStacked before the effects of its costs. The shadow game reapplies actions and checks the state
+// changes against its own result.
 syntax = "proto3";
 
 package magicdosa.v1;
@@ -42,6 +47,7 @@ message Event {
     PassPriority pass_priority = 19;
     ResolutionChoice resolution_choice = 20;
     TriggerOrderChoice trigger_order = 21;
+    TriggeredAbilityStacked trigger_stacked = 22;
 
     // Layer 2: information reveals.
     CardRevealed card_revealed = 30;
@@ -62,6 +68,8 @@ message Event {
     ManaPoolEmptied mana_pool_emptied = 52;
     DesignationsChanged designations = 53;
     DayNightChanged day_night = 54;
+    TriggeredAbilityRemoved trigger_removed = 55;
+    LibraryArranged library_arranged = 56;
   }
 }
 
@@ -167,6 +175,18 @@ message ResolutionChoice {
 message TriggerOrderChoice {
   uint32 seat = 1;
   repeated uint64 ability_ids = 2;
+}
+
+// A triggered ability was put on the stack under the ID it got when it triggered (AbilityTriggered), with the
+// choices made then (design: protocol 엔티티 ID "유발 능력은 유발된 순간").
+message TriggeredAbilityStacked {
+  uint32 seat = 1;                  // controller
+  uint64 ability_id = 2;
+  repeated ObjectRef targets = 3;
+  repeated uint32 modes = 4;
+  optional int64 x = 5;
+  repeated ManaPayment payment = 6;
+  repeated uint64 cost_ids = 7;
 }
 
 // ---- Layer 2: information reveals ----
@@ -307,4 +327,27 @@ message DesignationsChanged {
 
 message DayNightChanged {
   DayNight day_night = 1;
+}
+
+// A player looked at the top of their library and put the cards back, below or into the graveyard (scry, surveil;
+// E3). Every stream gets the counts; the stream of the seat that arranged them also gets where each card went (it saw
+// them: CardRevealed LOOKED_AT). A shuffle (LibraryShuffled) ends what any seat knows about that library's order.
+message LibraryArranged {
+  uint32 seat = 1;                  // whose library
+  uint32 looked_at = 2;
+  uint32 to_top = 3;
+  uint32 to_bottom = 4;
+  uint32 to_graveyard = 5;
+  repeated KnownLibraryCard cards = 6; // the arranging seat's stream only
+}
+
+message KnownLibraryCard {
+  uint64 id = 1;
+  LibraryPosition position = 2;
+}
+
+// A triggered ability that triggered (AbilityTriggered) left without being put on the stack: no legal target, an
+// optional trigger declined, or its controller left the game.
+message TriggeredAbilityRemoved {
+  uint64 ability_id = 1;
 }

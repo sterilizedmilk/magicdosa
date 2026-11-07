@@ -14,10 +14,10 @@ option java_multiple_files = true;
 // mana payment and trigger order (design: 결정 주체 원칙); the adapter never answers on its own except as an
 // unintended fallback (DecisionRecord).
 //
-// Priority stop rule (설계 검토 2, Q14): a PRIORITY request is sent only when at least one candidate other than pass
-// exists, not counting mana abilities. Other priority points are passed by the engine and reported as PassPriority
-// events with Event.engine_handled. Points where something can be done (an instant or a fetchland in the opponent's
-// end step) are always asked; agent-core, not the protocol, decides how much to search there.
+// Priority stop rule (설계 검토 2, Q14; mana abilities counted since 2026-11-06): a PRIORITY request is sent only when
+// at least one candidate other than pass exists. Mana abilities count: mana is made in advance into the pool, so
+// activating one is a priority action. Other priority points are passed by the engine and reported as PassPriority
+// events with Event.engine_handled. agent-core, not the protocol, decides how much to search at a stop.
 message DecisionRequest {
   uint32 protocol_version = 1;
   string game_id = 2;
@@ -37,6 +37,10 @@ message DecisionRequest {
   // fallback: the adapter asks again with a new decision_id and the refusals listed here. After a few refusals the
   // adapter gives up and records an unintended fallback (FALLBACK_REASON_ILLEGAL_ACTION).
   repeated Rejection rejections = 12;
+  // The player whose decision this is when it is not `seat`: `seat` controls that player (Emrakul, the Promised End;
+  // 2026-11-06, deck item 4). The observation is still `seat`'s view; what the controlled player sees is shown to
+  // `seat` through reveal events. Unset (or equal to `seat`) otherwise.
+  optional uint32 acting_seat = 13;
 }
 
 message Rejection {
@@ -47,7 +51,9 @@ message Rejection {
 
 // How many candidates to pick and whether order matters (design: "선택 제약(최소·최대 개수, 순서 여부)").
 // Single choice: min = max = 1. Multi-selects are answered one step at a time with an explicit "done" (Q9).
-// MANA_PAYMENT ignores min/max: steps continue until the cost in DecisionContext.mana_cost is paid (Q6).
+// MANA_PAYMENT asks for one payment step per request (min = max = 1): which pool mana pays next, or, for a cost paid
+// while an ability resolves (605.3a), which mana ability to activate; DecisionContext.mana_cost is what is left.
+// TODO(design) Q18: one request per step, because each step changes the next step's candidates.
 //
 // Pair selections (attackers, blockers) also carry the rules that make a combination legal, which single candidates
 // cannot show (Q15): creatures that must attack if able, menace-like minimum blockers, how many attackers a blocker
@@ -80,6 +86,28 @@ message DecisionContext {
   }
   string mana_cost = 4;             // MANA_PAYMENT: the cost still to pay, e.g. "{1}{R}"
   string engine_prompt = 5;         // engine's own wording, for debugging only (not encoded)
+  // The spell or ability being cast or activated, as chosen so far (casting order 601.2: modes, X and costs, targets,
+  // then payment). Its card is already on the stack but it is not a stack item yet.
+  repeated ObjectRef targets = 6;
+  repeated uint32 modes = 7;
+  optional int64 x = 8;
+  repeated ManaUnit paid = 9;       // MANA_PAYMENT: mana spent on it so far (colors count for e.g. Prismatic Ending)
+  DamageAssignment damage = 10;     // DAMAGE_ASSIGNMENT
+}
+
+// One step of dividing a source's combat damage (DAMAGE_ASSIGNMENT; source_id is the damage source).
+message DamageAssignment {
+  ObjectRef recipient = 1;          // the blocker (or attacker) this request assigns damage to
+  uint32 total = 2;                 // the source's damage
+  uint32 remaining = 3;             // not assigned yet
+  bool trample = 4;
+  repeated DamageShare lethal = 5;  // lethal damage of each recipient now (damage already marked, deathtouch counted)
+  repeated DamageShare engine_default = 6; // the engine's own division (player: ObjectRef.player_seat)
+}
+
+message DamageShare {
+  ObjectRef to = 1;
+  uint32 amount = 2;
 }
 
 // One legal action. Objects are referenced by entity ID (design: "후보 목록(엔티티 ID 참조)").
@@ -100,6 +128,9 @@ message Candidate {
     bool keep = 13;                 // MULLIGAN: true = keep, false = mulligan
     bool play = 14;                 // PLAY_OR_DRAW: true = play first
     SideboardSwap sideboard_swap = 15;
+    bool pay_life = 16;             // MANA_PAYMENT: pay one Phyrexian shard with 2 life
+    string named_oracle_id = 17;    // NAME: a card name, by the card's oracle_id
+    string named_type = 18;         // NAME: a type, e.g. a creature type
   }
 }
 
@@ -116,7 +147,7 @@ message CastSpellCandidate {
 message ActivateAbilityCandidate {
   uint64 source_id = 1;
   AbilityKey ability = 2;
-  bool mana_ability = 3;            // does not count as a non-pass candidate for the stop rule (Q14)
+  bool mana_ability = 3;            // makes mana into the pool; counts as a non-pass candidate (Q14, 2026-11-06)
 }
 
 message PassCandidate {
@@ -138,7 +169,9 @@ message ManaSourceCandidate {
   repeated ManaUnit produced = 3;
 }
 
-// Between games: bring `in` from the sideboard and take `out` from the current deck.
+// Between games: bring `in` from the sideboard and take `out` from the current deck (2026-11-06: sideboarding is
+// decided by agent-core). One swap per SIDEBOARD request, min = max = 1, with PassCandidate as "done"; the next
+// request lists the swaps the changed deck allows. TODO(design) Q18.
 message SideboardSwap {
   string in_oracle_id = 1;
   string out_oracle_id = 2;

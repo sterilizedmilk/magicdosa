@@ -92,6 +92,8 @@ public final class CardKeys {
         }
     }
 
+    private final Set<String> tokenFallbacks = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** Things that could not be named; empty in a correctly configured adapter. Sorted. */
     public List<String> unmapped() {
         return new ArrayList<>(new TreeSet<>(unmapped));
@@ -101,7 +103,12 @@ public final class CardKeys {
 
     /** Forge's database name of the card (the printed card, not a copy effect's). */
     private static String paperName(Card c) {
-        IPaperCard paper = c.getPaperCard();
+        IPaperCard paper;
+        try {
+            paper = c.getPaperCard();
+        } catch (RuntimeException e) {
+            paper = null; // an object with no printed card (an effect, an unnamed copy)
+        }
         return paper == null ? c.getName() : paper.getName();
     }
 
@@ -129,10 +136,24 @@ public final class CardKeys {
     public String oracleId(Card c) {
         Row row = row(c);
         if (row == null) {
-            unmapped.add("card " + (c.isToken() ? "token " + tokenScript(c) + " / " : "") + c.getName());
+            if (c.isToken()) {
+                tokenFallbacks.add(tokenScript(c) + " / " + c.getName()); // Q3: identified by the ability that made it
+            } else {
+                unmapped.add("card " + c.getName());
+            }
             return "";
         }
         return row.oracleId();
+    }
+
+    /** Token script name (Forge), or null. */
+    String tokenScriptOf(Card c) {
+        return tokenScript(c);
+    }
+
+    /** Tokens without a Scryfall token oracle_id, identified by their creating ability instead (Q3). Sorted. */
+    public List<String> tokenFallbacks() {
+        return new ArrayList<>(new TreeSet<>(tokenFallbacks));
     }
 
     private Row row(Card c) {
@@ -216,6 +237,17 @@ public final class CardKeys {
     }
 
     /** Key of an activated / triggered / static ability or replacement effect, or null (recorded as unmapped). */
+    /**
+     * Like {@link #abilityKey} but a trait without text (a game rule's own ability, e.g. the adventure exile effect)
+     * is not counted as unmapped: it has no ability to name.
+     */
+    AbilityKey abilityKeyIfNamed(CardTraitBase trait) {
+        if (trait instanceof SpellAbility sa && description(sa).isBlank()) {
+            return null;
+        }
+        return abilityKey(trait);
+    }
+
     public AbilityKey abilityKey(CardTraitBase trait) {
         if (trait instanceof SpellAbility sa && sa.isTrigger() && sa.getTrigger() != null) {
             return abilityKey(sa.getTrigger());
@@ -244,7 +276,10 @@ public final class CardKeys {
         }
         AbilityKey key = matchPrinted(source, text);
         if (key == null) {
-            unmapped.add("ability of " + source.getName() + ": " + text);
+            key = matchCopiedState(trait, text);
+        }
+        if (key == null) {
+            unmapped.add("ability of " + (source.getName().isEmpty() ? "unnamed " + source + " (" + trait.getClass().getSimpleName() + ")" : source.getName()) + ": " + text);
             return null;
         }
         traitCache.put(cacheKey, key);
@@ -265,7 +300,8 @@ public final class CardKeys {
 
     /**
      * Manual mappings (design: "안 되는 것만 수동으로 지정"), {@code ability-overrides.tsv}: card name, start of Forge's
-     * description, and {@code keyword:<Name>} (that keyword of the card) or {@code printed:<face>:<index>}.
+     * description, and {@code keyword:<Name>} (that keyword of the card), {@code printed:<face>:<index>}, or
+     * {@code rule:<name>} for a permission a game rule grants (keyword key with that name and no parameters).
      */
     private AbilityKey override(Card card, String text) {
         for (Map.Entry<String, String> e : overrides.entrySet()) {
@@ -279,6 +315,9 @@ public final class CardKeys {
                 if (kw != null) {
                     return kw;
                 }
+            } else if (spec[0].equals("rule")) {
+                // TODO(design) Q17: a permission a game rule grants (adventure, 715.4) has no ability; keyed like Q16
+                return AbilityKey.newBuilder().setKeyword(KeywordAbility.newBuilder().setName(spec[1])).build();
             } else if (spec[0].equals("printed")) {
                 Row row = row(card);
                 if (row != null) {
@@ -358,6 +397,9 @@ public final class CardKeys {
         for (CardStateName stateName : card.getStates()) {
             CardState state = card.getState(stateName);
             int face = row.faces().indexOf(state.getName()) + 1;
+            if (face == 0 && card.isToken() && row.faces().size() == 1) {
+                face = 1; // Forge names some tokens "<type> Token" (Empower's "Jace Token")
+            }
             if (face == 0) {
                 continue;
             }
@@ -375,8 +417,37 @@ public final class CardKeys {
         return faceNo > 0 && bestScore >= MIN_SIMILARITY ? best : null;
     }
 
+    /**
+     * An ability that came with a copy effect (Shifting Woodland as a copy of Urza's Saga) belongs to the copied
+     * card's state; it is matched against that card's oracle text even after the copy effect ended.
+     */
+    private AbilityKey matchCopiedState(CardTraitBase trait, String text) {
+        CardState own = trait.getCardState();
+        if (own == null) {
+            return null;
+        }
+        Row row = cards.get(own.getName());
+        if (row == null) {
+            return null;
+        }
+        int face = Math.max(1, row.faces().indexOf(own.getName()) + 1);
+        String norm = normalize(text, own.getName());
+        List<String> paragraphs = abilityParagraphs(own.getOracleText());
+        double bestScore = 0;
+        int best = -1;
+        for (int i = 0; i < paragraphs.size(); i++) {
+            double score = similarity(norm, normalize(paragraphs.get(i), own.getName()));
+            if (score > bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        return best >= 0 && bestScore >= MIN_SIMILARITY ? AbilityKey.newBuilder().setPrinted(PrintedAbility.newBuilder()
+            .setOracleId(row.oracleId()).setFace(face).setIndex(best + 1)).build() : null;
+    }
+
     /** Non-keyword ability paragraphs of one face's oracle text, reminder text removed (Q1). */
-    static List<String> abilityParagraphs(String oracle) {
+    public static List<String> abilityParagraphs(String oracle) {
         List<String> out = new ArrayList<>();
         if (oracle == null) {
             return out;

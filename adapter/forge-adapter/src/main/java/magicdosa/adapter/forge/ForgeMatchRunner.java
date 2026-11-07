@@ -1,6 +1,5 @@
 package magicdosa.adapter.forge;
 
-import forge.LobbyPlayer;
 import forge.deck.Deck;
 import forge.game.Game;
 import forge.game.GameRules;
@@ -8,13 +7,15 @@ import forge.game.GameType;
 import forge.game.Match;
 import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
-import forge.player.GamePlayerUtil;
 import magicdosa.agent.shadow.GameCreation;
+import magicdosa.protocol.v1.GameOver;
 import magicdosa.protocol.v1.Mode;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,7 +25,7 @@ import java.util.Set;
  */
 public final class ForgeMatchRunner {
     /** What a match produced. */
-    public record Result(int[] gamesWon, int games, DecisionStats stats, List<String> logDigests) {}
+    public record Result(int[] gamesWon, int games, DecisionStats stats, List<String> logDigests, List<GameOver> overs) {}
 
     private final DecisionClient client;
     private final CardKeys keys;
@@ -32,6 +33,8 @@ public final class ForgeMatchRunner {
     private final String engineVersion;
 
     private final boolean reproducible;
+    /** Called with each game before it starts (test harnesses). */
+    private java.util.function.BiConsumer<Game, ForgeGameSession> onGame = (g, s) -> { };
 
     /**
      * @param reproducible regression runs: Forge AI gets a long wall-clock timeout so that load does not change its
@@ -46,16 +49,24 @@ public final class ForgeMatchRunner {
         ForgeRandom.install();
     }
 
+    public ForgeMatchRunner onGame(java.util.function.BiConsumer<Game, ForgeGameSession> hook) {
+        this.onGame = hook;
+        return this;
+    }
+
     /** Plays the match; one gzipped log per game in {@code logDir} (null: no logs). */
     public Result playMatch(String matchId, Deck deck0, Deck deck1, Set<Integer> agentSeats, long seed, Path logDir) throws Exception {
         ForgeRandom.seed(seed);
         GameRules rules = new GameRules(GameType.Constructed);
         rules.setGamesPerMatch(3);
         List<RegisteredPlayer> players = new ArrayList<>();
+        List<AgentLobbyPlayer> lobbies = new ArrayList<>();
         List<Deck> decks = List.of(deck0, deck1);
         for (int seat = 0; seat < 2; seat++) {
-            RegisteredPlayer rp = new RegisteredPlayer(decks.get(seat));
-            LobbyPlayer lobby = GamePlayerUtil.createAiPlayer("seat" + seat, seat);
+            // Forge changes the registered deck in place when sideboarding: each match plays its own copy
+            RegisteredPlayer rp = new RegisteredPlayer(new Deck(decks.get(seat)));
+            AgentLobbyPlayer lobby = new AgentLobbyPlayer("seat" + seat);
+            lobbies.add(lobby);
             rp.setPlayer(lobby);
             players.add(rp);
         }
@@ -63,6 +74,8 @@ public final class ForgeMatchRunner {
         int[] won = new int[2];
         DecisionStats stats = new DecisionStats();
         List<String> digests = new ArrayList<>();
+        List<GameOver> overs = new ArrayList<>();
+        Map<Integer, Map<String, Integer>> seenEarlier = new HashMap<>();
         int gameNumber = 0;
         while (!match.isMatchOver() && gameNumber < 3) {
             gameNumber++;
@@ -75,6 +88,10 @@ public final class ForgeMatchRunner {
                     : GameLogWriter.open(logDir.resolve(matchId + "-g" + gameNumber + ".pb.gz"))) {
                 ForgeGameSession session = new ForgeGameSession(game, matchId, gameNumber, decks, won.clone(), agentSeats,
                     client, keys, log, mode, seed * 31 + gameNumber);
+                session.seenInEarlierGames(seenEarlier);
+                for (AgentLobbyPlayer l : lobbies) {
+                    l.session(session);
+                }
                 List<String> kinds = new ArrayList<>();
                 for (Player p : game.getRegisteredPlayers()) {
                     int seat = session.seat(p);
@@ -87,15 +104,21 @@ public final class ForgeMatchRunner {
                     }
                 }
                 session.start(engineVersion, kinds, seed);
+                onGame.accept(game, session);
                 match.startGame(game);
                 var over = session.finish();
+                overs.add(over);
                 if (over.hasWinnerSeat()) {
                     won[over.getWinnerSeat()]++;
                 }
                 stats.add(session.stats());
+                for (int seat : agentSeats) {
+                    session.seenOpponentCards(seat).forEach((oracle, n) ->
+                        seenEarlier.computeIfAbsent(seat, k -> new HashMap<>()).merge(oracle, n, Math::max));
+                }
                 digests.add(log.digest());
             }
         }
-        return new Result(won, gameNumber, stats, digests);
+        return new Result(won, gameNumber, stats, digests, overs);
     }
 }

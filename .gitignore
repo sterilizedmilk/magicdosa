@@ -13,3 +13,5 @@ models/
 .idea/
 .vscode/
 *.iml
+# harness summaries (runs/<date>-<harness>-<n>/summary.txt)
+runs/

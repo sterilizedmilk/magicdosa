@@ -3,6 +3,7 @@ package magicdosa.adapter.forge;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 
@@ -36,6 +37,8 @@ final class EntityIds {
     private final Map<Integer, Tracked> cards = new HashMap<>();
     private final Map<Integer, Long> stackInstances = new HashMap<>();
     private final Map<Integer, Long> stackSources = new HashMap<>();
+    /** Triggered abilities by Forge SpellAbility id: the ID issued when they triggered (design: 유발된 순간). */
+    private final Map<Integer, Long> triggers = new HashMap<>();
     private final Map<Long, Long> prevOf = new HashMap<>();
 
     long issue() {
@@ -91,8 +94,9 @@ final class EntityIds {
             }
         }
         for (Map.Entry<Integer, Tracked> e : new ArrayList<>(cards.entrySet())) {
-            if (!present.contains(e.getKey())) {
-                Tracked t = e.getValue();
+            Tracked t = e.getValue();
+            // A card found in no zone is between zones (Forge fires events mid-move); only tokens cease to exist.
+            if (!present.contains(e.getKey()) && t.card().isToken()) {
                 pending.add(new Pending(t.card(), t.id(), t.zone(), null, e.getKey()));
             }
         }
@@ -116,9 +120,28 @@ final class EntityIds {
         return moves;
     }
 
-    /** ID of an ability instance on the stack; issued the first time it is seen. */
+    /**
+     * ID of an ability instance on the stack: a triggered ability keeps the ID it got when it triggered, other
+     * abilities get one the first time they are seen.
+     */
     long abilityId(SpellAbilityStackInstance si) {
-        return stackInstances.computeIfAbsent(si.getId(), k -> issue());
+        return stackInstances.computeIfAbsent(si.getId(), k -> {
+            Long triggered = triggers.get(si.getSpellAbility().getId());
+            return triggered != null ? triggered : issue();
+        });
+    }
+
+    /** Issues the ID of a triggered ability that just triggered. */
+    long trigger(SpellAbility sa) {
+        return triggers.computeIfAbsent(sa.getId(), k -> issue());
+    }
+
+    boolean hasTriggerId(SpellAbility sa) {
+        return triggers.containsKey(sa.getId());
+    }
+
+    long triggerId(SpellAbility sa) {
+        return triggers.getOrDefault(sa.getId(), 0L);
     }
 
     boolean hasAbilityId(SpellAbilityStackInstance si) {
