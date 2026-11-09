@@ -1,6 +1,6 @@
 # Manual ability-key mappings for what text matching cannot find (design: 능력 키 "안 되는 것만 수동으로 지정").
 # card name<TAB>start of Forge's description<TAB>keyword:<Name> (that keyword of the card) | printed:<face>:<index> | rule:<name>
-# rule:<name> keys a permission a game rule grants, like Q16 (interim, TODO(design) Q17).
+# rule:<name> is a rule key (Q17): a permission a game rule grants (adventure, prepared), named, no parameters.
 Ephemerate	At the beginning of your next upkeep, you may cast	keyword:Rebound
 Quantum Riddler	You may cast the card	keyword:Warp
 Expressive Iteration	You may play the exiled card	printed:1:1
@@ -10,3 +10,4 @@ Brazen Borrower	You may cast EFFECTSOURCE	rule:adventure
 Eldrazi Spawn Token	Sacrifice CARDNAME: Add {C}	printed:1:1
 Gemstone Caverns		printed:1:1
 Kaheera, the Orphanguard		keyword:Companion
+Thief of Existence	When this creature leaves the battlefield	printed:1:1

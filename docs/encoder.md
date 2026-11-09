@@ -1,6 +1,6 @@
 # Encoder and training shards
 
-Implementation notes for agent-core's observation encoder (encoder version 2) and its Arrow shards, following
+Implementation notes for agent-core's observation encoder (encoder version 3) and its Arrow shards, following
 "관측 인코더 텐서 구성안" (https://claude.ai/artifact/WPT2PSq7RihqH7K3egDptU, E1-E7, decided 2026-11-06). The encoder is
 only in agent-core; Python reads the shards and batches them without computing features.
 
@@ -8,7 +8,7 @@ only in agent-core; Python reads the shards and batches them without computing f
 
 | Where | Role |
 | --- | --- |
-| `agent-core/.../encoder/Vocab` | Vocabulary (E1): `vocab.tsv` in agent-core's resources, `kind<TAB>value`, indices in file order per kind from 3; 0 padding, 1 hidden card, 2 not in the vocabulary (counted). `#version` header = vocabulary version, separate from the encoder version |
+| `agent-core/.../encoder/Vocab` | Vocabulary (E1): `vocab.tsv` in agent-core's resources, `kind<TAB>value`, indices in file order per kind from 3; 0 padding, 1 hidden card, 2 not in the vocabulary (counted). `#version` header = vocabulary version, separate from the encoder version (3 since 2026-11-10: ward and the adventure rule key from the 2026-11-08 run, the Eldrazi Scion token ability from the 2026-11-10 run) |
 | `agent-core/.../encoder/Encoder` | One decision request as tensors: global vector, tokens (players, objects, stack items, effects), relations, deck tokens, candidates |
 | `agent-core/.../encoder/ShardWriter` | One Arrow IPC file per game (`<game_id>.arrow`), one row per decision step, written when GameOver arrives |
 | `adapter/.../tools/VocabBuilder` | Builds or extends `vocab.tsv` (append-only) from the decks, the oracle table and game logs |
@@ -41,7 +41,8 @@ vocabulary misses.
 ## Shard rows
 
 One row per decision step (E5): identity (`game_id`, `match_id`, `game_number`, `decision_id`, `step`, `steps`,
-`seat`, `acting_seat`, `decision_type`), decision record (`decider`, `prior`, `search_ran`, `search_skip_reason`,
+`seat`, `acting_seat`, `decision_type`, `bundle_id` and `bundle_step`: the Q18 step bundle a mana payment or
+sideboarding request belongs to, 0 otherwise; encoder 3), decision record (`decider`, `prior`, `search_ran`, `search_skip_reason`,
 `search_nodes`), inputs (lists as above; a multi-select step lists its open candidates plus "done" and marks the
 tokens chosen in earlier steps as `selected`), labels (`chosen`, `visit_ratio`, `result`, `is_draw`, `end_reason`,
 `turns`), training-only columns (`priv_opp_hand`, `priv_my_library`, `priv_opp_library` from the privileged record of

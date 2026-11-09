@@ -47,6 +47,10 @@ public class GameCopier {
         ZoneType.Exile,
         ZoneType.Stack,
         ZoneType.Command,
+        // Static abilities that work in every zone (devoid: Thief of Existence, Sowing Mycospawn) are registered as
+        // static effects of sideboard cards too; without their source copied, mapping the effects fails ("Couldn't
+        // map", 2026-11-10). Forge's own GameCopier (forge-ai simulation) has the same gap: upstream PR candidate.
+        ZoneType.Sideboard,
     };
 
     private Game origGame;
@@ -190,7 +194,7 @@ public class GameCopier {
         }
 
         if (origPhaseHandler.getCombat() != null) {
-            newGame.getPhaseHandler().setCombat(new Combat(origPhaseHandler.getCombat(), gameObjectMap));
+            newGame.getPhaseHandler().setCombat(new Combat(origPhaseHandler.getCombat(), new CombatObjectMap(newGame)));
         }
 
         newGame.getAction().checkStateEffects(true); //ensure state based effects and triggers are updated
@@ -574,6 +578,41 @@ public class GameCopier {
         return null;
     }
 
+    /**
+     * For copying combat: a planeswalker or battle that left the game while attacked (a token that died, rule 506.4c)
+     * stays among Combat's attackable defenders, where Forge's Combat copy maps it and fails ("Couldn't map Jace
+     * Token", 2026-11-10; it already uses a stand-in for the attacked-by entries). Such a card gets the same stand-in
+     * here: id -1, its name and controller, in no zone. Forge issue: upstream PR candidate.
+     */
+    private class CombatObjectMap implements IEntityMap {
+        private final Game copiedGame;
+        private final Map<Card, Card> standIns = new java.util.IdentityHashMap<>();
+
+        CombatObjectMap(Game copiedGame) {
+            this.copiedGame = copiedGame;
+        }
+
+        @Override
+        public Game getGame() {
+            return copiedGame;
+        }
+
+        @Override
+        public GameObject map(GameObject o) {
+            if (o instanceof Card c && !cardMap.containsKey(c) && origGame.getCardState(c, null) == null) {
+                return standIns.computeIfAbsent(c, k -> {
+                    Card fake = new Card(-1, copiedGame);
+                    fake.setName(k.getName());
+                    if (k.getController() != null) {
+                        fake.setController(playerMap.get(k.getController()), 0);
+                    }
+                    return fake;
+                });
+            }
+            return find(o);
+        }
+    }
+
     private class CopiedGameObjectMap implements IEntityMap {
         private final Game copiedGame;
 
@@ -616,9 +655,20 @@ public class GameCopier {
                 return result;
         }
         if (o != null)
-            throw new RuntimeException("Couldn't map " + o + "/" + System.identityHashCode(o));
+            throw new RuntimeException("Couldn't map " + o + "/" + System.identityHashCode(o) + describeUnmapped(o));
         return result;
     }
+    /** Where an object that has no copy is (diagnostics for "Couldn't map"). */
+    private String describeUnmapped(GameObject o) {
+        if (!(o instanceof Card c)) {
+            return " (" + o.getClass().getSimpleName() + ")";
+        }
+        Card current = origGame.getCardState(c, null);
+        return " zone=" + (c.getZone() == null ? "none" : c.getZone().getZoneType())
+            + " lki=" + c.isLKI() + " current=" + (current == null ? "none" : current == c ? "same"
+                : "other in " + (current.getZone() == null ? "none" : current.getZone().getZoneType()));
+    }
+
     public GameObject reverseFind(GameObject o) {
         if (origGame.EXPERIMENTAL_RESTORE_SNAPSHOT) {
             return snapshot.reverseFind(o);

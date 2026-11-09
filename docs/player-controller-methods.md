@@ -12,7 +12,7 @@ change.
   RandomGames). None of these is reached by the four target decks in the pairing runs; one that shows up is to be
   classified.
 
-Counts: protocol decision 50, intended delegation (recorded) 4, flow 15, unclassified (counted) 41.
+Counts: protocol decision 51, intended delegation (recorded) 3, flow 15, unclassified (counted) 41.
 
 | Method | Params | Handling | Detail |
 | --- | --- | --- | --- |
@@ -67,7 +67,7 @@ Counts: protocol decision 50, intended delegation (recorded) 4, flow 15, unclass
 | `tuckCardsViaMulligan` | 2 | protocol decision | BOTTOM_CARDS |
 | `willPutCardOnTop` | 1 | protocol decision | CHOOSE_OPTION (yes/no) |
 | `chooseNewTargetsFor` | 3 | intended delegation (recorded) | new targets for a copy of a spell or ability |
-| `chooseSingleStaticAbility` | 1 | intended delegation (recorded) | order cost changes apply in |
+| `chooseSingleStaticAbility` | 1 | protocol decision when the order changes the final cost | CHOOSE_OPTION over distinct final costs (601.2f); cost-computation calls are not decisions |
 | `orderBlockers` | 2 | intended delegation (recorded) | damage assignment order (old rules; not asked for the agent) |
 | `orderCosts` | 1 | intended delegation (recorded) | order cost parts are paid in (engine sequencing) |
 | `autoPassCancel()` | 0 | flow | GUI only |

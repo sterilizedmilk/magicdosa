@@ -63,6 +63,8 @@ import magicdosa.protocol.v1.Event;
 import magicdosa.protocol.v1.FallbackReason;
 import magicdosa.protocol.v1.GameEndReason;
 import magicdosa.protocol.v1.GameOver;
+import magicdosa.protocol.v1.BundleEnd;
+import magicdosa.protocol.v1.StepBundle;
 import magicdosa.protocol.v1.Hello;
 import magicdosa.protocol.v1.HelloReply;
 import magicdosa.protocol.v1.LibraryShuffled;
@@ -124,6 +126,27 @@ import java.util.function.Consumer;
  */
 public final class ForgeGameSession {
     /** Result of asking agent-core: the response, or why there is none. */
+    /**
+     * The steps of one choice asked one request at a time because each pick changes the next candidates (Q18: mana
+     * payment, sideboarding). The first asked step's decision ID names it; {@link #endBundle} logs its end.
+     */
+    static final class Bundle {
+        long id;
+        int steps;
+    }
+
+    /** Closes a bundle that asked at least one step. {@code completed}: it ended by its own rule (paid, done, stop). */
+    void endBundle(Bundle bundle, boolean completed) {
+        if (bundle.steps == 0) {
+            return;
+        }
+        log.write(LogRecord.newBuilder().setBundleEnd(BundleEnd.newBuilder().setId(bundle.id).setSteps(bundle.steps)
+            .setCompleted(completed)).build());
+        if (!completed) {
+            stats.note("bundle cut short: " + bundle.id);
+        }
+    }
+
     record Asked(DecisionRequest request, DecisionResponse response, FallbackReason failure) {
         boolean ok() {
             return failure == null;
@@ -1133,6 +1156,12 @@ public final class ForgeGameSession {
     /** {@code decider} decides for {@code acting}: itself, or a player it controls (deck item 4). */
     Asked ask(Player decider, Player acting, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
               DecisionContext context, List<Rejection> rejections) {
+        return ask(decider, acting, type, candidates, constraints, context, rejections, null);
+    }
+
+    /** {@code bundle}: this request is the next step of a step bundle (Q18), or null. */
+    Asked ask(Player decider, Player acting, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
+              DecisionContext context, List<Rejection> rejections, Bundle bundle) {
         Player p = decider;
         syncZones();
         if (snapshotTurn < 0) {
@@ -1148,6 +1177,12 @@ public final class ForgeGameSession {
             .addAllRejections(rejections);
         if (acting != decider) {
             requestBuilder.setActingSeat(seat(acting));
+        }
+        if (bundle != null) {
+            if (bundle.steps == 0) {
+                bundle.id = decisionId;
+            }
+            requestBuilder.setBundle(StepBundle.newBuilder().setId(bundle.id).setStep(++bundle.steps));
         }
         DecisionRequest request = requestBuilder.build();
         recordPrivileged(decisionId, seat);

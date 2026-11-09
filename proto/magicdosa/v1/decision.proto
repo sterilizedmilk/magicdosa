@@ -41,6 +41,15 @@ message DecisionRequest {
   // 2026-11-06, deck item 4). The observation is still `seat`'s view; what the controlled player sees is shown to
   // `seat` through reveal events. Unset (or equal to `seat`) otherwise.
   optional uint32 acting_seat = 13;
+  // Q18: set on each step of a multi-choice whose candidates change with earlier picks (mana payment, sideboarding).
+  // A multi-choice with a fixed candidate list is one request with steps[] instead (Q9).
+  StepBundle bundle = 14;
+}
+
+// The steps of one choice asked one request at a time (Q18). The log closes every bundle with a BundleEnd record.
+message StepBundle {
+  uint64 id = 1;                    // decision_id of the bundle's first step
+  uint32 step = 2;                  // from 1, consecutive
 }
 
 message Rejection {
@@ -53,7 +62,7 @@ message Rejection {
 // Single choice: min = max = 1. Multi-selects are answered one step at a time with an explicit "done" (Q9).
 // MANA_PAYMENT asks for one payment step per request (min = max = 1): which pool mana pays next, or, for a cost paid
 // while an ability resolves (605.3a), which mana ability to activate; DecisionContext.mana_cost is what is left.
-// TODO(design) Q18: one request per step, because each step changes the next step's candidates.
+// Q18: a multi-choice whose candidates change with earlier picks is one request per step, grouped by `bundle`.
 //
 // Pair selections (attackers, blockers) also carry the rules that make a combination legal, which single candidates
 // cannot show (Q15): creatures that must attack if able, menace-like minimum blockers, how many attackers a blocker
@@ -171,7 +180,7 @@ message ManaSourceCandidate {
 
 // Between games: bring `in` from the sideboard and take `out` from the current deck (2026-11-06: sideboarding is
 // decided by agent-core). One swap per SIDEBOARD request, min = max = 1, with PassCandidate as "done"; the next
-// request lists the swaps the changed deck allows. TODO(design) Q18.
+// request lists the swaps the changed deck allows (Q18: one request per step, grouped by `bundle`).
 message SideboardSwap {
   string in_oracle_id = 1;
   string out_oracle_id = 2;

@@ -20,6 +20,17 @@ public final class DecisionStats {
     /** Priority decisions whose left-out actions were checked against Forge's own pool payment, and omissions found. */
     int candidateChecks;
     int candidateOmissions;
+    /** Game copies made by the sampled checks (agent-core's GameCopier, as shadow games will) and those that failed. */
+    int copies;
+    int copyFailures;
+    /**
+     * chooseSingleStaticAbility (the order cost reductions apply in, 601.2f): calls that only computed a cost, calls
+     * in real payments, real payments with two or more reductions, and those whose final cost depended on the order.
+     */
+    int costOrderComputations;
+    int costOrderRealCalls;
+    int costOrderMulti;
+    int costOrderDiffered;
     int sendFailures;
 
     void decided(DecisionType type) {
@@ -140,6 +151,30 @@ public final class DecisionStats {
         return candidateChecks;
     }
 
+    public int costOrderComputations() {
+        return costOrderComputations;
+    }
+
+    public int costOrderRealCalls() {
+        return costOrderRealCalls;
+    }
+
+    public int costOrderMulti() {
+        return costOrderMulti;
+    }
+
+    public int costOrderDiffered() {
+        return costOrderDiffered;
+    }
+
+    public int copies() {
+        return copies;
+    }
+
+    public int copyFailures() {
+        return copyFailures;
+    }
+
     public int candidateOmissions() {
         return candidateOmissions;
     }
@@ -167,6 +202,12 @@ public final class DecisionStats {
         translationErrors += o.translationErrors;
         candidateChecks += o.candidateChecks;
         candidateOmissions += o.candidateOmissions;
+        copies += o.copies;
+        costOrderComputations += o.costOrderComputations;
+        costOrderRealCalls += o.costOrderRealCalls;
+        costOrderMulti += o.costOrderMulti;
+        costOrderDiffered += o.costOrderDiffered;
+        copyFailures += o.copyFailures;
         sendFailures += o.sendFailures;
     }
 }

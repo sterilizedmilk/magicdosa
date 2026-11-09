@@ -40,6 +40,7 @@ mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.AgentCore" "-Dexe
 mvn -pl adapter/forge-adapter exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, agent-core를 별도 JVM으로 띄움, 비의도 폴백 0이면 PASS)
 mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
 mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
+mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 1단계 최종 게이트 (16조합, 병렬)
 cd python; pip install -e ".[dev]"
 ```
 
@@ -96,15 +97,15 @@ agent-core 연결을 고른다: `spawn`(기본, 별도 JVM + gRPC), `host:port`,
 
 ## 지금 단계
 
-0단계(기반 검증) 완료. **1단계: forge-adapter + agent-core 골격.**
-- 프로토콜을 proto로 정의: 결정 요청·응답, 사건 스트림(행동·정보 공개·상태 변화, 순번), 턴 시작 스냅샷,
-  엔티티 ID·능력 키, 버전 핸드셰이크(지금 `handshake.proto`만 있음)
-- `RlPlayerController`(`PlayerControllerAi` 상속, 프로토콜에 정의된 결정만 오버라이드), 사건 스트림 송신
-- agent-core: gRPC 서버, 관측 인코더, 폴백·위임 기록
-- 로그로 한 판을 재연해 같은 결과가 나오는지 확인
-- 게이트: 랜덤 정책으로 수천 판 완주, 비의도 폴백 0
+0단계(기반 검증) 완료. 1단계(forge-adapter + agent-core 골격) 완료(2026-11-10, protocol 8 / encoder 3 /
+vocab 3). 최종 게이트 AllPairings 16×60(8스레드) PASS: 비의도 폴백·거부·미매핑·미분류 0, `cost:*` 위임 0,
+게임 복사 실패 0, 순차 재현·로그 재연 통과. 구현 메모와 남은 의도된 위임(`orderCosts`, `chooseNewTargetsFor`)은
+`docs/forge-adapter.md`.
 
-다음은 2단계(그림자 추적, Forge 대 Forge 지문 검증)다.
+**2단계: 그림자 추적, Forge 대 Forge 지문 검증.**
+
+- 게이트(AllPairings)는 `--threads`로 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
+- 엔진 거부는 0건이 목표다. 거부가 한 건이라도 나오면 어댑터 결함으로 본다(재요청은 안전망).
 
 ## 작업 규칙
 

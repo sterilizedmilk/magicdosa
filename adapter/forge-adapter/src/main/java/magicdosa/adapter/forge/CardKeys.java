@@ -255,6 +255,10 @@ public final class CardKeys {
         if (trait.getKeyword() != null) {
             return keywordKey(trait.getKeyword());
         }
+        if (trait instanceof Trigger t && description(t).isBlank() && t.getSpawningAbility() != null) {
+            // a delayed trigger without text of its own (Emrakul's extra turn): keyed by the ability that created it
+            return abilityKey(t.getSpawningAbility().getRootAbility());
+        }
         if (trait instanceof SpellAbility sa && sa.getGrantorStatic() != null) {
             return abilityKey(sa.getGrantorStatic());
         }
@@ -316,7 +320,7 @@ public final class CardKeys {
                     return kw;
                 }
             } else if (spec[0].equals("rule")) {
-                // TODO(design) Q17: a permission a game rule grants (adventure, 715.4) has no ability; keyed like Q16
+                // Q17: a permission a game rule grants (adventure 715.4, prepared) is a rule key: its name, no parameters
                 return AbilityKey.newBuilder().setKeyword(KeywordAbility.newBuilder().setName(spec[1])).build();
             } else if (spec[0].equals("printed")) {
                 Row row = row(card);

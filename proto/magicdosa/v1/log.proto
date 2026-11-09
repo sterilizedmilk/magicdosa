@@ -27,6 +27,7 @@ message LogRecord {
     // belief labels rebuilt. design: "로그에는 처음부터 ... privileged 블록을 남겨".
     PrivilegedRecord privileged = 6;
     GameOver game_over = 7;
+    BundleEnd bundle_end = 8;
   }
 }
 
@@ -46,4 +47,12 @@ message LogHeader {
   repeated MatchPlayer players = 11;
   repeated string player_kinds = 12; // per seat: "agent:<model>", "forge-ai", "forge-ai-flatmc", ...
   repeated uint32 agent_seats = 13;
+}
+
+// The end of a step bundle (Q18): after its last asked step. `completed` is false when it was cut short (no usable
+// answer from agent-core, an engine refusal); otherwise the choice ended by its own rule (cost paid, "done", stop).
+message BundleEnd {
+  uint64 id = 1;
+  uint32 steps = 2;
+  bool completed = 3;
 }

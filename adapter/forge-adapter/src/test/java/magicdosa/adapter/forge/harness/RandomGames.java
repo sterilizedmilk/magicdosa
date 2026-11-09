@@ -37,8 +37,9 @@ import java.util.TreeSet;
 public final class RandomGames {
     private RandomGames() {}
 
-    /** One run's report and verdict. */
-    record Summary(List<String> lines, boolean pass) {}
+    /** One run's report and verdict, plus the totals AllPairings adds up. */
+    record Summary(List<String> lines, boolean pass, DecisionStats stats, int matches, int games, int errors,
+                   double seconds, int logProblems, Set<String> unmapped) {}
 
     /** Headless Forge; samples the priority candidates (CandidateCheck) unless set otherwise. Call once per JVM. */
     static void initForge() {
@@ -78,6 +79,12 @@ public final class RandomGames {
     /** Plays the matches and builds the report (without the RESULT line). */
     static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, AgentConnection agent,
                        CardKeys keys) throws Exception {
+        return run(deckDir, deck0Name, deck1Name, matches, logDir, agent, keys, "m");
+    }
+
+    /** {@code matchPrefix} keeps match and game IDs unique when one agent-core serves several runs (shard file names). */
+    static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, AgentConnection agent,
+                       CardKeys keys, String matchPrefix) throws Exception {
         Deck deck0 = DeckFiles.load(new File(deckDir, deck0Name));
         Deck deck1 = DeckFiles.load(new File(deckDir, deck1Name));
         ForgeMatchRunner runner = new ForgeMatchRunner(agent.client(), keys, Mode.MODE_TRAINING, "forge@87cb532", false);
@@ -92,7 +99,7 @@ public final class RandomGames {
         long start = System.nanoTime();
         for (int m = 0; m < matches; m++) {
             try {
-                ForgeMatchRunner.Result r = runner.playMatch("m" + m, deck0, deck1, Set.of(0), 1000 + m, logDir);
+                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, Set.of(0), 1000 + m, logDir);
                 total.add(r.stats());
                 gameWins[0] += r.gamesWon()[0];
                 gameWins[1] += r.gamesWon()[1];
@@ -144,6 +151,9 @@ public final class RandomGames {
         out.add("safety caps (runaway repeats): " + total.safetyCaps());
         total.notes().forEach((k, v) -> out.add("  " + v + "x " + k));
         out.add("candidate omissions (sampled pool checks): " + total.candidateOmissions() + " in " + total.candidateChecks() + " checks");
+        out.add(costOrderLine(total));
+        out.add("game copies (agent-core GameCopier, candidate and copy checks): " + total.copyFailures() + " failed of "
+            + total.copies());
         out.add("tokens identified by their creating ability (Q3 fallback): " + keys.tokenFallbacks());
         Set<String> unmapped = new TreeSet<>(keys.unmapped());
         unmapped.removeAll(unmappedBefore);
@@ -154,8 +164,16 @@ public final class RandomGames {
             out.add("log problems: " + logProblems.size() + " " + logProblems.subList(0, Math.min(10, logProblems.size())));
         }
         boolean pass = logProblems.isEmpty() && errors == 0 && total.fallbacks().isEmpty() && ignored == 0
-            && unmapped.isEmpty() && total.errors() == 0;
-        return new Summary(out, pass);
+            && unmapped.isEmpty() && total.errors() == 0 && total.unclassified().isEmpty() && total.copyFailures() == 0;
+        return new Summary(out, pass, total, matches, games, errors, seconds, logProblems.size(), unmapped);
+    }
+
+    /** chooseSingleStaticAbility (601.2f reduction order): where the calls came from and whether the order mattered. */
+    static String costOrderLine(DecisionStats s) {
+        return "cost change order (chooseSingleStaticAbility): " + s.costOrderComputations()
+            + " cost-computation calls (not decisions), " + s.costOrderRealCalls() + " calls in real payments, "
+            + s.costOrderMulti() + " real payments with 2+ reductions, " + s.costOrderDiffered()
+            + " where the final cost depended on the order";
     }
 
     /** Writes {@code runs/<date>-<harness>-<matches>/summary.txt} beside the decks directory. */

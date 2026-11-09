@@ -53,7 +53,7 @@ final class AgentConnection implements AutoCloseable {
 
     private static AgentConnection spawn() throws IOException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        List<String> cmd = new ArrayList<>(List.of(java, "-Xmx1g", "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        List<String> cmd = new ArrayList<>(List.of(java, "-Xmx" + System.getProperty("magicdosa.agentXmx", "1g"), "--add-opens=java.base/java.nio=ALL-UNNAMED",
             "-cp", System.getProperty("java.class.path"), "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes"));
         String shards = System.getProperty("magicdosa.shards");
         if (shards != null) {

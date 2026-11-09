@@ -56,7 +56,7 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "decider", "prior", "search_skip_reason", "chosen", "end_reason", "turns", "oov");
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "chosen", "end_reason", "turns", "oov");
     private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio");
     private static final List<String> INT_LISTS = List.of("token_kind", "token_card", "token_key", "rel_src", "rel_dst",
         "rel_kind", "deck_card", "deck_count", "deck_group", "cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key",
@@ -131,6 +131,8 @@ public final class ShardWriter {
         r.put("decision_type", q.getTypeValue());
         r.put("step", s);
         r.put("steps", steps);
+        r.put("bundle_id", q.hasBundle() ? q.getBundle().getId() : 0L);   // Q18: 0 when the request is not a bundle step
+        r.put("bundle_step", q.hasBundle() ? q.getBundle().getStep() : 0);
         r.put("decider", step.getDeciderValue());
         r.put("prior", step.getMethod().getPriorValue());
         r.put("search_ran", step.getMethod().hasRan());
@@ -248,6 +250,7 @@ public final class ShardWriter {
         fields.add(new Field("game_id", FieldType.notNullable(ArrowType.Utf8.INSTANCE), null));
         fields.add(new Field("match_id", FieldType.notNullable(ArrowType.Utf8.INSTANCE), null));
         fields.add(new Field("decision_id", FieldType.notNullable(I64), null));
+        fields.add(new Field("bundle_id", FieldType.notNullable(I64), null));
         fields.add(new Field("search_nodes", FieldType.notNullable(I64), null));
         for (String c : INT_COLS) {
             fields.add(new Field(c, FieldType.notNullable(I32), null));
@@ -271,6 +274,7 @@ public final class ShardWriter {
                 ((VarCharVector) root.getVector("game_id")).setSafe(i, ((String) r.get("game_id")).getBytes(StandardCharsets.UTF_8));
                 ((VarCharVector) root.getVector("match_id")).setSafe(i, ((String) r.get("match_id")).getBytes(StandardCharsets.UTF_8));
                 ((BigIntVector) root.getVector("decision_id")).setSafe(i, (Long) r.get("decision_id"));
+                ((BigIntVector) root.getVector("bundle_id")).setSafe(i, (Long) r.get("bundle_id"));
                 ((BigIntVector) root.getVector("search_nodes")).setSafe(i, (Long) r.get("search_nodes"));
                 for (String c : INT_COLS) {
                     ((IntVector) root.getVector(c)).setSafe(i, ((Number) r.get(c)).intValue());
@@ -307,8 +311,8 @@ public final class ShardWriter {
                 v.setValueCount(n);
             }
             root.setRowCount(n);
-            try (FileChannel ch = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING);
+            try (FileChannel ch = FileChannel.open(file, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING); // a game ID seen before fails (shard error) instead of overwriting
                  ArrowFileWriter writer = new ArrowFileWriter(root, null, ch)) {
                 writer.start();
                 writer.writeBatch();

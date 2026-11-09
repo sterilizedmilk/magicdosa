@@ -1,4 +1,4 @@
-#version 1
+#version 3
 # agent-core vocabulary (encoder E1): kind<TAB>value, indices in file order per kind from 3
 # (0 padding, 1 hidden card, 2 not in the vocabulary). Append only. Built by tools.VocabBuilder.
 ability	k:basic_land_mana:{B}
@@ -319,3 +319,8 @@ string	type:Eldrazi
 string	type:Fungus
 string	type:Insect
 string	type:Lizard
+ability	k:adventure:
+ability	k:ward:PayLife<7>
+keyword	adventure
+keyword	ward
+ability	p:0eb3cd4b-c34e-448c-a9ab-e7b0b4524833:1:1

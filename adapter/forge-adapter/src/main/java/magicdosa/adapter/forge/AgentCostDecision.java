@@ -59,6 +59,15 @@ final class AgentCostDecision extends AiCostDecision {
         return !type.contains("+") && !type.equals("All") && !type.equals("OriginalHost");
     }
 
+    /**
+     * A card type with at most a color and "other than this card" (2026-11-10: Card.White+Other for March of
+     * Otherworldly Light and Solitude's evoke, Card.Blue+Other for Force of Negation): CardLists.getValidCards reads it,
+     * and the spell itself is on the stack while its costs are paid, so it is not among the hand cards anyway.
+     */
+    private static boolean plainOrOther(String type) {
+        return plainType(type) || type.matches("[A-Za-z]+(\\.[A-Za-z]+)?\\+Other");
+    }
+
     @Override
     public PaymentDecision visit(CostSacrifice cost) {
         if (cost.payCostFromSource()) {
@@ -93,7 +102,7 @@ final class AgentCostDecision extends AiCostDecision {
                 || (cost.from.size() == 1 && cost.from.get(0) == ZoneType.Library)) {
             return super.visit(cost); // no choice
         }
-        if (!plainType(type) || type.contains("FromTopGrave")) {
+        if (!plainOrOther(type) || type.contains("FromTopGrave")) {
             return delegated(cost, () -> super.visit(cost));
         }
         CardCollection list = cost.zoneRestriction != 1

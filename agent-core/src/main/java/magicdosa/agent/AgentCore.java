@@ -17,7 +17,7 @@ import magicdosa.protocol.Versions;
  */
 public final class AgentCore {
     /** Layout of the tensors the encoder produces. A model records the encoder version it was trained with. */
-    public static final int ENCODER_VERSION = 2;
+    public static final int ENCODER_VERSION = 3;
 
     public static final int DEFAULT_PORT = 50051;
 

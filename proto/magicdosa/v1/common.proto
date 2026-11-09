@@ -75,9 +75,11 @@ message KeywordAbility {
 }
 
 // Names a spell (Q2): the card face plus how it was cast. `cast_method` is the key of whatever permitted the
-// alternative way of casting, unset for a normal cast. Examples: flashback = keyword flashback{R}; Fireblast's
-// alternative cost = (Fireblast, 1, 1); cast from the graveyard via Snapcaster Mage = (Snapcaster Mage, 1, 1);
-// cast from suspend = keyword suspend{1}{R}. Adventure spells and MDFC back faces use face = 2.
+// alternative way of casting, unset for a normal cast. Three kinds (Q17): a printed ability key when a card's paragraph
+// grants it (Fireblast's alternative cost = (Fireblast, 1, 1); cast from the graveyard via Snapcaster Mage =
+// (Snapcaster Mage, 1, 1)); a keyword key (flashback{R}, suspend{1}{R}, foretell, plot); a rule key, a keyword key with
+// the rule's name and no parameters, for a permission the rules grant (adventure: cast the creature from exile,
+// 715.4; prepared). Adventure spells and MDFC back faces use face = 2.
 message SpellKey {
   CardFaceKey card = 1;
   AbilityKey cast_method = 2;

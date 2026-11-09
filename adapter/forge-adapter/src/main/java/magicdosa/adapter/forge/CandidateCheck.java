@@ -9,6 +9,7 @@ import forge.game.cost.CostPayment;
 import forge.game.mana.ManaCostBeingPaid;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
+import forge.game.zone.ZoneType;
 import magicdosa.agent.shadow.GameCopier;
 
 import java.util.ArrayList;
@@ -23,6 +24,8 @@ import java.util.Set;
  */
 final class CandidateCheck {
     static final int EVERY = Integer.getInteger("magicdosa.candidateCheck", 0);
+    /** {@code magicdosa.copyCheck}: every N-th priority decision, copy the whole game and map every card (0: off). */
+    static final int COPY_EVERY = Integer.getInteger("magicdosa.copyCheck", 0);
 
     private CandidateCheck() {}
 
@@ -43,6 +46,7 @@ final class CandidateCheck {
         stats.candidateChecks++;
         Game game = player.getGame();
         for (SpellAbility sa : left) {
+            stats.copies++;
             try {
                 GameCopier copier = new GameCopier(game);
                 copier.makeCopy();
@@ -56,9 +60,51 @@ final class CandidateCheck {
                     stats.candidateOmissions++;
                 }
             } catch (RuntimeException e) {
-                stats.note("candidate check could not copy: " + e.getClass().getSimpleName());
+                stats.copyFailures++;
+                stats.note("candidate check could not copy: " + describe(e));
             }
         }
+    }
+
+    /**
+     * Copies the game as a shadow game will (agent-core GameCopier) and maps every card of every zone and every player
+     * back; a failure is counted with its cause.
+     */
+    static void copyCheck(Game game, DecisionStats stats) {
+        stats.copies++;
+        try {
+            GameCopier copier = new GameCopier(game);
+            copier.makeCopy();
+            for (Player p : game.getPlayers()) {
+                copier.find(p);
+                for (ZoneType z : ZoneType.values()) {
+                    for (Card c : p.getCardsIn(z)) {
+                        copier.find(c);
+                    }
+                }
+            }
+            for (Card c : game.getStackZone().getCards()) {
+                copier.find(c);
+            }
+        } catch (RuntimeException e) {
+            stats.copyFailures++;
+            stats.note("game copy failed: " + describe(e));
+        }
+    }
+
+    /** The exception without object hashes, and where it was thrown. */
+    static String describe(RuntimeException e) {
+        StringBuilder b = new StringBuilder(e.getClass().getSimpleName()).append(": ")
+            .append(String.valueOf(e.getMessage()).replaceAll("/\\d+", "").replaceAll(" \\(\\d+\\)", ""));
+        int n = 0;
+        for (StackTraceElement f : e.getStackTrace()) {
+            if (n++ == 4) {
+                break;
+            }
+            b.append(" < ").append(f.getClassName().replaceAll(".*\\.", "")).append('.').append(f.getMethodName())
+                .append(':').append(f.getLineNumber());
+        }
+        return b.toString();
     }
 
     /** Forge's own check on the copy: non-mana costs payable, mana cost payable from the pool. */

@@ -38,11 +38,13 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
+import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityCantAttackBlock;
 import forge.game.trigger.WrappedAbility;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.TargetRestrictions;
 import forge.game.zone.ZoneType;
+import forge.game.ability.AbilityUtils;
 import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.game.GameType;
@@ -107,6 +109,9 @@ public class RlPlayerController extends ObservedAiController {
     private ForgeGameSession.Asked pendingPriority;
     private int pendingChosen;
     private final List<Rejection> priorityRejections = new ArrayList<>();
+    private void clearPriorityRefusals() {
+        priorityRejections.clear();
+    }
     /** After the refusals of a priority decision are used up: pass once. */
     private boolean forcePass;
     private int priorityAsks;
@@ -191,8 +196,12 @@ public class RlPlayerController extends ObservedAiController {
         if (decider == player) {
             session.potentialCasts(player, potential);
         }
-        if (CandidateCheck.EVERY > 0 && ++priorityAsks % CandidateCheck.EVERY == 0) {
+        priorityAsks++;
+        if (CandidateCheck.EVERY > 0 && priorityAsks % CandidateCheck.EVERY == 0) {
             CandidateCheck.run(player, new java.util.HashSet<>(out), considered, session.stats());
+        }
+        if (CandidateCheck.COPY_EVERY > 0 && priorityAsks % CandidateCheck.COPY_EVERY == 0) {
+            CandidateCheck.copyCheck(player.getGame(), session.stats());
         }
         return out;
     }
@@ -239,7 +248,7 @@ public class RlPlayerController extends ObservedAiController {
             return null;
         }
         if (actions.isEmpty()) {
-            priorityRejections.clear();
+            clearPriorityRefusals();
             session.stats().autoPass();
             session.action(player, true, b -> b.setPassPriority(PassPriority.newBuilder().setSeat(session.seat(player))));
             return null;
@@ -253,13 +262,13 @@ public class RlPlayerController extends ObservedAiController {
             List.copyOf(priorityRejections));
         if (!asked.ok()) {
             session.record(asked, List.of(), "chooseSpellAbilityToPlay", true, asked.failure());
-            priorityRejections.clear();
+            clearPriorityRefusals();
             return super.chooseSpellAbilityToPlay();
         }
         int chosen = asked.response().getChosen(0);
         if (chosen == 0) {
             session.record(asked, List.of(chosen), "chooseSpellAbilityToPlay", false, null);
-            priorityRejections.clear();
+            clearPriorityRefusals();
             session.action(player, false, b -> b.setPassPriority(PassPriority.newBuilder().setSeat(session.seat(player))));
             return null;
         }
@@ -283,7 +292,7 @@ public class RlPlayerController extends ObservedAiController {
         if (asked == null || sa.isLandAbility()) {
             if (asked != null) {
                 session.record(asked, List.of(chosen), "chooseSpellAbilityToPlay", false, null);
-                priorityRejections.clear();
+                clearPriorityRefusals();
             }
             return super.playChosenSpellAbility(sa); // a land, or Forge AI's choice after a fallback
         }
@@ -291,7 +300,7 @@ public class RlPlayerController extends ObservedAiController {
         try {
             if (PlaySpellAbility.playSpellAbility(this, player, sa)) {
                 session.record(asked, List.of(chosen), "chooseSpellAbilityToPlay", false, null);
-                priorityRejections.clear();
+                clearPriorityRefusals();
                 if (sa.isManaAbility()) {
                     session.manaAbilityActivated(player, sa);
                 }
@@ -302,7 +311,7 @@ public class RlPlayerController extends ObservedAiController {
             session.stats().note("chooseSpellAbilityToPlay refused by Forge: " + reason);
             if (priorityRejections.size() + 1 >= MAX_REJECTIONS) {
                 session.record(asked, List.of(), "chooseSpellAbilityToPlay", true, FallbackReason.FALLBACK_REASON_ILLEGAL_ACTION);
-                priorityRejections.clear();
+                clearPriorityRefusals();
                 forcePass = true;
             } else {
                 session.recordRejected(asked, "chooseSpellAbilityToPlay", reason, DecisionStats.RejectionKind.MISSING_CONSTRAINT);
@@ -320,7 +329,13 @@ public class RlPlayerController extends ObservedAiController {
     /** Asks agent-core; when it gives no usable answer, records the unintended fallback and returns null. */
     List<Integer> decide(DecisionType type, String method, List<Candidate> candidates, SelectionConstraints c,
                          DecisionContext ctx) {
-        ForgeGameSession.Asked asked = session.ask(decider, player, type, candidates, c, ctx, List.of());
+        return decide(type, method, candidates, c, ctx, null);
+    }
+
+    /** {@code bundle}: the request is a step of a step bundle (Q18). */
+    List<Integer> decide(DecisionType type, String method, List<Candidate> candidates, SelectionConstraints c,
+                         DecisionContext ctx, ForgeGameSession.Bundle bundle) {
+        ForgeGameSession.Asked asked = session.ask(decider, player, type, candidates, c, ctx, List.of(), bundle);
         if (!asked.ok()) {
             session.record(asked, List.of(), method, true, asked.failure());
             return null;
@@ -394,11 +409,171 @@ public class RlPlayerController extends ObservedAiController {
         return new AgentCostDecision(this, p, ability, effect);
     }
 
+    // ---- the order cost reductions apply in (601.2f; 2026-11-10 decision) ----
+
+    /** Set while Forge adjusts the mana cost of a real payment (PlaySpellAbility.payManaCost, before the payment). */
+    private boolean realCostAdjust;
+    /** The order the reductions of the current real payment apply in; null when no order was planned. */
+    private List<StaticAbility> costOrderPlan;
+    /** While probing the final cost of one apply order: the order, and the reductions the first call listed. */
+    private List<StaticAbility> probeOrder;
+    private List<StaticAbility> probeSeen;
+
+    /**
+     * Cost increases apply first; the player orders the reductions (601.2f). Calls outside a real payment (castability
+     * and look-ahead checks, Forge's test payments, Forge AI's estimates) only compute a cost: answered with Forge AI's
+     * pick, neither a decision nor a delegation, counted. In a real payment the order was planned beforehand
+     * ({@link #planCostOrder}).
+     */
+    @Override
+    public StaticAbility chooseSingleStaticAbility(List<StaticAbility> possible) {
+        if (probeOrder != null) {
+            if (probeSeen == null) {
+                probeSeen = new ArrayList<>(possible);
+            }
+            for (StaticAbility s : probeOrder) {
+                if (possible.contains(s)) {
+                    return s;
+                }
+            }
+            return possible.get(0);
+        }
+        if (!realCostAdjust || checkingCosts) {
+            session.stats().costOrderComputations++;
+            return possible.get(0); // Forge AI's own pick (PlayerControllerAi: the first)
+        }
+        session.stats().costOrderRealCalls++;
+        if (possible.size() == 1) {
+            return possible.get(0);
+        }
+        if (costOrderPlan != null) {
+            for (StaticAbility s : costOrderPlan) {
+                if (possible.contains(s)) {
+                    return s;
+                }
+            }
+        }
+        // not foreseen by the plan (should not happen): Forge AI orders, recorded as an intended delegation
+        session.delegated(player, "chooseSingleStaticAbility(unplanned)", DecisionType.DECISION_TYPE_CHOOSE_OPTION, null);
+        return possible.get(0); // Forge AI's pick
+    }
+
+    /**
+     * Before a real payment: the final mana cost of every order the reductions can apply in (Forge's own cost
+     * adjustment in test mode, the order scripted here). One reduction, or all orders with the same final cost: no
+     * choice. Different final costs: CHOOSE_OPTION over the distinct final costs (orders with the same result are one
+     * candidate); Forge is then answered with an order that gives the chosen cost.
+     */
+    private void planCostOrder(ManaCost realCost, CostPartMana mc, SpellAbility ability, boolean effect) {
+        costOrderPlan = null;
+        if (effect) {
+            return; // Forge applies no reductions to a cost paid while resolving
+        }
+        List<StaticAbility> all = probe(realCost, mc, ability, List.of());
+        if (all == null || all.size() < 2) {
+            return;
+        }
+        session.stats().costOrderMulti++;
+        if (all.size() > 6) {
+            costOrderPlan = null; // 720+ orders: not planned (none in the decks); Forge AI orders, recorded
+            return;
+        }
+        Map<String, List<StaticAbility>> byCost = new java.util.LinkedHashMap<>();
+        for (List<StaticAbility> order : permutations(all)) {
+            String cost = finalCost(realCost, mc, ability, order);
+            byCost.putIfAbsent(cost, order);
+        }
+        List<String> costs = new ArrayList<>(byCost.keySet());
+        if (costs.size() == 1) {
+            costOrderPlan = byCost.get(costs.get(0));
+            return;
+        }
+        session.stats().costOrderDiffered++;
+        session.stats().note("cost change order changes the cost: " + ability.getHostCard().getName() + " " + costs);
+        List<Candidate> candidates = new ArrayList<>();
+        for (int i = 0; i < costs.size(); i++) {
+            candidates.add(option(i, costs.get(i)));
+        }
+        List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSingleStaticAbility", candidates, ONE,
+            context(ability).setEnginePrompt("cost change order: final cost").build());
+        costOrderPlan = chosen == null ? null : byCost.get(costs.get(chosen.get(0)));
+    }
+
+    /** Runs Forge's cost adjustment in test mode with the reductions applied in {@code order}; the reductions seen. */
+    private List<StaticAbility> probe(ManaCost realCost, CostPartMana mc, SpellAbility ability, List<StaticAbility> order) {
+        probeOrder = order;
+        probeSeen = null;
+        boolean wasChecking = checkingCosts;
+        checkingCosts = true;
+        try {
+            forge.game.cost.CostAdjustment.adjust(toPayLike(realCost, mc, ability), ability, player, new CardCollection(),
+                true, false);
+            return probeSeen;
+        } finally {
+            probeOrder = null;
+            checkingCosts = wasChecking;
+        }
+    }
+
+    private String finalCost(ManaCost realCost, CostPartMana mc, SpellAbility ability, List<StaticAbility> order) {
+        probeOrder = order;
+        probeSeen = null;
+        boolean wasChecking = checkingCosts;
+        checkingCosts = true;
+        try {
+            ManaCostBeingPaid m = toPayLike(realCost, mc, ability);
+            forge.game.cost.CostAdjustment.adjust(m, ability, player, new CardCollection(), true, false);
+            return m.toString();
+        } finally {
+            probeOrder = null;
+            checkingCosts = wasChecking;
+        }
+    }
+
+    /** The cost PlaySpellAbility.payManaCost adjusts: the real cost with the announced or computed X. */
+    private static ManaCostBeingPaid toPayLike(ManaCost realCost, CostPartMana mc, SpellAbility ability) {
+        ManaCostBeingPaid toPay = new ManaCostBeingPaid(realCost);
+        String xInCard = ability.getParamOrDefault("XAlternative", ability.getSVar("X"));
+        if (mc != null && mc.getAmountOfX() > 0 && !"Count$xPaid".equals(xInCard)) {
+            toPay.setXManaCostPaid(AbilityUtils.calculateAmount(ability.getHostCard(), xInCard, ability), ability.getXColor());
+        } else if (ability.getXManaCostPaid() != null) {
+            toPay.setXManaCostPaid(ability.getXManaCostPaid(), ability.getXColor());
+        }
+        return toPay;
+    }
+
+    private static List<List<StaticAbility>> permutations(List<StaticAbility> items) {
+        List<List<StaticAbility>> out = new ArrayList<>();
+        if (items.size() <= 1) {
+            out.add(new ArrayList<>(items));
+            return out;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            List<StaticAbility> rest = new ArrayList<>(items);
+            StaticAbility first = rest.remove(i);
+            for (List<StaticAbility> p : permutations(rest)) {
+                p.add(0, first);
+                out.add(p);
+            }
+        }
+        return out;
+    }
+
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt,
                                ManaConversionMatrix matrix, boolean effect) {
         // X, cost changes, delve: as for a human player; the mana itself goes through applyManaToCost
-        return PlaySpellAbility.payManaCost(this, toPay, costPartMana, sa, player, prompt, matrix, effect);
+        if (checkingCosts) {
+            return PlaySpellAbility.payManaCost(this, toPay, costPartMana, sa, player, prompt, matrix, effect);
+        }
+        planCostOrder(toPay, costPartMana, sa, effect);
+        realCostAdjust = true; // until applyManaToCost starts: Forge adjusts the cost of this payment in between
+        try {
+            return PlaySpellAbility.payManaCost(this, toPay, costPartMana, sa, player, prompt, matrix, effect);
+        } finally {
+            realCostAdjust = false;
+            costOrderPlan = null;
+        }
     }
 
     /**
@@ -409,9 +584,12 @@ public class RlPlayerController extends ObservedAiController {
     @Override
     public boolean applyManaToCost(ManaCostBeingPaid toPay, SpellAbility ability, String prompt,
                                    ManaConversionMatrix matrix, boolean effect) {
+        realCostAdjust = false; // the cost is adjusted; what follows is the payment itself
         player.pushPaidForSA(ability);
         ability.setManaCostBeingPaid(toPay);
         int lifeToPay = 0;
+        ForgeGameSession.Bundle bundle = new ForgeGameSession.Bundle();
+        boolean completed = false;
         try {
             while (!toPay.isPaid()) {
                 ManaPool pool = player.getManaPool();
@@ -441,6 +619,9 @@ public class RlPlayerController extends ObservedAiController {
                         }
                         session.stats().note("pool cannot pay " + toPay + " for " + ability.getHostCard().getName() + " (" + ability.getClass().getSimpleName() + ")" + why);
                     }
+                    // during resolution nothing left can pay: the cost is not paid (the bundle ends by its rule); while
+                    // casting the feasibility checks rule this out, so a bundle ending here was cut short
+                    completed = effect;
                     return false;
                 }
                 if (!effect && !life && groups.size() == 1) {
@@ -467,7 +648,8 @@ public class RlPlayerController extends ObservedAiController {
                     candidates.add(pass()); // stop: the cost is not paid
                 }
                 List<Integer> chosen = decide(DecisionType.DECISION_TYPE_MANA_PAYMENT, "applyManaToCost", candidates, ONE,
-                    context(ability).setManaCost(toPay.toString()).setEnginePrompt(prompt == null ? "" : prompt).build());
+                    context(ability).setManaCost(toPay.toString()).setEnginePrompt(prompt == null ? "" : prompt).build(),
+                    bundle);
                 if (chosen == null) {
                     return ComputerUtilMana.payManaCost(toPay, ability, player, effect);
                 }
@@ -484,14 +666,17 @@ public class RlPlayerController extends ObservedAiController {
                         session.manaAbilityActivated(player, source);
                     }
                 } else {
+                    completed = true;
                     return false; // stopped paying
                 }
             }
             if (lifeToPay > 0) {
                 player.payLife(lifeToPay, ability, effect);
             }
+            completed = true;
             return true;
         } finally {
+            session.endBundle(bundle, completed);
             ability.setManaCostBeingPaid(null);
             player.popPaidForSA();
         }
@@ -570,19 +755,43 @@ public class RlPlayerController extends ObservedAiController {
 
     // ---- choices while casting: X, modes, optional and alternative costs, mana colors ----
 
+    /**
+     * X and the other values announced while casting (601.2b: March of Otherworldly Light's number of white cards to
+     * exile, then X). Only values for which the whole cost can still be paid are offered: with the values announced so
+     * far, this value, and some value of each announcement still to come (2026-11-10: no refusals). The resources do not
+     * change while the spell is cast, so the check is the castability check's own (non-mana costs payable, the pool
+     * pays the adjusted mana cost), whichever order Forge asks in. A number asked while resolving is offered as is.
+     */
     @Override
     public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
-        boolean manaX = "X".equals(announce) && ability.getPayCosts() != null && ability.getPayCosts().getCostMana() != null
-            && ability.getPayCosts().getCostMana().getAmountOfX() > 0;
-        int cap = Math.min(max, min + player.getManaPool().totalMana() + 20);
+        if (!castingAnnouncement(ability, announce)) {
+            return announceNumber(ability, min, max, announce, null);
+        }
+        List<String> later = laterAnnouncements(ability, announce);
         List<Integer> values = new ArrayList<>();
-        for (int v = min; v <= cap; v++) {
-            if (!manaX || xPayable(ability, v)) {
-                values.add(v);
+        checkingCosts = true;
+        try {
+            for (int v = min; v <= cap(min, max); v++) {
+                if (feasible(ability, announce, v, later)) {
+                    values.add(v);
+                }
             }
+        } finally {
+            checkingCosts = false;
         }
         if (values.isEmpty()) {
-            return null; // cannot be cast with any X now
+            return null; // cannot be cast now (the castability check rules this out)
+        }
+        return announceNumber(ability, min, max, announce, values);
+    }
+
+    private Integer announceNumber(SpellAbility ability, int min, int max, String announce, List<Integer> allowed) {
+        List<Integer> values = allowed;
+        if (values == null) {
+            values = new ArrayList<>();
+            for (int v = min; v <= cap(min, max); v++) {
+                values.add(v);
+            }
         }
         if (values.size() == 1) {
             return values.get(0);
@@ -594,25 +803,122 @@ public class RlPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "announceRequirements", candidates, ONE,
             context(ability).setEnginePrompt(announce).build());
-        return chosen == null ? forgeAi(() -> super.announceRequirements(ability, min, max, announce)) : values.get(chosen.get(0));
+        final List<Integer> offered = values;
+        return chosen == null ? forgeAi(() -> super.announceRequirements(ability, min, max, announce))
+            : offered.get(chosen.get(0));
     }
 
-    private boolean xPayable(SpellAbility ability, int x) {
-        checkingCosts = true;
-        try {
-            ManaCostBeingPaid m = new ManaCostBeingPaid(ability.getPayCosts().getCostMana().getManaCostFor(ability));
-            m.setXManaCostPaid(x, ability.getXColor());
-            forge.game.cost.CostAdjustment.adjust(m, ability, player, null, true, false);
-            return ManaPayments.payable(player, m, ability, List.of(), ManaPayments.lifeBudget(player, ability, false));
-        } finally {
-            checkingCosts = false;
+    /** Upper end of an announced value worth offering: the pool and the hand bound what a cost can use. */
+    private int cap(int min, int max) {
+        long c = (long) min + player.getManaPool().totalMana() + player.getCardsIn(ZoneType.Hand).size() + 20;
+        return (int) Math.min(max, c);
+    }
+
+    /** X, or a name of the Announce list, of a spell or ability being cast or activated (not a number while resolving). */
+    private static boolean castingAnnouncement(SpellAbility ability, String announce) {
+        return "X".equals(announce) || announceList(ability).contains(announce);
+    }
+
+    private static List<String> announceList(SpellAbility ability) {
+        List<String> out = new ArrayList<>();
+        String a = ability.getParam("Announce");
+        if (a != null) {
+            for (String v : a.split(",")) {
+                out.add(v.trim());
+            }
         }
+        return out;
+    }
+
+    /** What Forge announces after {@code announce} for this cast: later names of the Announce list, then X. */
+    private static List<String> laterAnnouncements(SpellAbility ability, String announce) {
+        List<String> list = announceList(ability);
+        List<String> out = new ArrayList<>();
+        int i = list.indexOf(announce);
+        if (i >= 0) {
+            out.addAll(list.subList(i + 1, list.size()));
+        }
+        boolean xInList = list.stream().anyMatch("X"::equalsIgnoreCase);
+        Cost cost = ability.getPayCosts();
+        if (!"X".equals(announce) && !xInList && cost != null && cost.hasXInAnyCostPart()
+                && "Count$xPaid".equals(ability.getParamOrDefault("XAlternative", ability.getSVar("X")))) {
+            out.add("X");
+        }
+        return out;
+    }
+
+    /** With {@code var} = {@code value}: can some values of the {@code later} announcements make the cost payable? */
+    private boolean feasible(SpellAbility ability, String var, int value, List<String> later) {
+        Card host = ability.getHostCard();
+        Integer oldX = ability.getXManaCostPaid();
+        String oldSa = ability.hasSVar(var) ? ability.getSVar(var) : null;
+        String oldCard = host.hasSVar(var) ? host.getSVar(var) : null;
+        try {
+            if ("X".equals(var)) {
+                ability.setXManaCostPaid(value);
+            } else {
+                ability.setSVar(var, Integer.toString(value));
+                host.setSVar(var, Integer.toString(value));
+            }
+            if (later.isEmpty()) {
+                return costPayable(ability);
+            }
+            String next = later.get(0);
+            org.apache.commons.lang3.Range<Integer> r = AbilityUtils.getAnnouncementBounds(ability, next);
+            for (int v = r.getMinimum(); v <= cap(r.getMinimum(), r.getMaximum()); v++) {
+                if (feasible(ability, next, v, later.subList(1, later.size()))) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            if ("X".equals(var)) {
+                ability.setXManaCostPaid(oldX);
+            } else {
+                if (oldSa == null) {
+                    ability.removeSVar(var);
+                } else {
+                    ability.setSVar(var, oldSa);
+                }
+                if (oldCard == null) {
+                    host.removeSVar(var);
+                } else {
+                    host.setSVar(var, oldCard);
+                }
+            }
+        }
+    }
+
+    /** The whole cost with the values announced now: non-mana parts payable, the adjusted mana cost from the pool. */
+    private boolean costPayable(SpellAbility ability) {
+        Cost cost = ability.getPayCosts();
+        if (cost == null) {
+            return true;
+        }
+        Cost adjusted = forge.game.cost.CostAdjustment.adjust(cost, ability, false);
+        if (!forge.game.cost.CostPayment.canPayAdditionalCosts(adjusted, ability, false)) {
+            return false;
+        }
+        CostPartMana part = adjusted.getCostMana();
+        if (part == null) {
+            return true;
+        }
+        ManaCostBeingPaid m = new ManaCostBeingPaid(part.getManaCostFor(ability));
+        if (m.getXcounter() > 0) {
+            Integer x = ability.getXManaCostPaid();
+            m.setXManaCostPaid(x == null ? 0 : x, ability.getXColor());
+        }
+        forge.game.cost.CostAdjustment.adjust(m, ability, player, null, true, false);
+        return ManaPayments.payable(player, m, ability, List.of(), ManaPayments.lifeBudget(player, ability, false));
     }
 
     @Override
     public List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num,
                                                  boolean allowRepeat) {
-        if (allowRepeat || possible.size() <= min) {
+        if (!allowRepeat && possible.size() == min) {
+            return new ArrayList<>(possible); // one possible outcome (Kozilek's Command with two modes left)
+        }
+        if (allowRepeat || possible.size() < min) {
             return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
         }
         List<Candidate> candidates = new ArrayList<>();
@@ -1714,6 +2020,8 @@ public class RlPlayerController extends ObservedAiController {
         List<PaperCard> main = new ArrayList<>(deck.get(DeckSection.Main).toFlatList());
         List<PaperCard> side = new ArrayList<>(deck.get(DeckSection.Sideboard).toFlatList());
         int swaps = 0;
+        ForgeGameSession.Bundle bundle = new ForgeGameSession.Bundle();
+        boolean completed = true; // done, the swap limit, or no swap left
         while (swaps < 15) {
             Map<String, PaperCard> ins = new java.util.TreeMap<>();
             Map<String, PaperCard> outs = new java.util.TreeMap<>();
@@ -1735,8 +2043,9 @@ public class RlPlayerController extends ObservedAiController {
             if (pairs.isEmpty()) {
                 break;
             }
-            List<Integer> chosen = decide(DecisionType.DECISION_TYPE_SIDEBOARD, "sideboard", candidates, ONE, null);
+            List<Integer> chosen = decide(DecisionType.DECISION_TYPE_SIDEBOARD, "sideboard", candidates, ONE, null, bundle);
             if (chosen == null || chosen.get(0) == 0) {
+                completed = chosen != null;
                 break;
             }
             PaperCard[] swap = pairs.get(chosen.get(0) - 1);
@@ -1746,6 +2055,7 @@ public class RlPlayerController extends ObservedAiController {
             side.add(swap[1]);
             swaps++;
         }
+        session.endBundle(bundle, completed);
         return swaps == 0 ? null : main;
     }
 

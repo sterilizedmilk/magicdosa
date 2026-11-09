@@ -28,7 +28,9 @@ import java.util.zip.GZIPInputStream;
  * Per seat it also checks the event order rules: an action comes before the zone move it causes (CastSpell before the
  * spell's move to the stack, PlayLand before the land's move), and a triggered ability is announced by AbilityTriggered
  * before it is put on the stack or removed (design: 엔티티 ID "유발된 순간"), and a reveal names the card only in the
- * streams of seats that saw it (Q10).
+ * streams of seats that saw it (Q10). Step bundles (Q18): each bundle's steps are numbered from 1 without gaps, the first
+ * step's decision ID names it, and a BundleEnd with the step count closes it before the game ends (bundles may nest:
+ * a mana ability activated while paying can ask its own payment).
  */
 public final class LogCheck {
     private LogCheck() {}
@@ -49,6 +51,8 @@ public final class LogCheck {
         Map<Integer, Long> seq = new HashMap<>();
         Map<Integer, Order> order = new HashMap<>();
         Map<String, Privileged> privileged = new HashMap<>();
+        Map<Long, Integer> openBundles = new HashMap<>();
+        Set<Long> closedBundles = new HashSet<>();
         int n = 0;
         LogRecord last = null;
         try (InputStream in = new GZIPInputStream(new BufferedInputStream(Files.newInputStream(f)))) {
@@ -82,6 +86,27 @@ public final class LogCheck {
                         }
                     }
                 }
+                if (r.hasDecision() && r.getDecision().hasRequest() && r.getDecision().getRequest().hasBundle()) {
+                    var q = r.getDecision().getRequest();
+                    var b = q.getBundle();
+                    Integer prev = openBundles.get(b.getId());
+                    boolean ok = b.getStep() == 1
+                        ? b.getId() == q.getDecisionId() && prev == null && !closedBundles.contains(b.getId())
+                        : prev != null && prev == b.getStep() - 1;
+                    if (!ok) {
+                        problems.add(f.getFileName() + ": decision " + q.getDecisionId() + ": bundle " + b.getId() + " step "
+                            + b.getStep() + " after " + prev);
+                    }
+                    openBundles.put(b.getId(), b.getStep());
+                }
+                if (r.hasBundleEnd()) {
+                    var e = r.getBundleEnd();
+                    Integer prev = openBundles.remove(e.getId());
+                    if (prev == null || prev != e.getSteps()) {
+                        problems.add(f.getFileName() + ": bundle " + e.getId() + " ends with " + e.getSteps() + " steps after step " + prev);
+                    }
+                    closedBundles.add(e.getId());
+                }
                 if (r.hasDecision() && r.getDecision().getEngineDecision().isEmpty()) {
                     problems.add(f.getFileName() + ": decision record without engine decision");
                 }
@@ -91,6 +116,9 @@ public final class LogCheck {
         }
         if (last == null || !last.hasGameOver()) {
             problems.add(f.getFileName() + ": last record is not game over");
+        }
+        if (!openBundles.isEmpty()) {
+            problems.add(f.getFileName() + ": bundles never ended: " + openBundles.keySet());
         }
         return problems;
     }
