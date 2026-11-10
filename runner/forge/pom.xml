@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>magicdosa</groupId>
+    <artifactId>magicdosa-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+  <artifactId>magicdosa-runner-forge</artifactId>
+  <description>Real Forge games for training and gates: matches, agent seats, gRPC client to agent-core, game logs</description>
+  <properties>
+    <!-- the forge submodule; Forge reads res/ from forge-gui -->
+    <forge.home>${project.basedir}/../../forge</forge.home>
+    <!-- harnesses are main programs in the test sources, so mvn install does not run them -->
+    <exec.mainClass>magicdosa.runner.forge.harness.RandomGames</exec.mainClass>
+    <decks.dir>${project.basedir}/../../decks</decks.dir>
+    <!-- paths in exec.args must be absolute: the JVM runs in forge-gui -->
+    <exec.args>${decks.dir} IzzetProwess.dck EsperBlink.dck 20 -</exec.args>
+    <jvm.args>-Xmx3g -Dfile.encoding=UTF-8</jvm.args>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>magicdosa</groupId>
+      <artifactId>magicdosa-protocol</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>magicdosa</groupId>
+      <artifactId>magicdosa-adapter-forge</artifactId>
+    </dependency>
+    <!-- GameCopier (candidate and copy checks); the local agent-core connection in the harnesses -->
+    <dependency>
+      <groupId>magicdosa</groupId>
+      <artifactId>magicdosa-agent-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>forge</groupId>
+      <artifactId>forge-gui-desktop</artifactId>
+    </dependency>
+    <!-- GrpcDecisionClient -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty-shaded</artifactId>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <executable>java</executable>
+          <classpathScope>test</classpathScope>
+          <workingDirectory>${forge.home}/forge-gui</workingDirectory>
+          <commandlineArgs>${jvm.args} -classpath %classpath ${exec.mainClass} ${exec.args}</commandlineArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

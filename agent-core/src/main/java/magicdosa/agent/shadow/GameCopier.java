@@ -1,4 +1,6 @@
 package magicdosa.agent.shadow;
+
+import magicdosa.adapter.forge.GameCreation;
 import forge.ai.simulation.*;
 
 import com.google.common.collect.*;

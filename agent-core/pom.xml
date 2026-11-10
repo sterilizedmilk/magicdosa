@@ -25,6 +25,11 @@
       <groupId>magicdosa</groupId>
       <artifactId>magicdosa-protocol</artifactId>
     </dependency>
+    <!-- Forge <-> protocol library: GameCreation, observations, entity IDs, events (shadow game) -->
+    <dependency>
+      <groupId>magicdosa</groupId>
+      <artifactId>magicdosa-adapter-forge</artifactId>
+    </dependency>
     <dependency>
       <groupId>forge</groupId>
       <artifactId>forge-gui-desktop</artifactId>

@@ -1,6 +1,6 @@
 package magicdosa.agent.bench;
 
-import magicdosa.agent.shadow.GameCreation;
+import magicdosa.adapter.forge.GameCreation;
 
 import forge.GuiDesktop;
 import forge.ai.simulation.GameCopier;

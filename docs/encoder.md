@@ -53,9 +53,9 @@ Rows of the phase-1 random policy have a uniform prior and no search: `policy_ro
 
 ```powershell
 # vocabulary: extend agent-core's vocab.tsv from the decks and some game logs (working directory forge/forge-gui)
-mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.tools.VocabBuilder" "-Dexec.args=<abs decks> <abs vocab.tsv> <abs vocab.tsv> 1 <abs log dir>..."
+mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.tools.VocabBuilder" "-Dexec.args=<abs decks> <abs vocab.tsv> <abs vocab.tsv> 1 <abs log dir>..."
 # RandomGames with shards (fails on a vocabulary miss)
-mvn -pl adapter/forge-adapter exec:exec "-Djvm.args=-Xmx3g -Dmagicdosa.shards=<abs dir>" "-Dexec.args=<abs decks> IzzetProwess.dck EsperBlink.dck 20 -"
+mvn -pl runner/forge exec:exec "-Djvm.args=-Xmx3g -Dmagicdosa.shards=<abs dir>" "-Dexec.args=<abs decks> IzzetProwess.dck EsperBlink.dck 20 -"
 cd python; pytest tests
 ```
 

@@ -24,8 +24,8 @@ MTG(모던, 고정 덱 1~4개, 사이드보드 포함 Bo3) 강화학습 AI. Forg
 | 미결·리스크 (`7c5fd0bb-1bd6`) | 아직 안 정한 것 | 여기 있는 항목은 임의로 정하지 말고 질문한다 |
 | 기록 보관 (`abb124c3-f95a`) | 과거 측정·조사 결과 | 참고용 |
 
-설계 문서의 forge-adapter 표기는 adapter/forge·runner/forge로 바뀌는 중이다. 이름이 어긋나면 코드 기준으로
-해석한다(지금 코드: `adapter/forge-adapter/`, 패키지 `magicdosa.adapter.forge`).
+모듈은 adapter/forge(변환 라이브러리)와 runner/forge(실행기)로 나뉘었다(2026-11-10). 설계 문서의 "forge-adapter"는
+둘을 함께 가리킨다. 이름이 어긋나면 코드 기준으로 해석한다.
 
 설계를 바꿔야 할 것 같으면 코드에서 임의로 바꾸지 말고 사용자에게 알린다. 설계 결정은 기획 대화에서
 정하고 설계 문서에 반영한다. 설계를 바꾸지 않는 구현 메모는 `docs/`에 남겨도 된다.
@@ -39,12 +39,13 @@ MTG(모던, 고정 덱 1~4개, 사이드보드 포함 Bo3) 강화학습 AI. Forg
 | `protocol/` | proto에서 생성한 Java + `Versions.PROTOCOL` |
 | `agent-core/` | 탐색, 추론(ONNX), 그림자 게임(내장 Forge), 인코더, 확정 정보, belief |
 | `agent-core/src/test/java/magicdosa/agent/{determinism,bench}` | 재현 하네스·벤치 (main 프로그램, `mvn install` 때 실행 안 됨) |
-| `adapter/forge-adapter/` | 학습용 실제 Forge 게임 → 프로토콜, agent-core에 결정 요청 (`adapter/`에는 pom 없음) |
+| `adapter/forge/` | Forge ↔ 프로토콜 변환 라이브러리(엔티티 ID, 능력 키, 관측, 사건, 후보, 결정 계층 `AgentPlayerController`, `GameCreation`). agent-core와 runner/forge가 쓴다. agent-core에 의존하지 않는다 |
+| `runner/forge/` | 학습·게이트용 실제 Forge 게임 실행(매치, gRPC 클라이언트, 게임 로그, 후보·복사 점검, 하네스) (`adapter/`·`runner/`에는 pom 없음) |
 | `python/magicdosa` | 학습, 평가, ONNX 내보내기 (`python/`을 별도 프로젝트로 연다) |
 | `forge/` | Forge git 서브모듈 (고정 커밋) |
 | `decks/` | 테스트 덱 |
 
-Java 패키지: `magicdosa.protocol`, `magicdosa.agent`, `magicdosa.adapter.forge`.
+Java 패키지: `magicdosa.protocol`, `magicdosa.agent`, `magicdosa.adapter.forge`, `magicdosa.runner.forge`.
 groupId `magicdosa`, Java 17, Maven.
 
 ## 명령 (Windows PowerShell, 저장소 루트 기준)
@@ -55,10 +56,10 @@ mvn install                          # 전체 빌드 (첫 빌드에서 의존성
 mvn -pl agent-core exec:exec         # 재현 하네스 (기본: decks/ IzzetProwess vs EsperBlink, 40매치 순차 2회 + 8스레드 처리량)
 mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.bench.ShadowBench" "-Dexec.args=<절대경로 decks> 200"
 mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.AgentCore" "-Dexec.args=--port 50051"   # agent-core gRPC 서버 (1단계: 랜덤 정책)
-mvn -pl adapter/forge-adapter exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, agent-core를 별도 JVM으로 띄움, 비의도 폴백 0이면 PASS)
-mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
-mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
-mvn -pl adapter/forge-adapter exec:exec "-Dexec.mainClass=magicdosa.adapter.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 1단계 최종 게이트 (16조합, 병렬)
+mvn -pl runner/forge exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, agent-core를 별도 JVM으로 띄움, 비의도 폴백 0이면 PASS)
+mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
+mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
+mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 1단계 최종 게이트 (16조합, 병렬)
 cd python; pip install -e ".[dev]"
 ```
 
@@ -84,15 +85,18 @@ agent-core 연결을 고른다: `spawn`(기본, 별도 JVM + gRPC), `host:port`,
 
 ## 지켜야 할 설계 결정 (자세한 내용은 설계 문서의 해당 탭)
 
-- **두 JVM:** forge-adapter와 agent-core는 별도 JVM이고 gRPC로 연결한다(Forge 경로는 proto3 바이너리,
+- **두 JVM:** runner/forge와 agent-core는 별도 JVM이고 gRPC로 연결한다(Forge 경로는 proto3 바이너리,
   외부 엔진은 JSON). 신경망 추론은 agent-core가 ONNX Runtime으로 한다.
 - **인코더는 agent-core 한 곳에만.** Python은 인코딩을 다시 구현하지 않고 agent-core가 쓴 텐서만 읽는다.
 - **합법 행동은 엔진이 준다.** AI가 후보를 만들지 않는다.
 - **모든 결정은 agent-core가 내린다.** 정책 → 그림자 게임 탐색 → 그림자 게임의 Forge AI(의도된 위임) 순.
   기록은 정책 / 탐색 / 의도된 위임 / 비의도 폴백으로 나누고, 탐색 생략(망 단독)은 따로 표시한다.
   비의도 폴백이 하나라도 있으면 그 평가는 무효다. 조용히 Forge AI로 넘어가는 코드를 만들지 않는다.
-- **그림자 게임 (2026-11-10 결정, 그림자·탐색 탭):** 그림자 게임을 이어서 추적하고(사건 스트림을 명시적 API로
-  적용, Forge 질문은 사건 기록에서 답하는 스크립트 컨트롤러), 매 턴 시작에 `GameMemento`를 저장한다.
+- **그림자 게임 (2026-11-10 결정, 그림자·탐색 탭):** 그림자 게임을 이어서 추적하고(그림자 전용 `Game-shadow-*`
+  스레드에서 Forge 루프 `PhaseHandler.mainLoopStep()`을 직접 돌린다. 양쪽 좌석은 사건 기록에서 답하는 스크립트
+  컨트롤러이고, 답이 아직 없으면 멈춰 기다린다. 결정 요청이 동기화 지점), 매 턴 시작에 `GameMemento`를 저장한다
+  (직전 턴 정리 단계 끝의 루프 경계). 복구는 멈춘 컨트롤러가 예외로 스레드를 풀고 Memento 복원 후 루프를 다시 돈다.
+  공개 선택은 모두 `ResolutionChoice`로 사건 스트림에 낸다(프로토콜 9, 숨은 선택은 privileged에만).
   결정마다(턴 시작 포함) 공개 정보 지문(L1 기본, L2 객체, L3 합법 행동)을 해시 하나로 비교하고, 다를 때만
   필드 단위 diff로 원인을 기록한다. 불일치 복구: ① 턴 시작 Memento로 되돌려 그 턴 사건 재적용 ② 턴 시작
   스냅샷으로 재생성(숨은 카드는 belief 샘플) ③ 그래도 다르면 그 턴의 남은 결정은 망 단독, '탐색 생략'으로
@@ -106,7 +110,7 @@ agent-core 연결을 고른다: `spawn`(기본, 별도 JVM + gRPC), `host:port`,
   단일 스레드 순차 + 시드로 한다(같은 JVM에서 같은 시드를 두 번 돌려 `different=0`).
   결정 경로에 시간 의존 로직(시간 예산, 벽시계)을 넣지 않는다. 탐색 예산은 노드 수다.
   스레드별 난수는 `InheritableThreadLocal`(Forge AI가 결정마다 스레드를 만든다).
-  Forge 게임 생성은 `magicdosa.agent.shadow.GameCreation`을 거친다(Game ID 전역 카운터가 동기화되지 않음).
+  Forge 게임 생성은 `magicdosa.adapter.forge.GameCreation`을 거친다(Game ID 전역 카운터가 동기화되지 않음).
   학습 시드는 재사용하지 않고, 평가 시드 집합과 holdout은 따로 둔다.
 - **학습 전용 정보:** 숨은 정보는 `privileged` 블록에만 담고 critic·belief 라벨에만 쓴다. 추론 모드에서
   이 블록이 들어오면 거부한다.

@@ -12,8 +12,9 @@
 
   <modules>
     <module>protocol</module>
+    <module>adapter/forge</module>
     <module>agent-core</module>
-    <module>adapter/forge-adapter</module>
+    <module>runner/forge</module>
   </modules>
 
   <properties>
@@ -36,6 +37,11 @@
       <dependency>
         <groupId>magicdosa</groupId>
         <artifactId>magicdosa-agent-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>magicdosa</groupId>
+        <artifactId>magicdosa-adapter-forge</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

@@ -1,30 +1,43 @@
 # forge-adapter implementation notes
 
-Implementation notes for `adapter/forge-adapter` (phase 1). Design decisions live in the design doc and in
+Implementation notes for the Forge side: `adapter/forge` (library, `magicdosa.adapter.forge`) and `runner/forge`
+(runner, `magicdosa.runner.forge`). Design decisions live in the design doc and in
 "1단계 프로토콜 설계 질문" (https://claude.ai/artifact/REeQ22B7Pbths95ensfD8D, Q1-Q16); this file only records how
 the adapter implements them and what is still approximate.
 
+## Modules (2026-11-10 split)
+
+`adapter/forge` is the Forge <-> protocol translation library; it does not depend on agent-core. agent-core depends on
+it (shadow game, search copies), and so does `runner/forge`, which plays the real games and also depends on agent-core
+(`GameCopier` for the copy checks, the in-process agent-core of the harnesses). The split changed no behaviour: the
+same seeds give byte-identical game logs.
+
 ## Pieces
 
-| Class | Role |
-| --- | --- |
-| `ForgeMatchRunner` | Bo3 match: creates each game through `GameCreation`, installs the controllers, runs the game, sends `GameOver` |
-| `ForgeGameSession` | One game as protocol: subscribes to Forge's event bus, per-seat event streams, turn-start snapshots, decision requests, the game log |
-| `EntityIds` | Per-game uint64 IDs. A new ID on every zone entry, found by comparing each card's zone with the last one seen (also catches moves Forge makes without an event); moves found together are issued by ascending previous ID (Q4) |
-| `CardKeys` | Card -> oracle_id (`oracle-ids.tsv`), face numbers, spell keys, ability keys. Printed abilities are matched to oracle-text paragraphs by word overlap; misses go to `ability-overrides.tsv` |
-| `ObservationBuilder` | `Observation` for one seat, `Privileged` for the log |
-| `ObservedAiController` | Forge AI that reports what it does: the opponent's actions for the agent seats' streams, and for agent seats the few methods left as intended delegations. Overrides every `PlayerController` decision method; unclassified ones are counted |
-| `RlPlayerController` | Agent seats, played the way a human plays (Forge's `PlaySpellAbility`) with agent-core answering every choice: see "Decisions" below and `docs/player-controller-methods.md` |
-| `AgentCostDecision` | The cards non-mana costs use (sacrifice, discard, exile, tap, return), asked of agent-core |
-| `ManaPayments` | Pool-only castability and payment checks (no auto-tap); they never change the pool |
-| `AgentLobbyPlayer` | Lobby player of every seat: when one player controls another (Emrakul), gives the controller that decides through agent-core |
-| `CandidateCheck` | Sampled check of the priority candidates against Forge's own pool payment on a game copy (`-Dmagicdosa.candidateCheck=N`) |
-| `DecisionClient` | The connection to agent-core: `GrpcDecisionClient` (Hello + one bidirectional stream per game; a failed stream fails every later call of that game, recorded as an unintended fallback) |
-| `ForgeRandom` | Per-thread seeded `MyRandom` (inheritable: Forge AI spawns a thread per decision) |
+| Class | Module | Role |
+| --- | --- | --- |
+| `ForgeGameSession` | adapter | One game as protocol: subscribes to Forge's event bus, per-seat event streams, turn-start snapshots, decision requests, the game log (through a `LogSink`) |
+| `EntityIds` | adapter | Per-game uint64 IDs. A new ID on every zone entry, found by comparing each card's zone with the last one seen (also catches moves Forge makes without an event); moves found together are issued by ascending previous ID (Q4) |
+| `CardKeys` | adapter | Card -> oracle_id (`oracle-ids.tsv`), face numbers, spell keys, ability keys. Printed abilities are matched to oracle-text paragraphs by word overlap; misses go to `ability-overrides.tsv` |
+| `ObservationBuilder` | adapter | `Observation` for one seat, `Privileged` for the log |
+| `ObservedAiController` | adapter | Forge AI that reports what it does: the opponent's actions for the agent seats' streams, and for agent seats the few methods left as intended delegations. Overrides every `PlayerController` decision method; unclassified ones are counted |
+| `AgentPlayerController` | adapter | The agent seats' decision layer (the design's `RlPlayerController`): played the way a human plays (Forge's `PlaySpellAbility`), every Forge question turned into a request through the session's `DecisionClient`, or answered without asking when it has one outcome: see "Decisions" below and `docs/player-controller-methods.md` |
+| `AgentCostDecision` | adapter | The cards non-mana costs use (sacrifice, discard, exile, tap, return), asked of agent-core |
+| `ManaPayments` | adapter | Pool-only castability and payment checks (no auto-tap); they never change the pool |
+| `AgentLobbyPlayer` | adapter | Lobby player of every seat: when one player controls another (Emrakul), gives the controller that decides through agent-core |
+| `DecisionClient` | adapter | Who answers the requests (interface) |
+| `LogSink` | adapter | Where log records go (interface; `DISCARD` drops them) |
+| `PriorityCheck` | adapter | Hook run on every agent-seat priority candidate list (the runner's checks; none by default) |
+| `GameCreation` | adapter | Every Forge game in a JVM is created under one lock (Game ID counter) |
+| `ForgeRandom` | adapter | Per-thread seeded `MyRandom` (inheritable: Forge AI spawns a thread per decision) |
+| `ForgeMatchRunner` | runner | Bo3 match: creates each game through `GameCreation`, installs the controllers, runs the game, sends `GameOver` |
+| `GrpcDecisionClient` | runner | The `DecisionClient` to agent-core: Hello + one bidirectional stream per game; a failed stream fails every later call of that game, recorded as an unintended fallback |
+| `GameLogWriter` | runner | The `LogSink` that writes a gzipped log file and its digest |
+| `CandidateCheck` | runner | `PriorityCheck`: sampled check of the priority candidates against Forge's own pool payment on a game copy (`-Dmagicdosa.candidateCheck=N`), and the copy check (`-Dmagicdosa.copyCheck=N`) |
 
 ## Tables
 
-- `src/main/resources/magicdosa/adapter/forge/oracle-ids.tsv` is generated: run
+- `adapter/forge/src/main/resources/magicdosa/adapter/forge/oracle-ids.tsv` is generated: run (adapter/forge test sources)
   `magicdosa.adapter.forge.tools.OracleTableBuilder <oracle-cards.jsonl.gz> <decks dir> forge/forge-gui/res <out>`
   with Scryfall's "Oracle Cards" bulk file. Tokens are resolved through Forge's edition `[tokens]` sections and one
   Scryfall API call per token print. Rebuild when decks change.
@@ -35,7 +48,7 @@ the adapter implements them and what is still approximate.
 - An ability a copy effect brought (Shifting Woodland as a copy of Urza's Saga) is matched against the copied card's
   text, also after the copy effect ended.
 
-## Harnesses (test sources, not run by mvn install; working directory forge/forge-gui)
+## Harnesses (runner/forge test sources, `magicdosa.runner.forge.harness`; not run by mvn install; working directory forge/forge-gui)
 
 Each harness takes an optional last argument for reaching agent-core: `spawn` (default: a separate agent-core JVM on
 a free localhost port, over gRPC), `host:port` (a running agent-core) or `local` (agent-core's game handling
@@ -135,7 +148,7 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
   since Forge changes the registered deck in place. The match context lists the opponents' cards seen in earlier games.
 - The order cost reductions apply in (601.2f; Forge `chooseSingleStaticAbility`, called by `CostAdjustment.adjust`
   once per reduction with the ones left; 2026-11-10 decision). A call is on a real payment only between
-  `RlPlayerController.payManaCost` (outside the adapter's own checks, `checkingCosts` false) and the start of
+  `AgentPlayerController.payManaCost` (outside the adapter's own checks, `checkingCosts` false) and the start of
   `applyManaToCost`: that is where Forge's `PlaySpellAbility.payManaCost` adjusts the cost it then pays. Every other
   call (the castability and look-ahead checks, Forge's test payments, Forge AI estimates on the agent seat's behalf)
   only computes a cost: it gets Forge AI's pick (the first), is counted, and is neither a decision nor a delegation.

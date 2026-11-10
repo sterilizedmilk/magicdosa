@@ -4,7 +4,7 @@ Every abstract method of Forge's `PlayerController` (forge@87cb532) and how the 
 (2026-11-06 plan, section 2: no unrecorded decision). Generated from the sources; regenerate when the controllers
 change.
 
-- **protocol decision**: `RlPlayerController` asks agent-core (decision type given). Choices with one possible
+- **protocol decision**: `AgentPlayerController` (adapter/forge) asks agent-core (decision type given). Choices with one possible
   outcome are made without asking.
 - **intended delegation (recorded)**: Forge AI answers and the decision log records it as an intended delegation.
 - **flow**: not a choice itself; the human-style play path whose choices are the other methods.

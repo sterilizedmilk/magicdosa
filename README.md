@@ -10,7 +10,8 @@ trained on Forge and meant to play through any engine that speaks its protocol.
 | `protocol/` | Java code generated from the protocol |
 | `agent-core/` | search, inference, shadow game (embedded Forge), encoder |
 | `agent-core/src/test/java/magicdosa/agent/{determinism,bench}` | reproduction harness and benchmarks (main programs, not run by `mvn install`) |
-| `adapter/forge-adapter/` | real Forge games for training |
+| `adapter/forge/` | Forge <-> protocol translation library (used by runner/forge and agent-core) |
+| `runner/forge/` | real Forge games for training and gates |
 | `python/magicdosa` | training, evaluation, ONNX export (a separate project: open `python/` on its own) |
 | `decks/` | test decks |
 | `forge/` | Forge as a git submodule, pinned to the commit everything is built against |

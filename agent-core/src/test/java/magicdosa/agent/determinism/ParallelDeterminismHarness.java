@@ -1,6 +1,6 @@
 package magicdosa.agent.determinism;
 
-import magicdosa.agent.shadow.GameCreation;
+import magicdosa.adapter.forge.GameCreation;
 
 import forge.deck.Deck;
 import magicdosa.agent.DeckFiles;
