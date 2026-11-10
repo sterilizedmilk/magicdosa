@@ -144,6 +144,11 @@ public class ObservedAiController extends PlayerControllerAi {
      */
     private volatile boolean weighing;
 
+    /** Whether Forge AI of this seat is weighing its own action now (its questions to others are estimates). */
+    public boolean isWeighing() {
+        return weighing;
+    }
+
     /**
      * How many public choices this controller is answering now. A choice asked while answering another one (Forge AI
      * answers "choose cards" by choosing them one by one) is the controller's own way of answering: not reported.
@@ -1322,6 +1327,11 @@ public class ObservedAiController extends PlayerControllerAi {
     @Override
     public Mana chooseManaFromPool(List<Mana> manaChoices) {
         unclassified("chooseManaFromPool");
+        return super.chooseManaFromPool(manaChoices);
+    }
+
+    /** Forge AI's own pick of pool mana, for a caller that has classified the call itself. */
+    protected Mana forgeAiManaFromPool(List<Mana> manaChoices) {
         return super.chooseManaFromPool(manaChoices);
     }
 

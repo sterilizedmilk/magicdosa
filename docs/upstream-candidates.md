@@ -1,0 +1,63 @@
+# Forge upstream PR candidates
+
+Problems in Forge that we work around in our code. `forge/` is never modified (CLAUDE.md). Each entry: what, where,
+evidence, our workaround, the fix we would propose upstream. Newest first.
+
+## 1. Global ability ID counters are not thread-safe (2026-11-11)
+
+- **Where:** `SpellAbility.maxId` / `nextId()` is `++maxId` on a plain `static int`. `Trigger`, `StaticAbility`,
+  `ReplacementEffect` and `SpellAbilityStackInstance` work the same way. `Game.maxId` too; we already route game
+  creation through `magicdosa.adapter.forge.GameCreation` for that one.
+- **Why it matters:** `SpellAbility.equals` / `hashCode` compare only `id`, and `Trigger.hashCode` uses only `id` too.
+  Two threads that run `++maxId` at the same time can lose an increment, so later IDs are handed out twice. When both
+  abilities end up in one game, two different abilities are "equal". Lists and maps that hold abilities then drop one
+  or swap them.
+- **Evidence:**
+  - Of the 160 matches of an AllPairings 16 x 10 run on 8 threads in one JVM, 47 do not replay identically on one
+    thread with the same seeds (`runner/forge` harness `ReplayCheck`).
+  - Taking Forge AI's wall-clock limit out (AI_TIMEOUT 600 on every game) does not make the run reproducible.
+  - Symptoms in the logged real games:
+    - AzoriousControl mirror m7 game 2: an evoked Solitude entered with neither its evoke sacrifice trigger nor its
+      ETB trigger, and stayed on the battlefield.
+    - Broodscale vs AzoriousControl m2 game 2: Ugin's Labyrinth entered without its imprint trigger.
+  - The single-thread replay of the same match does trigger them, and so does the shadow game.
+  - The agent-core sequential determinism harness also shows this. Its informational 8-thread line reports 29 of 40
+    matches different from the sequential run.
+- **Our side (decision 2026-11-11):** run parallel Forge games as separate JVM processes, one game at a time per JVM.
+  This applies to the runner, the gates, agent-core and ShadowCheck. We go back to threads once the fix below is in
+  the Forge commit we pin.
+- **Fix upstream:** `AtomicInteger` counters, or per-game counters.
+
+## 2. Two private steps of the game start (2026-11-11)
+
+- **Where:** `GameAction.runPreOpeningHandActions(Player)` and `GameAction.runOpeningHandActions(Player)` are
+  private.
+- **Our use:** the shadow game rebuilt at the game-start snapshot plays the rest of `GameAction.startGame` itself. It
+  calls these two methods by reflection, read-only.
+- **Fix upstream:** make them public, or expose a "continue the game start from here" entry point.
+
+## 3. GameMemento cost (2026-11-11)
+
+- **Measured:**
+  - Capture takes 25-40 ms per turn start, because of the reflective walk over the game.
+  - Restore takes about 12 ms.
+  - 16 pairings x 10: 12,901 captures, 38.4 ms each on 8 threads.
+- **Our use:** the shadow game takes one capture per turn start.
+- **Fix upstream:** a cheaper capture, such as dirty tracking or a cached per-class plan.
+
+## 4. GameMemento restore leaves a stale ability host (2026-11-11, minimal repro still to write)
+
+- **What:** after `GameMemento.restore()`, Solitude's lazily rebuilt evoke `SpellAbility` was hosted by a battlefield
+  copy of the card. `Spell.canPlayFromHost` then refused to cast it from hand.
+- **Not caused by item 1:** it is also seen in a single-thread run.
+- **Our workaround:** `ShadowGame.repairHosts()` gives every ability, trigger and static ability of every card its
+  own card back as host. It made 4 repairs in 336 games.
+
+## 5. GameCopier / Combat copy gaps (2026-11-10)
+
+- **Sideboard statics:** devoid is a static ability that works in every zone. Devoid cards in the sideboard register
+  static effects whose source card the copier does not copy.
+- **Combat:** a planeswalker token that attacked and then left (the Jace token) stays among Combat's attackable
+  defenders, and the copier fails to map it.
+- **Our workaround:** our `GameCopier` copies the sideboard zone, and it gives such a card the same id -1 stand-in
+  Forge uses. Details are in `docs/forge-adapter.md`.

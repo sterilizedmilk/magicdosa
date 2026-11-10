@@ -125,6 +125,8 @@ public class ReplayAiController extends ObservedAiController {
                         if (own != null && own.size() == 1 && sameAction(own.get(0), e)) {
                             source.consume(seat);
                             aiPrepared = own.get(0);
+                            preparedPayment = e.getBodyCase() == Event.BodyCase.CAST_SPELL ? e.getCastSpell().getPaymentList()
+                                : e.getActivateAbility().getPaymentList();
                             return own;
                         }
                     }
@@ -165,7 +167,19 @@ public class ReplayAiController extends ObservedAiController {
             return null;
         }
         List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(new CardCollection(c), player);
-        for (SpellAbility sa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player)) {
+        List<SpellAbility> options = ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player);
+        // first the ones whose cost uses other cards exactly when the recorded one did (mana cost or alternative cost)
+        for (boolean strict : new boolean[] {true, false}) {
+            SpellAbility found = action(e, c, options, strict);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private SpellAbility action(Event e, Card c, List<SpellAbility> options, boolean strict) {
+        for (SpellAbility sa : options) {
             sa.setActivatingPlayer(player);
             switch (e.getBodyCase()) {
                 case PLAY_LAND -> {
@@ -176,7 +190,8 @@ public class ReplayAiController extends ObservedAiController {
                     }
                 }
                 case CAST_SPELL -> {
-                    if (sa.isSpell() && session.keys().spellKey(sa).equals(e.getCastSpell().getSpell())) {
+                    if (sa.isSpell() && session.keys().spellKey(sa).equals(e.getCastSpell().getSpell())
+                            && (!strict || usesCards(sa) == e.getCastSpell().getCostIdsCount() > 0)) {
                         pendingCast = e.getCastSpell();
                         pendingActivation = null;
                         if (e.getCastSpell().hasX()) {
@@ -187,7 +202,8 @@ public class ReplayAiController extends ObservedAiController {
                 }
                 case ACTIVATE_ABILITY -> {
                     if (!sa.isSpell() && !sa.isManaAbility() && !sa.isLandAbility()
-                            && e.getActivateAbility().getAbility().equals(session.keys().abilityKey(sa))) {
+                            && e.getActivateAbility().getAbility().equals(session.keys().abilityKey(sa))
+                            && (!strict || usesCards(sa) == e.getActivateAbility().getCostIdsCount() > 0)) {
                         pendingActivation = e.getActivateAbility();
                         pendingCast = null;
                         if (e.getActivateAbility().hasX()) {
@@ -209,17 +225,37 @@ public class ReplayAiController extends ObservedAiController {
 
     /** An action Forge AI chose and prepared itself, the same as the recorded one. */
     private SpellAbility aiPrepared;
+    /** The recorded payment of the action Forge AI prepared. */
+    private List<magicdosa.protocol.v1.ManaPayment> preparedPayment;
 
     private boolean sameAction(SpellAbility sa, Event e) {
         Card host = player.getGame().getCardState(sa.getHostCard());
         if (e.getBodyCase() == Event.BodyCase.CAST_SPELL) {
             CastSpell c = e.getCastSpell();
             return sa.isSpell() && host == card(c.getCardId()) && session.keys().spellKey(sa).equals(c.getSpell())
-                && session.targets(sa).equals(c.getTargetsList()) && session.modes(sa).equals(c.getModesList());
+                && session.targets(sa).equals(c.getTargetsList()) && session.modes(sa).equals(c.getModesList())
+                && usesCards(sa) == c.getCostIdsCount() > 0;
         }
         ActivateAbility a = e.getActivateAbility();
         return !sa.isSpell() && host == card(a.getSourceId()) && a.getAbility().equals(session.keys().abilityKey(sa))
-            && session.targets(sa).equals(a.getTargetsList());
+            && session.targets(sa).equals(a.getTargetsList()) && usesCards(sa) == a.getCostIdsCount() > 0;
+    }
+
+    /**
+     * Whether the action's cost uses other cards (exile, discard, sacrifice, tap or return them): the same spell can be
+     * cast by its mana cost or by an alternative cost that exiles a card (Force of Negation), under one spell key.
+     */
+    private static boolean usesCards(SpellAbility sa) {
+        if (sa.getPayCosts() == null) {
+            return false;
+        }
+        for (forge.game.cost.CostPart part : sa.getPayCosts().getCostParts()) {
+            if (part instanceof forge.game.cost.CostPartWithList && !part.payCostFromSource()
+                    && !(part instanceof forge.game.cost.CostPartMana)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Casts or activates the recorded action the way Forge AI does, with the recorded targets. */
@@ -227,6 +263,16 @@ public class ReplayAiController extends ObservedAiController {
     public boolean playChosenSpellAbility(SpellAbility sa) {
         if (sa == aiPrepared) {
             aiPrepared = null;
+            // the recorded mana sources make their mana first; Forge AI pays from the pool before it taps anything
+            // itself (otherwise it may tap other sources than the real game did: a Talisman instead of a land)
+            if (preparedPayment != null) {
+                for (magicdosa.protocol.v1.ManaPayment piece : preparedPayment) {
+                    if (piece.hasAbility()) {
+                        makeMana(piece.getAbility());
+                    }
+                }
+                preparedPayment = null;
+            }
             return super.playChosenSpellAbility(sa); // as in the real game
         }
         if (sa.isLandAbility() || sa.isManaAbility()) {

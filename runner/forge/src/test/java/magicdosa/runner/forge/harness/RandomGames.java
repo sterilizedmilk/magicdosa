@@ -60,7 +60,8 @@ public final class RandomGames {
         initForge();
         CardKeys keys = CardKeys.load();
         AgentConnection agent = AgentConnection.open(agentSpec);
-        Summary s = run(deckDir, args[1], args[2], matches, logDir, agent, keys);
+        // optional 7th argument: match ID prefix (default "m"), as AllPairings names its matches
+        Summary s = run(deckDir, args[1], args[2], matches, logDir, agent, keys, args.length > 6 ? args[6] : "m");
         agent.close(); // a spawned agent-core reports the protocol errors it saw when it stops
         int protocolErrors = agent.protocolErrorCount();
         List<String> lines = new ArrayList<>(s.lines());
@@ -87,7 +88,8 @@ public final class RandomGames {
                        CardKeys keys, String matchPrefix) throws Exception {
         Deck deck0 = DeckFiles.load(new File(deckDir, deck0Name));
         Deck deck1 = DeckFiles.load(new File(deckDir, deck1Name));
-        ForgeMatchRunner runner = new ForgeMatchRunner(agent.client(), keys, Mode.MODE_TRAINING, "forge@87cb532", false);
+        ForgeMatchRunner runner = new ForgeMatchRunner(agent.client(), keys, Mode.MODE_TRAINING, "forge@87cb532",
+            Boolean.getBoolean("magicdosa.reproducible")); // debugging: Forge AI without its wall-clock limit
         DecisionStats total = new DecisionStats();
         int[] matchWins = new int[2];
         int[] gameWins = new int[2];

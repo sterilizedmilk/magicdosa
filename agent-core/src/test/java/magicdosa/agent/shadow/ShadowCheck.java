@@ -29,7 +29,19 @@ import java.util.stream.Stream;
  *     "-Dexec.args=&lt;abs log dir&gt; [--threads N] [--regen] [--limit N]"</pre>
  */
 public final class ShadowCheck {
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        // Forge leaves non-daemon threads: exit explicitly, also when the check fails
+        int code = 1;
+        try {
+            run(args);
+            code = 0;
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+        System.exit(code);
+    }
+
+    private static void run(String[] args) throws Exception {
         Path dir = Path.of(args[0]);
         int threads = 1;
         boolean regen = false;
@@ -74,7 +86,7 @@ public final class ShadowCheck {
     }
 
     private static void report(Path dir, List<ShadowGame.Result> results, boolean regen, int threads) throws IOException {
-        long libFix = 0;
+        long libFix = 0, hostFix = 0, poolFix = 0;
         long afterRecovery = 0, skipped = 0, rec1 = 0, rec2 = 0, rec3 = 0, mementos = 0, mementoNanos = 0, restoreNanos = 0;
         long decisions = 0, matched = 0, snapshots = 0, snapMatched = 0, events = 0, evMatched = 0, critical = 0,
             minorOnly = 0, errors = 0, millis = 0, rebuilds = 0, withGaps = 0;
@@ -90,6 +102,8 @@ public final class ShadowCheck {
             rec3 += r.recoveries3;
             mementos += r.mementos;
             libFix += r.libraryCorrections;
+            hostFix += r.hostRepairs;
+            poolFix += r.poolOrders;
             mementoNanos += r.mementoNanos;
             restoreNanos += r.restoreNanos;
             matched += r.decisionsMatched;
@@ -127,8 +141,9 @@ public final class ShadowCheck {
                     + "); search skipped " + skipped + " (" + pct(skipped, decisions) + "); recoveries: memento " + rec1
                     + ", rebuild " + rec2 + ", search skip " + rec3);
                 s.println("turn-start mementos: " + mementos + ", " + String.format("%.2f", mementos == 0 ? 0 : mementoNanos / 1e6 / mementos)
-                    + " ms each; restores took " + String.format("%.1f", restoreNanos / 1e6) + " ms in all");
-                s.println("library orders taken from the hidden state at a decision (verification 1): " + libFix);
+                    + " ms each; restores took " + String.format("%.1f", restoreNanos / 1e6) + " ms in all; ability hosts repaired after restores: " + hostFix);
+                s.println("library orders taken from the hidden state at a decision or turn start (verification 1): " + libFix);
+                s.println("mana pools put in the real (public) order at a decision: " + poolFix);
                 s.println("turn-start snapshots: " + snapMatched + " of " + snapshots + " match (" + pct(snapMatched, snapshots) + ")");
                 s.println("events (diagnostic): " + evMatched + " of " + events + " identical (" + pct(evMatched, events) + ")");
                 s.println("rebuilds: " + rebuilds + "; streams with builder gaps: " + withGaps);
@@ -139,12 +154,26 @@ public final class ShadowCheck {
                 boolean pass = errors == 0 && matched == decisions && snapMatched == snapshots && decisions > 0;
                 s.println("RESULT " + (pass ? "PASS" : "FAIL"));
                 s.println();
+                // by pairing (game names <deck>-vs-<deck>-m<N>-g<N>): first try and after recovery
+                Map<String, int[]> pairings = new java.util.TreeMap<>();
+                for (ShadowGame.Result r : results) {
+                    String pairing = r.game.replaceAll("-m\\d+-g\\d+.*$", "");
+                    int[] c = pairings.computeIfAbsent(pairing, k -> new int[3]);
+                    c[0] += r.decisions;
+                    c[1] += r.decisionsMatched;
+                    c[2] += r.decisionsMatchedAfterRecovery;
+                }
+                s.println("by pairing: decisions, first try, after recovery");
+                pairings.forEach((name, c) -> s.printf("  %-40s %6d  %6.2f%%  %6.2f%%%n", name, c[0],
+                    100.0 * c[1] / Math.max(1, c[0]), 100.0 * c[2] / Math.max(1, c[0])));
+                s.println();
                 for (ShadowGame.Result r : results) {
                     boolean clean = r.error == null && r.decisionsMatched == r.decisions && r.snapshotsMatched == r.snapshots;
                     if (clean && r.replayMismatches.isEmpty() && r.eventSamples.isEmpty()) {
                         continue;
                     }
-                    s.println("== " + r.game + ": decisions " + r.decisionsMatched + "/" + r.decisions + ", snapshots "
+                    s.println("== " + r.game + ": decisions " + r.decisionsMatched + "/" + r.decisions + " (after recovery " + r.decisionsMatchedAfterRecovery
+                        + "), snapshots "
                         + r.snapshotsMatched + "/" + r.snapshots + ", events " + r.eventsMatched + "/" + r.events
                         + ", end: " + r.end);
                     if (r.error != null) {

@@ -204,11 +204,6 @@ public class AgentPlayerController extends ObservedAiController {
         return out;
     }
 
-    /** Debugging (shadow probe): the priority actions this controller would offer now. */
-    public List<SpellAbility> debugLegalActions() {
-        return legalActions();
-    }
-
     private PotentialCast potentialCast(SpellAbility sa) {
         PotentialCast.Builder p = PotentialCast.newBuilder().setSourceId(session.ids().idOf(sa.getHostCard()));
         if (sa.isSpell()) {
@@ -1482,11 +1477,27 @@ public class AgentPlayerController extends ObservedAiController {
             : possibleReplacers.get(chosen.get(0));
     }
 
+    /** Whether Forge AI of another seat is weighing its own action right now. */
+    private boolean otherSeatWeighing() {
+        for (Player p : player.getGame().getPlayers()) {
+            if (p != player && p.getController() instanceof ObservedAiController o && o.isWeighing()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** One of several pool mana an effect may use (MANA_PAYMENT). */
     @Override
     public Mana chooseManaFromPool(List<Mana> manaChoices) {
         if (manaChoices.size() <= 1) {
             return manaChoices.isEmpty() ? null : manaChoices.get(0);
+        }
+        if (otherSeatWeighing()) {
+            // Forge AI of another seat estimates whether this seat can pay (a test payment from this seat's pool,
+            // undone at once): part of that AI's own weighing, not a choice in the game. Intended delegation.
+            session.delegated(player, "chooseManaFromPool(estimate)", DecisionType.DECISION_TYPE_MANA_PAYMENT, null);
+            return forgeAiManaFromPool(manaChoices);
         }
         List<Candidate> candidates = new ArrayList<>();
         manaChoices.forEach(m -> candidates.add(Candidate.newBuilder().setPoolMana(observations().poolMana(m)).build()));

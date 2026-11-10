@@ -59,7 +59,7 @@ mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.AgentCore" "-Dexe
 mvn -pl runner/forge exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, agent-core를 별도 JVM으로 띄움, 비의도 폴백 0이면 PASS)
 mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
 mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
-mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 1단계 최종 게이트 (16조합, 병렬)
+mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 16조합 게이트. --threads는 스레드 병렬이라 판정에 쓰지 않음(프로세스 병렬 실행기로 교체 예정)
 cd python; pip install -e ".[dev]"
 ```
 
@@ -78,7 +78,7 @@ agent-core 연결을 고른다: `spawn`(기본, 별도 JVM + gRPC), `host:port`,
 ## Forge 규칙
 
 - `forge/` 안은 수정하지 않고, Forge 클래스를 바꿔 끼우는 패치도 만들지 않는다.
-- Forge 문제는 우리 코드에서 우회하거나 업스트림 PR 후보로 사용자에게 알린다.
+- Forge 문제는 우리 코드에서 우회하거나 업스트림 PR 후보로 사용자에게 알린다. 후보는 `docs/upstream-candidates.md`에 모은다.
 - 서브모듈 커밋을 올리면 `agent-core`의 `GameCopier`에 업스트림 변경을 반영하고 순차 재현 하네스를 돌려
   `different=0`을 확인한다.
 - 성능 문제는 포크에서 따로 고치지 않는다. 측정 자료를 남기고 사용자에게 알린다(업스트림 논의 대상).
@@ -130,7 +130,11 @@ vocab 3). 최종 게이트 AllPairings 16×60(8스레드) PASS: 비의도 폴백
 **2단계: 그림자 추적, Forge 대 Forge 지문 검증.** 범위와 게이트는 설계 문서 개요 탭의 2단계 단락, 구조는
 그림자·탐색 탭.
 
-- 게이트(AllPairings)는 `--threads`로 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
+- 게이트(AllPairings)는 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
+- **병렬은 프로세스 단위 (2026-11-11 결정):** 한 JVM에서 Forge 게임을 여러 스레드로 동시에 돌리면 게임끼리 간섭한다
+  (Forge 능력 ID 전역 카운터가 스레드 안전하지 않음, `docs/upstream-candidates.md` 1번). 실행기·게이트·agent-core·
+  ShadowCheck는 JVM 하나에 한 번에 게임 하나만 돌리고, 병렬은 프로세스를 여러 개 띄워서 한다. `--threads`로 낸 결과는
+  게이트 판정에 쓰지 않는다. 업스트림 수정이 고정 커밋에 들어오면 스레드 병렬로 돌아온다.
 - 엔진 거부는 0건이 목표다. 거부가 한 건이라도 나오면 어댑터 결함으로 본다(재요청은 안전망).
 
 ## 작업 규칙

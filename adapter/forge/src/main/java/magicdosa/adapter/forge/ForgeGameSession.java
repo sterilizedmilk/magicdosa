@@ -322,6 +322,54 @@ public final class ForgeGameSession {
     }
 
     /** The request with its observation built again from the game as it is now (shadow recovery test). */
+    /**
+     * Shadow games: puts the seat's mana pool in the order {@code order} gives (the same mana as observed in the real
+     * game), without events. A pool's order is public; Forge pays from it in order, so a different order spends other
+     * mana later. Returns false (and changes nothing) when the pools do not hold the same mana or the order is the same.
+     */
+    public boolean orderPool(int seat, List<magicdosa.protocol.v1.PoolMana> order) {
+        Player p = null;
+        for (Player x : game.getRegisteredPlayers()) {
+            if (seat(x) == seat) {
+                p = x;
+            }
+        }
+        if (p == null) {
+            return false;
+        }
+        List<forge.game.mana.Mana> now = new ArrayList<>();
+        p.getManaPool().forEach(now::add);
+        if (now.size() != order.size()) {
+            return false;
+        }
+        List<forge.game.mana.Mana> left = new ArrayList<>(now);
+        List<forge.game.mana.Mana> out = new ArrayList<>();
+        for (magicdosa.protocol.v1.PoolMana want : order) {
+            forge.game.mana.Mana found = null;
+            for (forge.game.mana.Mana m : left) {
+                if (observations.poolMana(m).equals(want)) {
+                    found = m;
+                    break;
+                }
+            }
+            if (found == null) {
+                return false;
+            }
+            left.remove(found);
+            out.add(found);
+        }
+        if (out.equals(now)) {
+            return false;
+        }
+        for (forge.game.mana.Mana m : now) {
+            p.getManaPool().removeManaNoEvent(m);
+        }
+        for (forge.game.mana.Mana m : out) {
+            p.getManaPool().addManaNoEvent(m);
+        }
+        return true;
+    }
+
     public DecisionRequest reask(DecisionRequest r) {
         return r.toBuilder().setObservation(observations.build(r.getSeat())).build();
     }

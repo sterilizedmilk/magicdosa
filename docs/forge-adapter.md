@@ -198,6 +198,44 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
   Forge AI opponent reruns on the same seed; the Forge AI baseline keeps its own play path. Replaying the opponent
   comes in phase 2 as event-log replay, reusing the shadow game's re-apply of the turn's event stream.
 
+## Protocol 9 and the shadow game (phase 2, 2026-11-10)
+
+- `ResolutionChoice.values` (`ChoiceValue`: flag / number / text) carries the public part of a choice made while
+  something resolves: chosen objects, modes (oracle order), numbers, colors, counter kinds, yes/no; scry = how many
+  on top; surveil = the cards put in the graveyard + count on top; order into a library = count only; damage
+  division = recipients + amounts. Every public choice is reported once, from a `final` wrapper per method in
+  `ObservedAiController` that calls `answerX(...)` (overridden by `AgentPlayerController` and `ReplayAiController`).
+  Not reported: choices with one possible answer, choices Forge AI asks while it weighs its own action (`weighing`),
+  and choices asked while another choice is being answered (`answering > 0`).
+- Fixes found by the shadow, in the real adapter: `ActivateAbility.source_id` is the source's ID when the activation
+  began (a fetchland sacrificed as a cost); special actions (a companion put into hand) emit `ActivateAbility` with
+  `ability_id` 0; `cost_ids` is filled (the cards a cost used, by their ID before the cost moved them);
+  `MatchContext.starting_seat` comes from the game start; a privileged record is written at every turn-start snapshot.
+- `SnapshotBuilder` (adapter): a Forge game from a turn-start snapshot (+ the privileged record for hidden cards).
+  All cards of a seat are created in the order of their first entity ID (Forge breaks ties between equal cards by its
+  card ID), then placed and put in the real zone order; the companion effect is rebuilt. Other effects (lasting
+  effects, delayed triggers, exile links) are gaps, counted per kind.
+- `ReplayAiController` (adapter): the other seat in a shadow game. Recorded actions, attackers, blockers, trigger
+  order, mulligans and public choices come from the stream (`ReplaySource`). For a recorded cast or activation Forge
+  AI chooses first (same state, same action its own way); otherwise the action is played the human way with the
+  recorded targets, modes, X and cost cards (`RecordedCost`), and the recorded mana sources are activated inside the
+  payment. Library arrangements take the real order where the source knows it (verification 1).
+- `StateCopy` (adapter): reflective copy of a plain object's fields (our session, the controllers) for the shadow's
+  turn-start checkpoint, next to Forge's `GameMemento`.
+- The shadow game itself is agent-core `magicdosa.agent.shadow.ShadowGame`; harness `ShadowCheck` (agent-core test
+  sources) runs it over a folder of gate logs (verification 1: hidden information from the privileged records) and
+  reports by pairing (first try, after recovery).
+- When Forge AI of the other seat, weighing its own action, test-pays from an agent seat's pool
+  (`chooseManaFromPool` on the agent's controller, refunded at once), the agent is not asked: intended delegation
+  `chooseManaFromPool(estimate)` (2026-11-11). It is not a choice in the game, and a shadow (whose replayed seat does
+  not weigh) could never ask it.
+- Several Forge games running at the same time in one JVM affect each other (Forge's global SpellAbility / Trigger /
+  StaticAbility / ReplacementEffect ID counters are not thread-safe, and abilities compare by that ID): a parallel
+  gate run on threads is not reproducible on one thread, and real games of it lost triggers. Measurements of the
+  shadow use one JVM per pairing (`RandomGames ... local <match prefix>` with `-Dmagicdosa.reproducible=true`).
+  Harness `ReplayCheck` replays a gate run's logs on one thread and lists the matches that differ. Open question for
+  the runner and agent-core (see the phase-2 report).
+
 ## Fields and events (2026-11-06 plan, section 3)
 
 - Chosen modes (0-based, oracle order) in `CastSpell`, `ActivateAbility`, `TriggeredAbilityStacked` and stack items.

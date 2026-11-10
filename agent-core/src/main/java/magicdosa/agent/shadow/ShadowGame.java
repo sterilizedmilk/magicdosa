@@ -53,16 +53,27 @@ import java.util.TreeMap;
 public final class ShadowGame {
     /** Unwinds the shadow thread (an Error, so that Forge's catch (Exception) blocks do not swallow it). */
     static final class Unwind extends Error {
-        /** END: stop; RESTORE: recovery ① (turn-start memento, the turn again); REBUILD: rebuild from a real snapshot. */
-        enum Kind { END, RESTORE, REBUILD }
+        /**
+         * END: stop; RESTORE: recovery ① (turn-start memento, the turn again); REBUILD: rebuild from a real snapshot;
+         * NEXT_TURN: recovery ③ when the shadow cannot go on in this turn: the rest of the turn is decided without
+         * search, and tracking resumes from the real snapshot of the next turn.
+         */
+        enum Kind { END, RESTORE, REBUILD, NEXT_TURN }
 
         final String why;
         final Kind kind;
+        /** NEXT_TURN: the real turn the shadow gave up in. */
+        final int turn;
 
         Unwind(String why, Kind kind) {
+            this(why, kind, -1);
+        }
+
+        Unwind(String why, Kind kind, int turn) {
             super(why, null, false, false);
             this.why = why;
             this.kind = kind;
+            this.turn = turn;
         }
     }
 
@@ -71,9 +82,11 @@ public final class ShadowGame {
         public final String game;
         /** Decisions as first asked (the gate) and after recovery; decided without search after recovery failed. */
         public int decisions, decisionsMatched, decisionsMatchedAfterRecovery, searchSkipped;
+        /** Decisions where a mana pool took the real order (verification of public state; counted). */
+        public int poolOrders;
         /** Recoveries: ① memento and the turn again, ② rebuild from the turn-start snapshot, ③ search skip. */
         public int recoveries1, recoveries2, recoveries3;
-        public int mementos, libraryCorrections;
+        public int mementos, libraryCorrections, hostRepairs;
         public long mementoNanos, restoreNanos;
         public final Map<Fingerprint.Level, Integer> mismatchesByLevel = new TreeMap<>();
         public int criticalMismatches, minorOnlyMismatches;
@@ -114,6 +127,9 @@ public final class ShadowGame {
             r.events = events;
             r.eventsMatched = eventsMatched;
             r.rebuilds = rebuilds;
+            r.hostRepairs = hostRepairs;
+            r.poolOrders = poolOrders;
+            r.libraryCorrections = libraryCorrections;
             r.gaps.addAll(new ArrayList<>(gaps));
             r.replayMismatches.addAll(new ArrayList<>(replayMismatches));
             r.samples.addAll(new ArrayList<>(samples));
@@ -268,6 +284,28 @@ public final class ShadowGame {
                         restore(turnStart);
                         continue;
                     }
+                    if (u.kind == Unwind.Kind.NEXT_TURN) {
+                        GameRecord.Snapshot next = null;
+                        for (GameRecord.Snapshot x : rec.snapshots) {
+                            if (x.snapshot().getObservation().getGame().getTurn() > u.turn) {
+                                next = x;
+                                break;
+                            }
+                        }
+                        if (next == null) {
+                            // no later turn start: the rest of the game is decided without search
+                            skipDecisions(rec.decisions.size());
+                            result.end = u.why + " (no later turn start)";
+                            eventCounts(firstSeq);
+                            return;
+                        }
+                        int from = decisionIdx;
+                        rebuild(next);
+                        int to = decisionIdx;
+                        decisionIdx = from;
+                        skipDecisions(to);
+                        continue;
+                    }
                     // recovery ②, a turn start that does not match, or forced per-turn regeneration (measurement):
                     // rebuild from the real snapshot of the turn
                     int turn = u.kind == Unwind.Kind.RESTORE ? game.getPhaseHandler().getTurn() : lastComparedTurn;
@@ -311,6 +349,11 @@ public final class ShadowGame {
         if (dir == null) {
             return;
         }
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(dir));
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
         try (var out = new java.io.PrintWriter(java.nio.file.Files.newBufferedWriter(
                 java.nio.file.Path.of(dir, rec.header.getGameId() + "-seat" + viewer + ".txt")))) {
             Map<Long, Event> shadow = new TreeMap<>();
@@ -335,6 +378,16 @@ public final class ShadowGame {
         result.decisions = firstTry.size();
         result.decisionsMatched = (int) firstTry.values().stream().filter(x -> x).count();
         result.decisionsMatchedAfterRecovery = (int) lastTry.values().stream().filter(x -> x).count();
+    }
+
+    /** Recovery ③ past the shadow: the real decisions up to {@code to} (exclusive) are decided without search. */
+    private void skipDecisions(int to) {
+        while (decisionIdx < to) {
+            long id = rec.decisions.get(decisionIdx++).record().getRequest().getDecisionId();
+            firstTry.putIfAbsent(id, false);
+            lastTry.put(id, false);
+            result.searchSkipped++;
+        }
     }
 
     private GameRecord.Snapshot snapshotOfTurn(int turn) {
@@ -382,35 +435,13 @@ public final class ShadowGame {
         game.getTriggerHandler().runTrigger(forge.game.trigger.TriggerType.NewGame, forge.game.ability.AbilityKey.newMap(), true);
         game.setStartingPlayer(goesFirst);
         game.getPhaseHandler().setupFirstTurn(goesFirst, null);
-        if (Boolean.getBoolean("magicdosa.shadowProbe")) {
-            probe();
-            if (game.getRegisteredPlayers().get(viewer).getController() instanceof AgentPlayerController apc) {
-                System.out.println("PROBE pregame legal " + apc.debugLegalActions());
-            }
-        }
-    }
-
-    /** Debugging: why each hand card's spells of the seat are or are not castable now. */
-    private void probe() {
-        Player me = game.getRegisteredPlayers().get(viewer);
-        for (Card c : me.getCardsIn(ZoneType.Hand)) {
-            var all = forge.ai.ComputerUtilAbility.getSpellAbilities(new forge.game.card.CardCollection(c), me);
-            for (var sa : forge.ai.ComputerUtilAbility.getOriginalAndAltCostAbilities(all, me)) {
-                sa.setActivatingPlayer(me);
-                System.out.println("PROBE " + c + " | " + sa + " | restrictions " + sa.checkRestrictions(c, me)
-                    + " canPlay " + sa.canPlay() + " addl " + forge.game.cost.CostPayment.canPayAdditionalCosts(sa.getPayCosts(), sa, false)
-                    + " altCost " + sa.isAlternativeCost(forge.game.spellability.AlternativeCost.Evoke)
-                    + " legalAfterStack " + sa.isLegalAfterStack() + " targetable " + forge.ai.ComputerUtilAbility.isFullyTargetable(sa)
-                    + " payable " + magicdosa.adapter.forge.ManaPayments.payableNow(me, sa));
-            }
-        }
     }
 
     private void loop() {
         PhaseHandler ph = game.getPhaseHandler();
         while (!game.isGameOver()) {
             // the turn-start checkpoint: a loop boundary in the cleanup step of the turn before (2026-11-10 decision)
-            if (ph.getPhase() == PhaseType.CLEANUP && game.getStack().isEmpty() && !Boolean.getBoolean("magicdosa.shadowNoMemento")) {
+            if (ph.getPhase() == PhaseType.CLEANUP && game.getStack().isEmpty()) {
                 candidate = checkpoint();
             }
             int turn = ph.getTurn();
@@ -436,10 +467,47 @@ public final class ShadowGame {
         return tp;
     }
 
+    /**
+     * After a GameMemento restore, a card's (lazily rebuilt) keyword abilities can point to a copy of the card made
+     * during the turn that was undone (seen: Solitude's evoke spell hosted by its battlefield copy, so Forge refuses to
+     * cast it from hand). Every ability, trigger and static ability of every card is given back its own card as host.
+     * A GameMemento issue (upstream candidate, see the report); our code only works around it.
+     */
+    private int repairHosts() {
+        int repaired = 0;
+        List<Card> all = new ArrayList<>();
+        game.getCardsInGame().forEach(all::add);
+        for (Player p : game.getRegisteredPlayers()) {
+            p.getCardsIn(ZoneType.Sideboard).forEach(all::add);
+        }
+        for (Card c : all) {
+            for (var sa : c.getSpellAbilities()) {
+                if (sa.getHostCard() != c && sa.getHostCard() != null && sa.getHostCard().getId() == c.getId()) {
+                    sa.setHostCard(c);
+                    repaired++;
+                }
+            }
+            for (var t : c.getTriggers()) {
+                if (t.getHostCard() != c && t.getHostCard() != null && t.getHostCard().getId() == c.getId()) {
+                    t.setHostCard(c);
+                    repaired++;
+                }
+            }
+            for (var st : c.getStaticAbilities()) {
+                if (st.getHostCard() != c && st.getHostCard() != null && st.getHostCard().getId() == c.getId()) {
+                    st.setHostCard(c);
+                    repaired++;
+                }
+            }
+        }
+        return repaired;
+    }
+
     /** Recovery ①: back to the turn-start checkpoint, the record cursors with it. */
     private void restore(TurnPoint tp) {
         long t0 = System.nanoTime(); // measurement only
         tp.memento().restore();
+        result.hostRepairs += repairHosts();
         tp.session().run();
         tp.controllers().forEach(StateCopy::restore);
         decisionIdx = tp.decisionIdx();
@@ -469,7 +537,8 @@ public final class ShadowGame {
                 prev.put(e.getZoneMove().getId(), e.getZoneMove().getPrevId());
             }
         }
-        SnapshotBuilder.Result built = new SnapshotBuilder(keys).build(s, hidden.getPrivileged(), nextId, id -> {
+        SnapshotBuilder builder = new SnapshotBuilder(keys);
+        SnapshotBuilder.Result built = builder.build(s, hidden.getPrivileged(), nextId, id -> {
             long first = id;
             while (prev.containsKey(first)) {
                 first = prev.get(first);
@@ -653,16 +722,6 @@ public final class ShadowGame {
 
         private void event(Event e) {
             result.events++;
-            if (Boolean.getBoolean("magicdosa.shadowProbe") && e.getEngineHandled() && e.hasPassPriority()
-                    && game.getPhaseHandler().getTurn() <= 1) {
-                System.out.println("PROBE at " + game.getPhaseHandler().getPhase() + " available "
-                    + forge.ai.ComputerUtilAbility.getAvailableCards(game, game.getRegisteredPlayers().get(viewer))
-                    + " controller " + game.getRegisteredPlayers().get(viewer).getController().getClass().getSimpleName()
-                    + " legal " + (game.getRegisteredPlayers().get(viewer).getController() instanceof AgentPlayerController apc
-                        ? apc.debugLegalActions() : "-")
-                    + " priority " + game.getPhaseHandler().getPriorityPlayer() + " active " + game.getPhaseHandler().getPlayerTurn());
-                probe();
-            }
             lastShadowSeq = e.getSeq();
             // a recorded action of the other seat that the shadow produced by itself (Forge declared no attackers
             // without asking, ...) is used up
@@ -705,6 +764,9 @@ public final class ShadowGame {
                 var b = Fingerprint.normalise(s);
                 if (Fingerprint.hash(a).equals(Fingerprint.hash(b))) {
                     result.snapshotsMatched++;
+                    // verification ①: hidden library order from the record at the turn start too (the other seat
+                    // may draw before any decision of ours in its turn)
+                    libraryCorrections += syncLibraries(rec.privilegedAt(real.snapshot().getSeq()), "turn " + turn + " start");
                     if (turn > stageTurn) {
                         stage = 0; // a new turn starts matching: tracking again (design: 다음 턴 시작에 ... 이어서 추적)
                     }
@@ -748,6 +810,16 @@ public final class ShadowGame {
             // verification ①: hidden cards take their real values at every decision (library order is hidden; a
             // card put into a library in an order the stream does not show is placed as it really is)
             libraryCorrections += syncLibraries(id);
+            // mana pools take the real (public) order: the other seat's Forge AI, weighing its action, test-pays from
+            // pools and the refund moves mana to the end (the replayed seat does not weigh)
+            boolean reordered = false;
+            for (var ps : real.getObservation().getPlayersList()) {
+                reordered |= session.orderPool(ps.getSeat(), ps.getManaPoolList());
+            }
+            if (reordered) {
+                result.poolOrders++;
+                request = session.reask(request);
+            }
             if (FAULT_AT > 0 && firstTry.size() + 1 == FAULT_AT && !firstTry.containsKey(id)) {
                 // recovery test: corrupt the shadow silently; recovery ① must bring it back
                 Player p = game.getRegisteredPlayers().get(opponent);
@@ -788,27 +860,8 @@ public final class ShadowGame {
                     }
                 }
                 if (critical && !forcedRegeneration) {
-                    int turnNow = game.getPhaseHandler().getTurn();
-                    if (turnNow != stageTurn) {
-                        stage = 0;
-                        stageTurn = turnNow;
-                    }
-                    if (stage == 0) {
-                        stage = 1;
-                        result.recoveries1++;
-                        stageCause = where + ": " + diffs.get(0);
-                        throw new Unwind("recovery 1 at " + where, Unwind.Kind.RESTORE);
-                    } else if (stage == 1) {
-                        stage = 2;
-                        result.recoveries2++;
-                        throw new Unwind("recovery 2 at " + where, Unwind.Kind.RESTORE);
-                    } else {
-                        stage = 3;
-                        result.recoveries3++;
-                        sample(result.samples, "search skipped for the rest of turn "
-                            + real.getObservation().getGame().getTurn() + ": " + where + ": " + diffs.get(0));
-                        result.searchSkipped++;
-                    }
+                    escalate(real, where + ": " + diffs.get(0));
+                    result.searchSkipped++;
                 }
             }
             // the real answer, by candidate where the lists differ
@@ -817,15 +870,59 @@ public final class ShadowGame {
                 .setDecisionId(request.getDecisionId());
             for (int i : resp.getChosenList()) {
                 var c = real.getCandidates(i);
-                int j = request.getCandidatesList().indexOf(c);
+                // equal candidates (two abilities under one key) are matched by their rank among the equal ones
+                int rank = 0;
+                for (int k = 0; k < i; k++) {
+                    if (real.getCandidates(k).equals(c)) {
+                        rank++;
+                    }
+                }
+                int j = -1;
+                for (int k = 0, seen = 0; k < request.getCandidatesCount(); k++) {
+                    if (request.getCandidates(k).equals(c) && seen++ == rank) {
+                        j = k;
+                        break;
+                    }
+                }
                 if (j < 0) {
-                    throw new Unwind("decision " + real.getDecisionId() + ": the real answer " + text(c)
-                        + " is not a shadow candidate", Unwind.Kind.END);
+                    String why = "decision " + real.getDecisionId() + ": the real answer " + text(c) + " is not a shadow candidate";
+                    if (stage != 3 && !forcedRegeneration) {
+                        escalate(real, why);
+                    }
+                    // the shadow cannot go on in this turn: this and the rest of the turn's decisions without search
+                    lastTry.put(id, false);
+                    throw new Unwind(why, Unwind.Kind.NEXT_TURN, real.getObservation().getGame().getTurn());
                 }
                 out.addChosen(j);
             }
             return out.build();
         }
+    }
+
+    /**
+     * Recovery after a critical mismatch at {@code real}: ① the turn again from its memento, ② a rebuild from the
+     * real turn-start snapshot, ③ (returns) the rest of the turn without search.
+     */
+    private void escalate(DecisionRequest real, String cause) {
+        int turnNow = game.getPhaseHandler().getTurn();
+        if (turnNow != stageTurn) {
+            stage = 0;
+            stageTurn = turnNow;
+        }
+        String where = "decision " + real.getDecisionId();
+        if (stage == 0) {
+            stage = 1;
+            result.recoveries1++;
+            stageCause = cause;
+            throw new Unwind("recovery 1 at " + where, Unwind.Kind.RESTORE);
+        } else if (stage == 1) {
+            stage = 2;
+            result.recoveries2++;
+            throw new Unwind("recovery 2 at " + where, Unwind.Kind.RESTORE);
+        }
+        stage = 3;
+        result.recoveries3++;
+        sample(result.samples, "search skipped for the rest of turn " + real.getObservation().getGame().getTurn() + ": " + cause);
     }
 
     /** The sequence number the shadow's stream has reached. */
@@ -884,6 +981,10 @@ public final class ShadowGame {
                 p = r;
             }
         }
+        return syncLibraries(p, "decision " + decisionId);
+    }
+
+    private int syncLibraries(PrivilegedRecord p, String where) {
         if (p == null) {
             return 0;
         }
@@ -896,13 +997,16 @@ public final class ShadowGame {
             for (long cid : lib.getIdsList()) {
                 Card c = session.cardOf(cid);
                 if (c == null || !now.contains(c)) {
-                    sample(result.samples, "decision " + decisionId + ": library card " + cid + " of seat " + lib.getSeat()
+                    sample(result.samples, where + ": library card " + cid + " of seat " + lib.getSeat()
                         + " is not in the shadow's library");
                     return changed;
                 }
                 order.add(c);
             }
-            if (order.size() == now.size() && !order.equals(now)) {
+            if (order.size() != now.size()) {
+                sample(result.samples, where + ": library of seat " + lib.getSeat() + " has " + now.size()
+                    + " cards in the shadow, " + order.size() + " in the real game");
+            } else if (!order.equals(now)) {
                 owner.getZone(ZoneType.Library).setCards(order);
                 changed = 1;
             }

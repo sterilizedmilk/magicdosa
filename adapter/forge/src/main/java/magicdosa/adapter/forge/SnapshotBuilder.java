@@ -235,7 +235,7 @@ public final class SnapshotBuilder {
             }
         }
         restoreZoneOrder(game, o, hidden, ids);
-        Map<Object, Long> effectIds = effects(game, o, ids, gaps);
+        Map<Object, Long> effectIds = effects(game, o, ids, gaps, keys);
         game.getAction().checkStaticAbilities();
         // the game starts its turn from the cleanup step of the turn before, with nobody holding priority; before the
         // game's first turn nobody has a turn or priority (GameState always names an active player: cleared here)
@@ -373,26 +373,79 @@ public final class SnapshotBuilder {
     }
 
     /**
-     * The effects of the snapshot this builder can make (with the real IDs): a companion's effect (the companion
-     * revealed before the game, in the command zone). Every other effect is a gap.
+     * The effects of the snapshot this builder can make (with the real IDs):
+     * <ul>
+     * <li>a companion's effect: from the companion card, in the command zone or wherever it went since (Forge keeps
+     * the effect after the companion was put into hand);</li>
+     * <li>a lasting effect an ability of a card still in the game created (Teferi's +1): the effect-creating part of
+     * that ability (Forge's Effect API) is resolved again for the effect's controller, which also registers its
+     * duration from the rebuilt turn.</li>
+     * </ul>
+     * Every other effect is a gap.
      */
-    private static Map<Object, Long> effects(Game game, Observation o, Map<Card, Long> ids, List<String> gaps) {
+    private static Map<Object, Long> effects(Game game, Observation o, Map<Card, Long> ids, List<String> gaps, CardKeys keys) {
         Map<Long, Card> byId = new HashMap<>();
         ids.forEach((c, id) -> byId.put(id, c));
         Map<Object, Long> out = new HashMap<>();
         for (var e : o.getEffectsList()) {
             Card source = byId.get(e.getSourceId());
-            if (source != null && source.getZone() != null && source.getZone().is(ZoneType.Command)
-                    && source.hasKeyword(forge.game.keyword.Keyword.COMPANION)) {
-                Card effect = Player.createCompanionEffect(game.getCardState(source));
-                source.getOwner().getZone(ZoneType.Command).add(effect);
+            Player controller = e.getControllerSeat() < game.getPlayers().size() ? game.getPlayers().get(e.getControllerSeat()) : null;
+            Card companion = source != null && source.hasKeyword(forge.game.keyword.Keyword.COMPANION) ? source
+                : source == null && controller != null && e.getDescription().endsWith("Companion Effect") ? companionOf(controller) : null;
+            if (companion != null && e.getKind() == magicdosa.protocol.v1.EffectKind.EFFECT_KIND_CONTINUOUS) {
+                Card effect = Player.createCompanionEffect(game.getCardState(companion));
+                companion.getOwner().getZone(ZoneType.Command).add(effect);
                 out.put(effect, e.getId());
                 continue;
+            }
+            if (source != null && controller != null && e.getKind() == magicdosa.protocol.v1.EffectKind.EFFECT_KIND_CONTINUOUS
+                    && e.hasAbility()) {
+                Card made = resolveEffect(game, source, controller, e.getAbility(), keys);
+                if (made != null) {
+                    out.put(made, e.getId());
+                    continue;
+                }
             }
             gaps.add("effect " + e.getKind() + " " + e.getDescription() + (source == null ? " (source unknown)"
                 : " (source in " + source.getZone() + ", companion " + source.hasKeyword(forge.game.keyword.Keyword.COMPANION) + ")"));
         }
         return out;
+    }
+
+    /** The seat's companion (a card with the companion keyword among all its cards), or null. */
+    private static Card companionOf(Player p) {
+        for (Card c : p.getAllCards()) {
+            if (c.hasKeyword(forge.game.keyword.Keyword.COMPANION)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves the Effect-API part of {@code source}'s ability keyed {@code key} for {@code controller} (no costs, no
+     * targets) and returns the effect card it made, or null when the ability has no such part or made no card.
+     */
+    private static Card resolveEffect(Game game, Card source, Player controller, magicdosa.protocol.v1.AbilityKey key, CardKeys keys) {
+        for (forge.game.spellability.SpellAbility sa : source.getAllSpellAbilities()) {
+            if (!key.equals(keys.abilityKey(sa))) {
+                continue;
+            }
+            for (forge.game.spellability.SpellAbility part = sa; part != null; part = part.getSubAbility()) {
+                if (part.getApi() != forge.game.ability.ApiType.Effect || part.usesTargeting()) {
+                    continue;
+                }
+                List<Card> before = new ArrayList<>(controller.getZone(ZoneType.Command).getCards());
+                part.setActivatingPlayer(controller);
+                part.getApi().getSpellEffect().resolve(part);
+                for (Card c : controller.getZone(ZoneType.Command).getCards()) {
+                    if (!before.contains(c)) {
+                        return c;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static long maxId(Map<Card, Long> ids) {
