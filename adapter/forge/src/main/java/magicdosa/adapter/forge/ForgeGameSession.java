@@ -82,6 +82,8 @@ import magicdosa.protocol.v1.OpponentDecision;
 import magicdosa.protocol.v1.PlayLand;
 import magicdosa.protocol.v1.PrivilegedRecord;
 import magicdosa.protocol.v1.Rejection;
+import magicdosa.protocol.v1.ChoiceValue;
+import magicdosa.protocol.v1.Observation;
 import magicdosa.protocol.v1.ResolutionChoice;
 import magicdosa.protocol.v1.RevealReason;
 import magicdosa.protocol.v1.SelectionConstraints;
@@ -181,6 +183,8 @@ public final class ForgeGameSession {
     private final Map<Integer, Integer> mulligans = new HashMap<>();
     private final List<PrivilegedRecord> privileged = new ArrayList<>();
     private final Set<Integer> movedInLastSync = new HashSet<>();
+    /** During an action: each moved card's ID from before the action began (Forge card ID -> entity ID). */
+    private final Map<Integer, Long> idsAtActionStart = new HashMap<>();
     private long decisions;
     private int snapshotTurn = -1;
     private final DecisionStats stats = new DecisionStats();
@@ -211,7 +215,11 @@ public final class ForgeGameSession {
     private final Map<Integer, SpellAbility> beingStacked = new LinkedHashMap<>();
     /** While a controller plays something, state changes wait here until its action event is out (see events.proto). */
     private int actionDepth;
+    /** An action event was emitted since the outermost action began. */
+    private boolean actionEventSeen;
     private final List<Event.Builder> deferred = new ArrayList<>();
+    /** The player who goes first, from the game start on (Forge sets its starting player only after mulligans). */
+    private Player firstPlayer;
 
     public ForgeGameSession(Game game, String matchId, int gameNumber, List<Deck> registeredDecks, int[] gamesWon,
                             Set<Integer> agentSeats, DecisionClient client, CardKeys keys, LogSink log, Mode mode,
@@ -256,7 +264,89 @@ public final class ForgeGameSession {
         game.subscribeToEvents(this);
     }
 
+    /**
+     * Shadow game (agent-core, phase 2): the game was rebuilt from {@code snapshot} with {@code idsByCard} naming its
+     * objects as the real game does. The stream of the snapshot's seat continues from the snapshot's sequence number,
+     * with what the seat knew then (seen objects, library positions, pool, designations, mulligans). No handshake and
+     * no log header; the session starts listening to the game's events.
+     */
+    public void resume(TurnStartSnapshot snapshot, Map<Card, Long> idsByCard, Map<Object, Long> effectIds, long nextId,
+                       Set<Long> seenIds) {
+        int viewer = snapshot.getSeat();
+        Observation o = snapshot.getObservation();
+        observations.fixMatchContext(o.getMatch());
+        idsByCard.forEach(ids::adopt);
+        ids.continueFrom(nextId);
+        seq.put(viewer, snapshot.getSeq());
+        snapshotTurn = o.getGame().getTurn();
+        Map<Long, Card> byId = new HashMap<>();
+        idsByCard.forEach((c, id) -> byId.put(id, c));
+        Map<Card, magicdosa.protocol.v1.LibraryPosition> known = new HashMap<>();
+        for (magicdosa.protocol.v1.GameObject g : o.getObjectsList()) {
+            Card c = byId.get(g.getId());
+            if (c == null) {
+                continue;
+            }
+            if (!g.getOracleId().isEmpty()) {
+                saw(viewer, c);
+            }
+            if (g.hasLibraryPosition()) {
+                known.put(c, g.getLibraryPosition());
+            }
+        }
+        visibleIds.get(viewer).addAll(seenIds);
+        for (magicdosa.protocol.v1.PlayerState ps : o.getPlayersList()) {
+            mulligans.put(ps.getSeat(), ps.getMulligans());
+        }
+        magicdosa.protocol.v1.PlayerState me = o.getPlayers(viewer);
+        facts.restore(viewer, known, me.getManaPoolList(), me.getDesignationsList());
+        for (magicdosa.protocol.v1.Effect e : o.getEffectsList()) {
+            effectIds.forEach((obj, id) -> {
+                if (id == e.getId()) {
+                    facts.adoptEffect(obj, e);
+                }
+            });
+        }
+        game.subscribeToEvents(this);
+    }
+
+    /**
+     * Shadow game: a checkpoint of this session's own state (entity IDs, streams, what each seat has seen, effects,
+     * library knowledge). Forge's game state is checkpointed separately (GameMemento); the returned action puts this
+     * session back as it was.
+     */
+    public Runnable checkpoint() {
+        List<StateCopy> parts = List.of(StateCopy.of(this, Object.class), StateCopy.of(ids, Object.class),
+            StateCopy.of(facts, Object.class), StateCopy.of(observations, Object.class));
+        return () -> parts.forEach(StateCopy::restore);
+    }
+
+    /** The request with its observation built again from the game as it is now (shadow recovery test). */
+    public DecisionRequest reask(DecisionRequest r) {
+        return r.toBuilder().setObservation(observations.build(r.getSeat())).build();
+    }
+
     // ---- accessors ----
+
+    /** The card the stream names {@code id} now, or null (shadow game). */
+    public Card cardOf(long id) {
+        return ids.cardOf(id);
+    }
+
+    /** The entity ID of a card now, 0 if none (shadow game). */
+    public long idOf(Card c) {
+        return ids.idOf(c);
+    }
+
+    /** The game this session translates. */
+    public Game shadowGame() {
+        return game;
+    }
+
+    Player firstPlayer() {
+        return firstPlayer;
+    }
+
 
     Game game() {
         return game;
@@ -429,6 +519,7 @@ public final class ForgeGameSession {
 
     /** An action event: published before the state changes held back since the action began, which follow it. */
     private void emitAction(Consumer<Event.Builder> body) {
+        actionEventSeen = true;
         emitNow(body);
         flushDeferred();
     }
@@ -505,14 +596,41 @@ public final class ForgeGameSession {
     void beginAction() {
         if (actionDepth == 0) {
             syncZones(); // what happened before belongs to no action
+            actionEventSeen = false;
         }
         actionDepth++;
+    }
+
+    /**
+     * A controller played {@code sa} and no action event came of it: an ability that resolves without the stack (a
+     * special action, CR 116.2: a companion put into hand). Reported as an activation with no ability ID.
+     */
+    void playedWithoutStack(Player p, SpellAbility sa) {
+        if (actionEventSeen || sa.isSpell() || sa.isManaAbility() || sa.isLandAbility()) {
+            return;
+        }
+        syncZones();
+        Card host = sa.getHostCard();
+        long sourceId = idsAtActionStart.getOrDefault(host.getId(), ids.idOf(host));
+        ActivateAbility.Builder a = ActivateAbility.newBuilder().setSeat(seat(p)).setSourceId(sourceId)
+            .addAllTargets(targets(sa)).addAllPayment(payment(sa));
+        AbilityKey key = keys.abilityKey(sa);
+        if (key != null) {
+            a.setAbility(key);
+        }
+        emitAction(b -> b.setActivateAbility(a));
+    }
+
+    /** True while a controller plays something (a cast, an activation, a land, triggers going on the stack). */
+    boolean inAction() {
+        return actionDepth > 0;
     }
 
     void endAction() {
         syncZones();
         if (--actionDepth == 0) {
             flushDeferred();
+            idsAtActionStart.clear();
         }
     }
 
@@ -536,6 +654,9 @@ public final class ForgeGameSession {
         movedInLastSync.clear();
         for (EntityIds.Move m : moves) {
             movedInLastSync.add(m.card().getId());
+            if (actionDepth > 0 && m.prevId() != 0) {
+                idsAtActionStart.putIfAbsent(m.card().getId(), m.prevId());
+            }
             Card c = m.card();
             if (m.to() == null) {
                 emit(false, (viewer, b) -> b.setZoneMove(ZoneMove.newBuilder().setPrevId(m.prevId())
@@ -745,8 +866,17 @@ public final class ForgeGameSession {
         if (root.getChosenList() == null) {
             return out;
         }
-        List<forge.game.spellability.AbilitySub> all = root.getAdditionalAbilityList("Choices");
-        for (var chosen : root.getChosenList()) {
+        return modeIndices(sa, root.getChosenList());
+    }
+
+    /** Modes of {@code sa} as 0-based indices in oracle order (Q1), in the given order. */
+    List<Integer> modeIndices(SpellAbility sa, List<forge.game.spellability.AbilitySub> modes) {
+        List<Integer> out = new ArrayList<>();
+        if (modes == null) {
+            return out;
+        }
+        List<forge.game.spellability.AbilitySub> all = sa.getRootAbility().getAdditionalAbilityList("Choices");
+        for (var chosen : modes) {
             int i = all.indexOf(chosen);
             if (i < 0) {
                 for (int j = 0; j < all.size(); j++) {
@@ -899,6 +1029,8 @@ public final class ForgeGameSession {
                 .setSeq(seq.get(viewer)).setObservation(observations.build(viewer)).build();
             send(AdapterMessage.newBuilder().setSnapshot(s).build());
             log.write(LogRecord.newBuilder().setSnapshot(s).build());
+            // hidden state at the turn start too: the shadow game is rebuilt from the snapshot (phase 2)
+            recordPrivileged(0, viewer);
         }
     }
 
@@ -913,7 +1045,8 @@ public final class ForgeGameSession {
     }
 
     private void translate(GameEvent event) {
-        if (event instanceof GameEventGameStarted) {
+        if (event instanceof GameEventGameStarted e) {
+            firstPlayer = game.getPlayer(e.firstTurn()); // the play/draw choice is made: the match context shows it
             snapshot();
             return;
         }
@@ -1036,7 +1169,9 @@ public final class ForgeGameSession {
         int seat = seat(si.getActivatingPlayer());
         long hostId = ids.idOf(host);
         // the source as it was when activated: before a cost (sacrifice) moved it
-        long sourceId = movedInLastSync.contains(host.getId()) && !sa.isSpell() ? ids.prevIdOf(hostId) : hostId;
+        long sourceId = sa.isSpell() ? hostId
+            : idsAtActionStart.containsKey(host.getId()) ? idsAtActionStart.get(host.getId())
+            : movedInLastSync.contains(host.getId()) ? ids.prevIdOf(hostId) : hostId;
         ids.setSource(si, sa.isTrigger() ? triggerSources.getOrDefault(ids.triggerId(sa), sourceId) : sourceId);
         List<ObjectRef> targets = targets(sa);
         if (sa.isCopied()) {
@@ -1051,7 +1186,8 @@ public final class ForgeGameSession {
         }
         if (sa.isSpell()) {
             CastSpell.Builder c = CastSpell.newBuilder().setSeat(seat).setCardId(ids.prevIdOf(hostId)).setSpellId(hostId)
-                .setSpell(keys.spellKey(sa)).addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa));
+                .setSpell(keys.spellKey(sa)).addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa))
+                .addAllCostIds(costIds(sa));
             if (sa.getXManaCostPaid() != null) {
                 c.setX(sa.getXManaCostPaid());
             }
@@ -1077,7 +1213,7 @@ public final class ForgeGameSession {
         long abilityId = ids.abilityId(si);
         AbilityKey key = keys.abilityKey(sa);
         ActivateAbility.Builder a = ActivateAbility.newBuilder().setSeat(seat).setSourceId(sourceId).setAbilityId(abilityId)
-            .addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa));
+            .addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa)).addAllCostIds(costIds(sa));
         if (key != null) {
             a.setAbility(key);
         }
@@ -1085,6 +1221,26 @@ public final class ForgeGameSession {
             a.setX(sa.getXManaCostPaid());
         }
         emitAction(b -> b.setActivateAbility(a));
+    }
+
+    /**
+     * The objects a spell's or ability's costs used (sacrificed, discarded, exiled, tapped, returned), by the ID they
+     * had when the action began, in Forge's order of cost kinds.
+     */
+    private List<Long> costIds(SpellAbility sa) {
+        List<Long> out = new ArrayList<>();
+        for (var cell : sa.getPaidHash().cellSet()) {
+            if (cell.getValue() == null || cell.getColumnKey() == null || !cell.getColumnKey()) {
+                continue; // only cards paid for the cost itself (intrinsic), not remembered by an effect
+            }
+            for (Card c : cell.getValue()) {
+                long id = idsAtActionStart.getOrDefault(c.getId(), ids.idOf(c));
+                if (id != 0 && !out.contains(id)) {
+                    out.add(id);
+                }
+            }
+        }
+        return out;
     }
 
     private List<ManaPayment> payment(SpellAbility sa) {
@@ -1110,22 +1266,53 @@ public final class ForgeGameSession {
         emitAll(engineHandled, body);
     }
 
-    /** A resolution choice made for {@code p}: events for the streams and the delegation / opponent record. */
+    /**
+     * A public choice of {@code p} (protocol 9): one {@link ResolutionChoice} on every stream, the chooser's included,
+     * with only what a human opponent could see or hear. Made where the choice is applied, before what it causes.
+     */
+    void choice(Player p, DecisionType type, String engineDecision, Collection<? extends GameObject> chosen,
+                List<Integer> options, List<ChoiceValue> values) {
+        syncZones();
+        ResolutionChoice.Builder r = ResolutionChoice.newBuilder().setSeat(seat(p)).setType(type)
+            .setEnginePrompt(engineDecision);
+        r.setResolvingId(resolvingId());
+        if (chosen != null) {
+            for (GameObject o : chosen) {
+                if (o != null) {
+                    r.addChosen(ref(o));
+                }
+            }
+        }
+        if (options != null) {
+            r.addAllOptions(options);
+        }
+        if (values != null) {
+            r.addAllValues(values);
+        }
+        emitAll(false, b -> b.setResolutionChoice(r));
+    }
+
+    /** Entity ID of the stack item resolving now, 0 when nothing resolves (no ID is issued here). */
+    long resolvingId() {
+        var stack = game.getStack();
+        if (!stack.isResolving() || stack.isEmpty()) {
+            return 0;
+        }
+        SpellAbilityStackInstance si = stack.peek();
+        SpellAbility sa = si.getSpellAbility();
+        if (sa.isSpell()) {
+            return ids.idOf(sa.getHostCard());
+        }
+        return ids.hasAbilityId(si) ? ids.abilityId(si) : 0;
+    }
+
+    /** A record of an opponent's choice, or of an agent seat's intended delegation, for the log (no event). */
     void delegated(Player p, String engineDecision, DecisionType type, Collection<? extends GameObject> chosen) {
         delegated(p, isAgent(p), engineDecision, type, chosen);
     }
 
     /** {@code asAgent} false: an opponent's choice, also when an opponent controls an agent seat (deck item 4). */
     void delegated(Player p, boolean asAgent, String engineDecision, DecisionType type, Collection<? extends GameObject> chosen) {
-        syncZones();
-        if (chosen != null && !chosen.isEmpty()) {
-            ResolutionChoice.Builder r = ResolutionChoice.newBuilder().setSeat(seat(p)).setType(type)
-                .setEnginePrompt(engineDecision);
-            for (GameObject o : chosen) {
-                r.addChosen(ref(o));
-            }
-            emitAll(false, b -> b.setResolutionChoice(r));
-        }
         if (asAgent) {
             stats.delegated(engineDecision, type);
             log.write(LogRecord.newBuilder().setDecision(DecisionRecord.newBuilder()

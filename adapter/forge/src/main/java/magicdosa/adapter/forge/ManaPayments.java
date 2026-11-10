@@ -23,7 +23,7 @@ import java.util.Objects;
  * These checks never change the pool: they pay a copy of the cost greedily, the way Forge assigns each mana to the
  * most restrictive shard it can pay.
  */
-final class ManaPayments {
+public final class ManaPayments {
     private ManaPayments() {}
 
     /** Pool mana that can pay part of {@code cost} for {@code sa} now (restrictions such as Eldrazi Temple applied). */
@@ -92,7 +92,7 @@ final class ManaPayments {
      * Whether {@code sa} can be cast or activated now with pool mana and its non-mana costs (approximate: the
      * smallest X, cost changes as Forge computes them before payment). Mana abilities without a mana cost pass.
      */
-    static boolean payableNow(Player p, SpellAbility sa) {
+    public static boolean payableNow(Player p, SpellAbility sa) {
         Cost cost = sa.getPayCosts();
         if (cost == null) {
             return true;

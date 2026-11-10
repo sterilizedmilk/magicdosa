@@ -110,6 +110,12 @@ final class GameFacts {
         return new EffectChanges(created, ended);
     }
 
+    /** Shadow game: an effect object the rebuild made is the real game's effect {@code e}. */
+    void adoptEffect(Object o, Effect e) {
+        effectIds.put(o, e.getId());
+        effects.put(e.getId(), e);
+    }
+
     Collection<Effect> effects() {
         return effects.values();
     }
@@ -265,6 +271,27 @@ final class GameFacts {
 
     boolean knows(int seat, Card c) {
         return library.getOrDefault(seat, Map.of()).containsKey(c);
+    }
+
+    /**
+     * Shadow game rebuilt from a turn-start snapshot: what {@code seat} knew of library order, its pool and its
+     * designations as the snapshot showed them.
+     */
+    void restore(int seat, Map<Card, LibraryPosition> knownPositions, List<PoolMana> pool, List<Designation> designs) {
+        int maxGroup = 0;
+        for (Map.Entry<Card, LibraryPosition> e : knownPositions.entrySet()) {
+            LibraryPosition lp = e.getValue();
+            Known k = switch (lp.getPositionCase()) {
+                case FROM_BOTTOM -> new Known(Anchor.BOTTOM, 0, 0);
+                case BOTTOM_GROUP -> new Known(Anchor.GROUP, lp.getBottomGroup().getGroup(), lp.getBottomGroup().getSize());
+                default -> new Known(Anchor.TOP, 0, 0);
+            };
+            maxGroup = Math.max(maxGroup, k.group());
+            known(seat).put(e.getKey(), k);
+        }
+        groups.merge(seat, maxGroup, Math::max);
+        pools.put(seat, List.copyOf(pool));
+        designations.put(seat, List.copyOf(designs));
     }
 
     // ---- pools and designations: changes since the last report ----

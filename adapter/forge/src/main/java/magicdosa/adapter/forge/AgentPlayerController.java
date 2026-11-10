@@ -204,6 +204,11 @@ public class AgentPlayerController extends ObservedAiController {
         return out;
     }
 
+    /** Debugging (shadow probe): the priority actions this controller would offer now. */
+    public List<SpellAbility> debugLegalActions() {
+        return legalActions();
+    }
+
     private PotentialCast potentialCast(SpellAbility sa) {
         PotentialCast.Builder p = PotentialCast.newBuilder().setSourceId(session.ids().idOf(sa.getHostCard()));
         if (sa.isSpell()) {
@@ -301,6 +306,8 @@ public class AgentPlayerController extends ObservedAiController {
                 clearPriorityRefusals();
                 if (sa.isManaAbility()) {
                     session.manaAbilityActivated(player, sa);
+                } else {
+                    session.playedWithoutStack(player, sa);
                 }
                 return true;
             }
@@ -710,29 +717,29 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+    protected boolean answerPayCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
         return PlaySpellAbility.payCostDuringAbilityResolve(this, player, cost, sa, null);
     }
 
     @Override
-    public boolean confirmPayment(CostPart costPart, String question, SpellAbility sa) {
+    protected boolean answerConfirmPayment(CostPart costPart, String question, SpellAbility sa) {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "confirmPayment",
             List.of(option(0, "do not pay"), option(1, "pay")), ONE, context(sa).setEnginePrompt(question).build());
-        return chosen == null ? forgeAi(() -> super.confirmPayment(costPart, question, sa)) : chosen.get(0) == 1;
+        return chosen == null ? forgeAi(() -> super.answerConfirmPayment(costPart, question, sa)) : chosen.get(0) == 1;
     }
 
     @Override
-    public CardCollectionView chooseCardsForCost(CardCollectionView optionList, SpellAbility sa, CostPartWithList cpl,
+    protected CardCollectionView answerChooseCardsForCost(CardCollectionView optionList, SpellAbility sa, CostPartWithList cpl,
                                                  int amount, boolean isOptional, String prompt) {
         if (optionList.size() <= amount && !isOptional) {
             return optionList;
         }
         List<Card> chosen = chooseCostCards(cpl.getClass().getSimpleName(), optionList, amount, sa);
-        return chosen == null ? forgeAi(() -> super.chooseCardsForCost(optionList, sa, cpl, amount, isOptional, prompt)) : new CardCollection(chosen);
+        return chosen == null ? forgeAi(() -> super.answerChooseCardsForCost(optionList, sa, cpl, amount, isOptional, prompt)) : new CardCollection(chosen);
     }
 
     @Override
-    public CardCollectionView chooseCardsToDelve(int genericAmount, CardCollection grave) {
+    protected CardCollectionView answerChooseCardsToDelve(int genericAmount, CardCollection grave) {
         int max = Math.min(genericAmount, grave.size());
         if (checkingCosts || max == 0) {
             return new CardCollection(grave.subList(0, max)); // castability checks assume the largest reduction
@@ -744,7 +751,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_CARDS, "chooseCardsToDelve", candidates,
             between(min, max), context(player.getPaidForSA()).setEnginePrompt("delve").build());
         if (chosen == null) {
-            return forgeAi(() -> super.chooseCardsToDelve(genericAmount, grave));
+            return forgeAi(() -> super.answerChooseCardsToDelve(genericAmount, grave));
         }
         CardCollection out = new CardCollection();
         chosen.forEach(i -> out.add(cards.get(i)));
@@ -761,7 +768,7 @@ public class AgentPlayerController extends ObservedAiController {
      * pays the adjusted mana cost), whichever order Forge asks in. A number asked while resolving is offered as is.
      */
     @Override
-    public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
+    protected Integer answerAnnounceRequirements(SpellAbility ability, int min, int max, String announce) {
         if (!castingAnnouncement(ability, announce)) {
             return announceNumber(ability, min, max, announce, null);
         }
@@ -802,7 +809,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "announceRequirements", candidates, ONE,
             context(ability).setEnginePrompt(announce).build());
         final List<Integer> offered = values;
-        return chosen == null ? forgeAi(() -> super.announceRequirements(ability, min, max, announce))
+        return chosen == null ? forgeAi(() -> super.answerAnnounceRequirements(ability, min, max, announce))
             : offered.get(chosen.get(0));
     }
 
@@ -911,13 +918,13 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num,
+    protected List<AbilitySub> answerChooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num,
                                                  boolean allowRepeat) {
         if (!allowRepeat && possible.size() == min) {
             return new ArrayList<>(possible); // one possible outcome (Kozilek's Command with two modes left)
         }
         if (allowRepeat || possible.size() < min) {
-            return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
+            return super.answerChooseModeForAbility(sa, possible, min, num, allowRepeat);
         }
         List<Candidate> candidates = new ArrayList<>();
         for (int i = 0; i < possible.size(); i++) {
@@ -926,7 +933,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseModeForAbility", candidates,
             between(min, Math.min(num, possible.size())), context(sa).setEnginePrompt("modes").build());
         if (chosen == null) {
-            return forgeAi(() -> super.chooseModeForAbility(sa, possible, min, num, allowRepeat));
+            return forgeAi(() -> super.answerChooseModeForAbility(sa, possible, min, num, allowRepeat));
         }
         List<AbilitySub> out = new ArrayList<>();
         chosen.forEach(i -> out.add(possible.get(i)));
@@ -934,7 +941,7 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public List<OptionalCostValue> chooseOptionalCosts(SpellAbility choosen, List<OptionalCostValue> optionalCostValues) {
+    protected List<OptionalCostValue> answerChooseOptionalCosts(SpellAbility choosen, List<OptionalCostValue> optionalCostValues) {
         // each payable combination is one option (there are at most a few optional costs)
         List<List<OptionalCostValue>> combos = new ArrayList<>();
         int n = Math.min(optionalCostValues.size(), 4);
@@ -958,7 +965,7 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseOptionalCosts", candidates, ONE,
             context(choosen).setEnginePrompt("optional costs").build());
-        return chosen == null ? forgeAi(() -> super.chooseOptionalCosts(choosen, optionalCostValues)) : combos.get(chosen.get(0));
+        return chosen == null ? forgeAi(() -> super.answerChooseOptionalCosts(choosen, optionalCostValues)) : combos.get(chosen.get(0));
     }
 
     private boolean payableWith(SpellAbility sa, List<OptionalCostValue> costs) {
@@ -1000,7 +1007,7 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
+    protected byte answerChooseColor(String message, SpellAbility sa, ColorSet colors) {
         List<Byte> options = new ArrayList<>();
         for (byte c : MagicColor.WUBRG) {
             if (colors.hasAnyColor(c)) {
@@ -1008,7 +1015,7 @@ public class AgentPlayerController extends ObservedAiController {
             }
         }
         if (options.size() <= 1) {
-            return options.isEmpty() ? super.chooseColor(message, sa, colors) : options.get(0);
+            return options.isEmpty() ? super.answerChooseColor(message, sa, colors) : options.get(0);
         }
         List<Candidate> candidates = new ArrayList<>();
         for (int i = 0; i < options.size(); i++) {
@@ -1016,7 +1023,7 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseColor", candidates, ONE,
             context(sa).setEnginePrompt(message == null ? "color" : message).build());
-        return chosen == null ? forgeAi(() -> super.chooseColor(message, sa, colors)) : options.get(chosen.get(0));
+        return chosen == null ? forgeAi(() -> super.answerChooseColor(message, sa, colors)) : options.get(chosen.get(0));
     }
 
     @Override
@@ -1143,7 +1150,7 @@ public class AgentPlayerController extends ObservedAiController {
 
     /** "You may" triggers (OptionalDecider): asked when they resolve. A trigger with a cost is declined by not paying. */
     @Override
-    public boolean confirmTrigger(WrappedAbility wrapper) {
+    protected boolean answerConfirmTrigger(WrappedAbility wrapper) {
         SpellAbility sa = wrapper.getWrappedAbility();
         if (sa.hasParam("Cost") && !sa.getParam("Cost").equals("0")) {
             return true;
@@ -1151,7 +1158,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "confirmTrigger",
             List.of(option(0, "no"), option(1, "yes")), ONE, context(wrapper).setEnginePrompt("optional trigger").build());
         if (chosen == null) {
-            return forgeAi(() -> super.confirmTrigger(wrapper));
+            return forgeAi(() -> super.answerConfirmTrigger(wrapper));
         }
         if (chosen.get(0) == 1 && overRepeatCap("trigger:" + sa.getHostCard().getId() + ":" + session.keys().abilityKey(sa))) {
             session.safetyCap("confirmTrigger: " + sa.getHostCard().getName());
@@ -1232,7 +1239,7 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public CardCollectionView chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min,
+    protected CardCollectionView answerChooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min,
                                                    int max, boolean isOptional, Map<String, Object> params) {
         List<Card> options = toList(sourceList);
         int lo = isOptional ? 0 : Math.min(min, options.size());
@@ -1241,12 +1248,12 @@ public class AgentPlayerController extends ObservedAiController {
             return new CardCollection(options.subList(0, hi));
         }
         List<Card> chosen = chooseCards("chooseCardsForEffect", options, lo, hi, false, sa, title);
-        return chosen == null ? forgeAi(() -> super.chooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params))
+        return chosen == null ? forgeAi(() -> super.answerChooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params))
             : new CardCollection(chosen);
     }
 
     @Override
-    public <T extends GameEntity> T chooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal,
+    protected <T extends GameEntity> T answerChooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal,
                                                                SpellAbility sa, String title, boolean isOptional,
                                                                Player relatedPlayer, Map<String, Object> params) {
         List<T> options = new ArrayList<>();
@@ -1259,13 +1266,13 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<T> chosen = chooseEntities("chooseSingleEntityForEffect", options, isOptional ? 0 : 1, 1, sa, title);
         if (chosen == null) {
-            return forgeAi(() -> super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params));
+            return forgeAi(() -> super.answerChooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params));
         }
         return chosen.isEmpty() ? null : chosen.get(0);
     }
 
     @Override
-    public <T extends GameEntity> List<T> chooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max,
+    protected <T extends GameEntity> List<T> answerChooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max,
                                                                  DelayedReveal delayedReveal, SpellAbility sa, String title,
                                                                  Player relatedPlayer, Map<String, Object> params) {
         List<T> options = new ArrayList<>();
@@ -1277,12 +1284,12 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<T> chosen = chooseEntities("chooseEntitiesForEffect", options, lo, hi, sa, title);
         return chosen == null
-            ? forgeAi(() -> super.chooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, relatedPlayer, params))
+            ? forgeAi(() -> super.answerChooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, relatedPlayer, params))
             : chosen;
     }
 
     @Override
-    public Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
+    protected Card answerChooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
                                               CardCollection fetchList, DelayedReveal delayedReveal, String selectPrompt,
                                               boolean isOptional, Player decider) {
         List<Card> options = toList(fetchList);
@@ -1294,14 +1301,14 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Card> chosen = chooseCards("chooseSingleCardForZoneChange", options, isOptional ? 0 : 1, 1, false, sa, selectPrompt);
         if (chosen == null) {
-            return forgeAi(() -> super.chooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal,
+            return forgeAi(() -> super.answerChooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal,
                 selectPrompt, isOptional, decider));
         }
         return chosen.isEmpty() ? null : chosen.get(0);
     }
 
     @Override
-    public List<Card> chooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
+    protected List<Card> answerChooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
                                                CardCollection fetchList, int min, int max, DelayedReveal delayedReveal,
                                                String selectPrompt, Player decider) {
         List<Card> options = toList(fetchList);
@@ -1311,22 +1318,22 @@ public class AgentPlayerController extends ObservedAiController {
             return new ArrayList<>(options.subList(0, hi));
         }
         List<Card> chosen = chooseCards("chooseCardsForZoneChange", options, lo, hi, false, sa, selectPrompt);
-        return chosen == null ? forgeAi(() -> super.chooseCardsForZoneChange(destination, origin, sa, fetchList, min, max,
+        return chosen == null ? forgeAi(() -> super.answerChooseCardsForZoneChange(destination, origin, sa, fetchList, min, max,
             delayedReveal, selectPrompt, decider)) : chosen;
     }
 
     @Override
-    public CardCollectionView choosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets,
+    protected CardCollectionView answerChoosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets,
                                                           String message) {
         return chooseGroup("choosePermanentsToSacrifice", validTargets, min, max, sa, message,
-            () -> super.choosePermanentsToSacrifice(sa, min, max, validTargets, message));
+            () -> super.answerChoosePermanentsToSacrifice(sa, min, max, validTargets, message));
     }
 
     @Override
-    public CardCollectionView choosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets,
+    protected CardCollectionView answerChoosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets,
                                                         String message) {
         return chooseGroup("choosePermanentsToDestroy", validTargets, min, max, sa, message,
-            () -> super.choosePermanentsToDestroy(sa, min, max, validTargets, message));
+            () -> super.answerChoosePermanentsToDestroy(sa, min, max, validTargets, message));
     }
 
     private CardCollectionView chooseGroup(String method, CardCollectionView valid, int min, int max, SpellAbility sa,
@@ -1342,7 +1349,7 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public CardCollection chooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection validCards, int min,
+    protected CardCollection answerChooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection validCards, int min,
                                                    int max, CardCollectionView visibleToChooser) {
         List<Card> options = toList(validCards);
         int lo = Math.min(min, options.size());
@@ -1352,50 +1359,50 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Card> chosen = chooseCards("chooseCardsToDiscardFrom", options, lo, hi, false, sa, "discard");
         return chosen == null
-            ? forgeAi(() -> super.chooseCardsToDiscardFrom(playerDiscard, sa, validCards, min, max, visibleToChooser))
+            ? forgeAi(() -> super.answerChooseCardsToDiscardFrom(playerDiscard, sa, validCards, min, max, visibleToChooser))
             : new CardCollection(chosen);
     }
 
     @Override
-    public CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
+    protected CardCollectionView answerChooseCardsToDiscardToMaximumHandSize(int numDiscard) {
         List<Card> hand = toList(player.getCardsIn(ZoneType.Hand));
         if (numDiscard >= hand.size()) {
             return new CardCollection(hand);
         }
         List<Card> chosen = chooseCards("chooseCardsToDiscardToMaximumHandSize", hand, numDiscard, numDiscard, false, null, "cleanup discard");
-        return chosen == null ? forgeAi(() -> super.chooseCardsToDiscardToMaximumHandSize(numDiscard)) : new CardCollection(chosen);
+        return chosen == null ? forgeAi(() -> super.answerChooseCardsToDiscardToMaximumHandSize(numDiscard)) : new CardCollection(chosen);
     }
 
     @Override
-    public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options,
+    protected boolean answerConfirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options,
                                  Card cardToShow, Map<String, Object> params) {
         try {
             return yesNo("confirmAction", sa, message);
         } catch (NoAnswer e) {
-            return forgeAi(() -> super.confirmAction(sa, mode, message, options, cardToShow, params));
+            return forgeAi(() -> super.answerConfirmAction(sa, mode, message, options, cardToShow, params));
         }
     }
 
     @Override
-    public boolean confirmReplacementEffect(ReplacementEffect replacementEffect, SpellAbility effectSA, GameEntity affected,
+    protected boolean answerConfirmReplacementEffect(ReplacementEffect replacementEffect, SpellAbility effectSA, GameEntity affected,
                                             String question) {
         try {
             return yesNo("confirmReplacementEffect", effectSA, question);
         } catch (NoAnswer e) {
-            return forgeAi(() -> super.confirmReplacementEffect(replacementEffect, effectSA, affected, question));
+            return forgeAi(() -> super.answerConfirmReplacementEffect(replacementEffect, effectSA, affected, question));
         }
     }
 
     @Override
-    public boolean chooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
+    protected boolean answerChooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseBinary",
             List.of(option(0, kindOfChoice + ":first"), option(1, kindOfChoice + ":second")), ONE,
             context(sa).setEnginePrompt(question == null ? "binary" : question).build());
-        return chosen == null ? forgeAi(() -> super.chooseBinary(sa, question, kindOfChoice, defaultChoice)) : chosen.get(0) == 0;
+        return chosen == null ? forgeAi(() -> super.answerChooseBinary(sa, question, kindOfChoice, defaultChoice)) : chosen.get(0) == 0;
     }
 
     @Override
-    public int chooseNumber(SpellAbility sa, String title, int min, int max) {
+    protected int answerChooseNumber(SpellAbility sa, String title, int min, int max) {
         if (min >= max) {
             return min;
         }
@@ -1407,11 +1414,11 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseNumber", candidates, ONE,
             context(sa).setEnginePrompt(title == null ? "number" : title).build());
-        return chosen == null ? forgeAi(() -> super.chooseNumber(sa, title, min, max)) : min + chosen.get(0);
+        return chosen == null ? forgeAi(() -> super.answerChooseNumber(sa, title, min, max)) : min + chosen.get(0);
     }
 
     @Override
-    public CounterType chooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
+    protected CounterType answerChooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
         if (options.size() <= 1) {
             return options.isEmpty() ? null : options.get(0);
         }
@@ -1421,11 +1428,11 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseCounterType", candidates, ONE,
             context(sa).setEnginePrompt(prompt == null ? "counter" : prompt).build());
-        return chosen == null ? forgeAi(() -> super.chooseCounterType(options, sa, prompt, params)) : options.get(chosen.get(0));
+        return chosen == null ? forgeAi(() -> super.answerChooseCounterType(options, sa, prompt, params)) : options.get(chosen.get(0));
     }
 
     @Override
-    public SpellAbility chooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title,
+    protected SpellAbility answerChooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title,
                                                    Map<String, Object> params) {
         if (spells.size() <= 1) {
             return spells.isEmpty() ? null : spells.get(0);
@@ -1436,11 +1443,11 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSingleSpellForEffect", candidates, ONE,
             context(sa).setEnginePrompt(title == null ? "spell" : title).build());
-        return chosen == null ? forgeAi(() -> super.chooseSingleSpellForEffect(spells, sa, title, params)) : spells.get(chosen.get(0));
+        return chosen == null ? forgeAi(() -> super.answerChooseSingleSpellForEffect(spells, sa, title, params)) : spells.get(chosen.get(0));
     }
 
     @Override
-    public List<SpellAbility> chooseSpellAbilitiesForEffect(List<SpellAbility> spells, SpellAbility sa, String title, int num,
+    protected List<SpellAbility> answerChooseSpellAbilitiesForEffect(List<SpellAbility> spells, SpellAbility sa, String title, int num,
                                                            Map<String, Object> params) {
         if (spells.size() <= num) {
             return new ArrayList<>(spells);
@@ -1452,7 +1459,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSpellAbilitiesForEffect", candidates,
             between(num, num), context(sa).setEnginePrompt(title == null ? "spells" : title).build());
         if (chosen == null) {
-            return forgeAi(() -> super.chooseSpellAbilitiesForEffect(spells, sa, title, num, params));
+            return forgeAi(() -> super.answerChooseSpellAbilitiesForEffect(spells, sa, title, num, params));
         }
         List<SpellAbility> out = new ArrayList<>();
         chosen.forEach(i -> out.add(spells.get(i)));
@@ -1461,7 +1468,7 @@ public class AgentPlayerController extends ObservedAiController {
 
     /** Which replacement effect applies first (616.1). */
     @Override
-    public ReplacementEffect chooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
+    protected ReplacementEffect answerChooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
         if (possibleReplacers.size() <= 1) {
             return possibleReplacers.isEmpty() ? null : possibleReplacers.get(0);
         }
@@ -1471,7 +1478,7 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSingleReplacementEffect", candidates,
             ONE, context(null).setEnginePrompt("replacement effect").build());
-        return chosen == null ? forgeAi(() -> super.chooseSingleReplacementEffect(possibleReplacers))
+        return chosen == null ? forgeAi(() -> super.answerChooseSingleReplacementEffect(possibleReplacers))
             : possibleReplacers.get(chosen.get(0));
     }
 
@@ -1489,7 +1496,7 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public int chooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
+    protected int answerChooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
         // replicate and the like: only as many times as the pool can pay on top of the spell
         int payable = 0;
         if (cost != null && cost.getTotalMana() != null && sa.getPayCosts() != null) {
@@ -1510,13 +1517,13 @@ public class AgentPlayerController extends ObservedAiController {
         }
         int hi = cost == null || cost.getTotalMana() == null || cost.getTotalMana().isNoCost() ? max : payable;
         return numberFrom("chooseNumberForKeywordCost", 0, hi, sa, prompt,
-            () -> super.chooseNumberForKeywordCost(sa, cost, keyword, prompt, max));
+            () -> super.answerChooseNumberForKeywordCost(sa, cost, keyword, prompt, max));
     }
 
     @Override
-    public int chooseNumberForCostReduction(SpellAbility sa, int min, int max) {
+    protected int answerChooseNumberForCostReduction(SpellAbility sa, int min, int max) {
         return numberFrom("chooseNumberForCostReduction", min, max, sa, "cost reduction",
-            () -> super.chooseNumberForCostReduction(sa, min, max));
+            () -> super.answerChooseNumberForCostReduction(sa, min, max));
     }
 
     private int numberFrom(String method, int min, int max, SpellAbility sa, String prompt,
@@ -1537,7 +1544,7 @@ public class AgentPlayerController extends ObservedAiController {
 
     /** Opening-hand actions (Gemstone Caverns, Leylines): any of them, in the chosen order. */
     @Override
-    public List<SpellAbility> chooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
+    protected List<SpellAbility> answerChooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
         if (usableFromOpeningHand.isEmpty()) {
             return usableFromOpeningHand;
         }
@@ -1548,7 +1555,7 @@ public class AgentPlayerController extends ObservedAiController {
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSaToActivateFromOpeningHand",
             candidates, between(0, candidates.size()), context(null).setEnginePrompt("opening hand").build());
         if (chosen == null) {
-            return forgeAi(() -> super.chooseSaToActivateFromOpeningHand(usableFromOpeningHand));
+            return forgeAi(() -> super.answerChooseSaToActivateFromOpeningHand(usableFromOpeningHand));
         }
         List<SpellAbility> out = new ArrayList<>();
         chosen.forEach(i -> out.add(usableFromOpeningHand.get(i)));
@@ -1558,13 +1565,13 @@ public class AgentPlayerController extends ObservedAiController {
     // ---- library order: scry, surveil, cards put on top or bottom (lists are top to bottom) ----
 
     @Override
-    public ImmutablePair<CardCollection, CardCollection> arrangeForScry(CardCollection topN) {
-        return arrange("arrangeForScry", topN, "bottom", () -> super.arrangeForScry(topN));
+    protected ImmutablePair<CardCollection, CardCollection> answerArrangeForScry(CardCollection topN) {
+        return arrange("arrangeForScry", topN, "bottom", () -> super.answerArrangeForScry(topN));
     }
 
     @Override
-    public ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
-        return arrange("arrangeForSurveil", topN, "graveyard", () -> super.arrangeForSurveil(topN));
+    protected ImmutablePair<CardCollection, CardCollection> answerArrangeForSurveil(CardCollection topN) {
+        return arrange("arrangeForSurveil", topN, "graveyard", () -> super.answerArrangeForSurveil(topN));
     }
 
     /**
@@ -1599,25 +1606,25 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     @Override
-    public boolean willPutCardOnTop(Card c) {
+    protected boolean answerWillPutCardOnTop(Card c) {
         session.showTo(decider, List.of(c));
         try {
             return yesNo("willPutCardOnTop", null, "put on top");
         } catch (NoAnswer e) {
-            return forgeAi(() -> super.willPutCardOnTop(c));
+            return forgeAi(() -> super.answerWillPutCardOnTop(c));
         }
     }
 
     @Override
-    public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
+    protected CardCollectionView answerOrderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
         if (cards.size() < 2 || (destinationZone != ZoneType.Library && destinationZone != ZoneType.Graveyard)) {
-            return forgeAi(() -> super.orderMoveToZoneList(cards, destinationZone, source));
+            return forgeAi(() -> super.answerOrderMoveToZoneList(cards, destinationZone, source));
         }
         List<Card> ordered = order("orderMoveToZoneList:" + destinationZone, toList(cards));
         if (ordered != null && destinationZone == ZoneType.Library) {
             session.facts().orderedBy(session.seat(decider), ordered);
         }
-        return ordered == null ? forgeAi(() -> super.orderMoveToZoneList(cards, destinationZone, source)) : new CardCollection(ordered);
+        return ordered == null ? forgeAi(() -> super.answerOrderMoveToZoneList(cards, destinationZone, source)) : new CardCollection(ordered);
     }
 
     // ---- targets ----
@@ -1861,7 +1868,7 @@ public class AgentPlayerController extends ObservedAiController {
      * trample takes everything without asking.
      */
     @Override
-    public Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
+    protected Map<Card, Integer> answerAssignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
                                                  int damageDealt, GameEntity defender, boolean overrideOrder) {
         boolean trample = attacker.hasKeyword(Keyword.TRAMPLE) && defender != null;
         List<Card> recipients = toList(blockers);
@@ -1879,7 +1886,7 @@ public class AgentPlayerController extends ObservedAiController {
             int l = Math.max(0, c.getLethalDamage());
             lethal.put(c, attacker.hasKeyword(Keyword.DEATHTOUCH) ? Math.min(1, l) : l);
         }
-        Map<Card, Integer> engine = forgeAi(() -> super.assignCombatDamage(attacker, blockers, remaining, damageDealt, defender, overrideOrder));
+        Map<Card, Integer> engine = forgeAi(() -> super.answerAssignCombatDamage(attacker, blockers, remaining, damageDealt, defender, overrideOrder));
         DamageAssignment.Builder base = DamageAssignment.newBuilder().setTotal(damageDealt).setTrample(trample);
         lethal.forEach((c, l) -> base.addLethal(DamageShare.newBuilder().setTo(session.ref(c)).setAmount(l)));
         if (engine != null) {
@@ -1929,7 +1936,7 @@ public class AgentPlayerController extends ObservedAiController {
 
     /** Card names from both players' 75 (Disruptor Flute and the like), by oracle_id. */
     @Override
-    public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
+    protected String answerChooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
         Map<String, String> names = new java.util.TreeMap<>(); // oracle_id -> face name
         for (int seat = 0; seat < session.seatCount(); seat++) {
             Deck deck = session.registeredDeck(seat);
@@ -1944,14 +1951,14 @@ public class AgentPlayerController extends ObservedAiController {
                 }
             }
         }
-        return nameFrom("chooseCardName", names, sa, message, () -> super.chooseCardName(sa, cpp, valid, message));
+        return nameFrom("chooseCardName", names, sa, message, () -> super.answerChooseCardName(sa, cpp, valid, message));
     }
 
     @Override
-    public String chooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
+    protected String answerChooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
         Map<String, String> names = new java.util.TreeMap<>();
         faces.forEach(f -> names.putIfAbsent(session.keys().oracleIdByName(f.getName()), f.getName()));
-        return nameFrom("chooseCardName(faces)", names, sa, message, () -> super.chooseCardName(sa, faces, message));
+        return nameFrom("chooseCardName(faces)", names, sa, message, () -> super.answerChooseCardName(sa, faces, message));
     }
 
     private String nameFrom(String method, Map<String, String> names, SpellAbility sa, String message,
@@ -1969,7 +1976,7 @@ public class AgentPlayerController extends ObservedAiController {
 
     /** A type: for creature types, those of the creatures in the deciding player's 75 (Cavern of Souls). */
     @Override
-    public String chooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes, boolean isOptional) {
+    protected String answerChooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes, boolean isOptional) {
         List<String> options = new ArrayList<>();
         if ("Creature".equals(kindOfType)) {
             Deck deck = session.registeredDeck(session.seat(player));
@@ -1992,7 +1999,7 @@ public class AgentPlayerController extends ObservedAiController {
             options.addAll(new java.util.TreeSet<>(validTypes));
         }
         if (options.isEmpty()) {
-            return super.chooseSomeType(kindOfType, sa, validTypes, isOptional); // counted as unclassified
+            return super.answerChooseSomeType(kindOfType, sa, validTypes, isOptional); // counted as unclassified
         }
         if (options.size() == 1 && !isOptional) {
             return options.get(0);
@@ -2001,7 +2008,7 @@ public class AgentPlayerController extends ObservedAiController {
         options.forEach(t -> candidates.add(Candidate.newBuilder().setNamedType(t).build()));
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_NAME, "chooseSomeType", candidates, ONE,
             context(sa).setEnginePrompt(kindOfType + " type").build());
-        return chosen == null ? forgeAi(() -> super.chooseSomeType(kindOfType, sa, validTypes, isOptional)) : options.get(chosen.get(0));
+        return chosen == null ? forgeAi(() -> super.answerChooseSomeType(kindOfType, sa, validTypes, isOptional)) : options.get(chosen.get(0));
     }
 
     // ---- between games ----

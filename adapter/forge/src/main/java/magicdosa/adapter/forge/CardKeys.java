@@ -122,6 +122,26 @@ public final class CardKeys {
         return null;
     }
 
+    /** Forge's card name for an oracle_id (rebuilding a game from a snapshot), or null when unknown. */
+    public String forgeName(String oracleId) {
+        for (Map.Entry<String, Row> e : cards.entrySet()) {
+            if (e.getValue().oracleId().equals(oracleId)) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
+    /** Forge's token script for a token oracle_id ("c_1_1_eldrazi_scion_sac"), or null when unknown. */
+    public String tokenScriptFor(String oracleId) {
+        for (Map.Entry<String, Row> e : tokens.entrySet()) {
+            if (e.getValue().oracleId().equals(oracleId)) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
     /** Scryfall oracle_id of a deck-list card name, or "" when unknown. */
     public String oracleIdByName(String forgeName) {
         Row row = cards.get(forgeName);

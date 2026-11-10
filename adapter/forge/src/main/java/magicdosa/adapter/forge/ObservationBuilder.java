@@ -79,7 +79,17 @@ final class ObservationBuilder {
         return b.setEffectsProvided(true).build();
     }
 
+    /** Shadow game: the real game's match context, used as is (it does not change during a game). */
+    private MatchContext fixedContext;
+
+    void fixMatchContext(MatchContext context) {
+        this.fixedContext = context;
+    }
+
     MatchContext matchContext(int viewerSeat) {
+        if (fixedContext != null) {
+            return fixedContext;
+        }
         MatchContext.Builder b = MatchContext.newBuilder()
             .setMatchId(session.matchId())
             .setGameNumber(session.gameNumber());
@@ -100,7 +110,7 @@ final class ObservationBuilder {
             }
             b.addPlayers(mp);
         }
-        Player starting = session.game().getStartingPlayer();
+        Player starting = session.game().getStartingPlayer() != null ? session.game().getStartingPlayer() : session.firstPlayer();
         if (starting != null) {
             b.setStartingSeat(session.seat(starting));
         }

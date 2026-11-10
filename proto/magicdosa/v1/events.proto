@@ -98,7 +98,8 @@ message CastSpell {
 message ActivateAbility {
   uint32 seat = 1;
   uint64 source_id = 2;
-  uint64 ability_id = 3;            // new ID of the ability on the stack
+  uint64 ability_id = 3;            // new ID of the ability on the stack; 0 for a special action that does not use the
+                                    // stack (CR 116.2, e.g. putting a companion into hand)
   AbilityKey ability = 4;
   repeated ObjectRef targets = 5;
   repeated uint32 modes = 6;
@@ -160,15 +161,38 @@ message PassPriority {
   uint32 seat = 1;
 }
 
-// A choice made while a spell or ability resolves (sacrifice, discard, search, mode/X chosen on resolution, ...).
+// A choice a player made that no other action event carries: while a spell or ability resolves (sacrifice, discard,
+// search, mode / number / color chosen on resolution, accepting or declining a "may"), and the parts of casting and
+// combat the action events leave out (protocol 9, 2026-11-10). Every seat's public choices go to every stream, the
+// choosing seat's included. Public means what a human opponent at the table could see or hear: the chosen objects
+// (by entity ID; their identity only through the usual reveals), modes, X, a chosen color, number or counter kind, a
+// yes / no. For a choice that looks at a library only the public part is set: scry gives how many cards went to the
+// top and to the bottom; surveil the cards put into the graveyard and how many stayed on top. The identity and order
+// of cards left in a library are never set (the shadow game takes them from privileged data or from belief).
 message ResolutionChoice {
   uint32 seat = 1;
   DecisionType type = 2;
   uint64 resolving_id = 3;          // stack item being resolved (0 for state-based / turn-based choices)
   repeated ObjectRef chosen = 4;    // chosen objects / players, in choice order
-  repeated uint32 options = 5;      // chosen option indices for CHOOSE_OPTION
+  // Chosen option indices for CHOOSE_OPTION: modes as 0-based indices in oracle order; for other enumerated choices
+  // the engine's order of the offered options (see engine_prompt).
+  repeated uint32 options = 5;
   optional int64 x = 6;
-  string engine_prompt = 7;         // engine's text for the choice, for debugging only
+  // The engine's name for the question (Forge: the PlayerController method). Debugging and the Forge shadow game's
+  // consistency check only; not encoded.
+  string engine_prompt = 7;
+  // Answers that are not objects or options, in choice order (protocol 9).
+  repeated ChoiceValue values = 8;
+}
+
+// One engine-neutral value of a choice (protocol 9): yes / no, a number (a chosen number, an amount, a count), or a
+// word (a color letter W U B R G C, a counter kind as in Counter.kind, a type name, a card's oracle_id for NAME).
+message ChoiceValue {
+  oneof value {
+    bool flag = 1;
+    int64 number = 2;
+    string text = 3;
+  }
 }
 
 // Order in which simultaneously triggered abilities are put on the stack (first = put on the stack first).

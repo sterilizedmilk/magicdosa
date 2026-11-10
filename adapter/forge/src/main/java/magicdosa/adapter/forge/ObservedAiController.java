@@ -46,6 +46,8 @@ import forge.item.PaperCard;
 import forge.util.ITriggerEvent;
 import forge.util.collect.FCollectionView;
 import magicdosa.protocol.v1.BottomCards;
+import magicdosa.protocol.v1.ChoiceValue;
+import magicdosa.protocol.v1.TriggerOrderChoice;
 import magicdosa.protocol.v1.DecisionType;
 import magicdosa.protocol.v1.MulliganChoice;
 import magicdosa.protocol.v1.PassPriority;
@@ -136,9 +138,52 @@ public class ObservedAiController extends PlayerControllerAi {
 
     // ---- actions every seat reports ----
 
+    /**
+     * True while Forge AI picks its priority action, attackers or blockers: it then asks the controller's choice methods
+     * itself to weigh options, and those calls are not choices made in the game (not reported).
+     */
+    private volatile boolean weighing;
+
+    /**
+     * How many public choices this controller is answering now. A choice asked while answering another one (Forge AI
+     * answers "choose cards" by choosing them one by one) is the controller's own way of answering: not reported.
+     */
+    protected int answering;
+
+    private <T> T weighing(java.util.function.Supplier<T> s) {
+        boolean before = weighing;
+        weighing = true;
+        try {
+            return s.get();
+        } finally {
+            weighing = before;
+        }
+    }
+
+    @Override
+    public void declareAttackers(Player attacker, forge.game.combat.Combat combat) {
+        weighing(() -> {
+            super.declareAttackers(attacker, combat);
+            return null;
+        });
+    }
+
+    @Override
+    public void declareBlockers(Player defender, forge.game.combat.Combat combat) {
+        weighing(() -> {
+            super.declareBlockers(defender, combat);
+            return null;
+        });
+    }
+
+    /** Forge AI's own priority action, prepared as it prepares it (nothing reported). */
+    protected final List<SpellAbility> forgeAiAction() {
+        return weighing(super::chooseSpellAbilityToPlay);
+    }
+
     @Override
     public List<SpellAbility> chooseSpellAbilityToPlay() {
-        List<SpellAbility> chosen = super.chooseSpellAbilityToPlay();
+        List<SpellAbility> chosen = weighing(super::chooseSpellAbilityToPlay);
         if (chosen == null || chosen.isEmpty()) {
             session.action(player, false, b -> b.setPassPriority(PassPriority.newBuilder().setSeat(session.seat(player))));
         }
@@ -150,7 +195,9 @@ public class ObservedAiController extends PlayerControllerAi {
     public boolean playChosenSpellAbility(SpellAbility sa) {
         session.beginAction();
         try {
-            return super.playChosenSpellAbility(sa);
+            boolean r = super.playChosenSpellAbility(sa);
+            session.playedWithoutStack(player, sa);
+            return r;
         } finally {
             session.endAction();
         }
@@ -226,6 +273,17 @@ public class ObservedAiController extends PlayerControllerAi {
     public List<SpellAbility> orderSimultaneousSa(List<SpellAbility> activePlayerSAs) {
         List<SpellAbility> r = super.orderSimultaneousSa(activePlayerSAs);
         delegated("orderSimultaneousSa", DecisionType.DECISION_TYPE_TRIGGER_ORDER);
+        if (r != null && r.size() > 1) {
+            // the order triggers go on the stack in is public (protocol 9); entries without a trigger ID are left out
+            TriggerOrderChoice.Builder t = TriggerOrderChoice.newBuilder().setSeat(session.seat(player));
+            for (SpellAbility sa : r) {
+                long id = session.triggerId(sa);
+                if (id != 0) {
+                    t.addAbilityIds(id);
+                }
+            }
+            session.reportAction(b -> b.setTriggerOrder(t));
+        }
         return r;
     }
 
@@ -261,8 +319,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return false;
     }
 
-    @Override
-    public Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
+    protected Map<Card, Integer> answerAssignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
                                                  int damageDealt, GameEntity defender, boolean overrideOrder) {
         Map<Card, Integer> r = super.assignCombatDamage(attacker, blockers, remaining, damageDealt, defender, overrideOrder);
         if (blockers.size() > 1) {
@@ -271,61 +328,53 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public CardCollectionView choosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
+    protected CardCollectionView answerChoosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
         CardCollectionView r = super.choosePermanentsToSacrifice(sa, min, max, validTargets, message);
         delegated("choosePermanentsToSacrifice", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public CardCollectionView choosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
+    protected CardCollectionView answerChoosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
         CardCollectionView r = super.choosePermanentsToDestroy(sa, min, max, validTargets, message);
         delegated("choosePermanentsToDestroy", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
+    protected Integer answerAnnounceRequirements(SpellAbility ability, int min, int max, String announce) {
         Integer r = super.announceRequirements(ability, min, max, announce);
         delegated("announceRequirements", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public CardCollectionView chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max,
+    protected CardCollectionView answerChooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max,
                                                    boolean isOptional, Map<String, Object> params) {
         CardCollectionView r = super.chooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params);
         delegated("chooseCardsForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public <T extends GameEntity> T chooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal, SpellAbility sa,
+    protected <T extends GameEntity> T answerChooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal, SpellAbility sa,
                                                                String title, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
         T r = super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
         delegated("chooseSingleEntityForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, list(r));
         return r;
     }
 
-    @Override
-    public <T extends GameEntity> List<T> chooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal,
+    protected <T extends GameEntity> List<T> answerChooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal,
                                                                  SpellAbility sa, String title, Player relatedPlayer, Map<String, Object> params) {
         List<T> r = super.chooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, relatedPlayer, params);
         delegated("chooseEntitiesForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
         return r;
     }
 
-    @Override
-    public List<SpellAbility> chooseSpellAbilitiesForEffect(List<SpellAbility> spells, SpellAbility sa, String title, int num,
+    protected List<SpellAbility> answerChooseSpellAbilitiesForEffect(List<SpellAbility> spells, SpellAbility sa, String title, int num,
                                                            Map<String, Object> params) {
         List<SpellAbility> r = super.chooseSpellAbilitiesForEffect(spells, sa, title, num, params);
         delegated("chooseSpellAbilitiesForEffect", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public SpellAbility chooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title, Map<String, Object> params) {
+    protected SpellAbility answerChooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title, Map<String, Object> params) {
         SpellAbility r = super.chooseSingleSpellForEffect(spells, sa, title, params);
         if (spells.size() > 1) {
             delegated("chooseSingleSpellForEffect", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
@@ -333,30 +382,26 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow,
+    protected boolean answerConfirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow,
                                  Map<String, Object> params) {
         boolean r = super.confirmAction(sa, mode, message, options, cardToShow, params);
         delegated("confirmAction", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public boolean confirmReplacementEffect(ReplacementEffect replacementEffect, SpellAbility effectSA, GameEntity affected, String question) {
+    protected boolean answerConfirmReplacementEffect(ReplacementEffect replacementEffect, SpellAbility effectSA, GameEntity affected, String question) {
         boolean r = super.confirmReplacementEffect(replacementEffect, effectSA, affected, question);
         delegated("confirmReplacementEffect", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public boolean confirmTrigger(WrappedAbility sa) {
+    protected boolean answerConfirmTrigger(WrappedAbility sa) {
         boolean r = super.confirmTrigger(sa);
         delegated("confirmTrigger", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public CardCollection orderBlockers(Card attacker, CardCollection blockers) {
+    protected CardCollection answerOrderBlockers(Card attacker, CardCollection blockers) {
         CardCollection r = super.orderBlockers(attacker, blockers);
         if (blockers.size() > 1) {
             delegated("orderBlockers", DecisionType.DECISION_TYPE_CHOOSE_CARDS);
@@ -364,29 +409,25 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public ImmutablePair<CardCollection, CardCollection> arrangeForScry(CardCollection topN) {
+    protected ImmutablePair<CardCollection, CardCollection> answerArrangeForScry(CardCollection topN) {
         ImmutablePair<CardCollection, CardCollection> r = super.arrangeForScry(topN);
         delegated("arrangeForScry", DecisionType.DECISION_TYPE_CHOOSE_CARDS);
         return r;
     }
 
-    @Override
-    public ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
+    protected ImmutablePair<CardCollection, CardCollection> answerArrangeForSurveil(CardCollection topN) {
         ImmutablePair<CardCollection, CardCollection> r = super.arrangeForSurveil(topN);
         delegated("arrangeForSurveil", DecisionType.DECISION_TYPE_CHOOSE_CARDS);
         return r;
     }
 
-    @Override
-    public boolean willPutCardOnTop(Card c) {
+    protected boolean answerWillPutCardOnTop(Card c) {
         boolean r = super.willPutCardOnTop(c);
         delegated("willPutCardOnTop", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
+    protected CardCollectionView answerOrderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
         CardCollectionView r = super.orderMoveToZoneList(cards, destinationZone, source);
         if (cards.size() > 1 && (destinationZone == ZoneType.Library || destinationZone == ZoneType.Graveyard)) {
             delegated("orderMoveToZoneList", DecisionType.DECISION_TYPE_CHOOSE_CARDS);
@@ -394,51 +435,44 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public CardCollection chooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection validCards, int min, int max,
+    protected CardCollection answerChooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection validCards, int min, int max,
                                                        CardCollectionView visibleToChooser) {
         CardCollection r = super.chooseCardsToDiscardFrom(playerDiscard, sa, validCards, min, max, visibleToChooser);
         delegated("chooseCardsToDiscardFrom", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
+    protected CardCollectionView answerChooseCardsToDiscardToMaximumHandSize(int numDiscard) {
         CardCollectionView r = super.chooseCardsToDiscardToMaximumHandSize(numDiscard);
         delegated("chooseCardsToDiscardToMaximumHandSize", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public CardCollectionView chooseCardsToDelve(int genericAmount, CardCollection grave) {
+    protected CardCollectionView answerChooseCardsToDelve(int genericAmount, CardCollection grave) {
         CardCollectionView r = super.chooseCardsToDelve(genericAmount, grave);
         delegated("chooseCardsToDelve", DecisionType.DECISION_TYPE_CHOOSE_CARDS, new ArrayList<>(r));
         return r;
     }
 
-    @Override
-    public List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
+    protected List<AbilitySub> answerChooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
         List<AbilitySub> r = super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
         delegated("chooseModeForAbility", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public int chooseNumber(SpellAbility sa, String title, int min, int max) {
+    protected int answerChooseNumber(SpellAbility sa, String title, int min, int max) {
         int r = super.chooseNumber(sa, title, min, max);
         delegated("chooseNumber", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public boolean chooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
+    protected boolean answerChooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
         boolean r = super.chooseBinary(sa, question, kindOfChoice, defaultChoice);
         delegated("chooseBinary", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
         return r;
     }
 
-    @Override
-    public byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
+    protected byte answerChooseColor(String message, SpellAbility sa, ColorSet colors) {
         byte r = super.chooseColor(message, sa, colors);
         if (colors.countColors() > 1) {
             delegated("chooseColor", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
@@ -446,8 +480,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public CounterType chooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
+    protected CounterType answerChooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
         CounterType r = super.chooseCounterType(options, sa, prompt, params);
         if (options.size() > 1) {
             delegated("chooseCounterType", DecisionType.DECISION_TYPE_CHOOSE_OPTION);
@@ -455,8 +488,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public CardCollectionView chooseCardsForCost(CardCollectionView optionList, SpellAbility sa, CostPartWithList cpl, int amount,
+    protected CardCollectionView answerChooseCardsForCost(CardCollectionView optionList, SpellAbility sa, CostPartWithList cpl, int amount,
                                                  boolean isOptional, String prompt) {
         CardCollectionView r = super.chooseCardsForCost(optionList, sa, cpl, amount, isOptional, prompt);
         if (r != null) {
@@ -465,19 +497,705 @@ public class ObservedAiController extends PlayerControllerAi {
         return r;
     }
 
-    @Override
-    public Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList,
+    protected Card answerChooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList,
                                               DelayedReveal delayedReveal, String selectPrompt, boolean isOptional, Player decider) {
         Card r = super.chooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal, selectPrompt, isOptional, decider);
         delegated("chooseSingleCardForZoneChange", DecisionType.DECISION_TYPE_CHOOSE_CARDS, list(r));
         return r;
     }
 
-    @Override
-    public List<Card> chooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, int min,
+    protected List<Card> answerChooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, int min,
                                                int max, DelayedReveal delayedReveal, String selectPrompt, Player decider) {
         List<Card> r = super.chooseCardsForZoneChange(destination, origin, sa, fetchList, min, max, delayedReveal, selectPrompt, decider);
         delegated("chooseCardsForZoneChange", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    // ---- reporting public choices (protocol 9) ----
+
+    private void objects(String method, DecisionType type, Collection<? extends GameObject> chosen) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, type, method, chosen == null ? List.of() : chosen, null, null);
+    }
+
+    private void flag(String method, boolean value) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_OPTION, method, null, null,
+            List.of(ChoiceValue.newBuilder().setFlag(value).build()));
+    }
+
+    private void number(String method, Integer value) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_OPTION, method, null, null,
+            value == null ? List.of() : List.of(ChoiceValue.newBuilder().setNumber(value).build()));
+    }
+
+    private void text(String method, DecisionType type, String value) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, type, method, null, null,
+            value == null ? List.of() : List.of(ChoiceValue.newBuilder().setText(value).build()));
+    }
+
+    private void options(String method, List<Integer> chosen) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_OPTION, method, null, chosen, null);
+    }
+
+    private static <T> List<T> one(T x) {
+        List<T> out = new ArrayList<>();
+        if (x != null) {
+            out.add(x);
+        }
+        return out;
+    }
+
+    /** Positions of {@code chosen} in the offered list (the engine's order), in choice order. */
+    private static List<Integer> indices(List<?> offered, Collection<?> chosen) {
+        List<Integer> out = new ArrayList<>();
+        if (chosen != null) {
+            for (Object o : chosen) {
+                int i = offered.indexOf(o);
+                if (i >= 0) {
+                    out.add(i);
+                }
+            }
+        }
+        return out;
+    }
+
+    private static ChoiceValue count(Collection<?> c) {
+        return ChoiceValue.newBuilder().setNumber(c == null ? 0 : c.size()).build();
+    }
+
+    /** Scry: only how many cards went to the top and to the bottom are public. */
+    private void scry(ImmutablePair<CardCollection, CardCollection> r) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_CARDS, "arrangeForScry", null, null,
+            r == null ? List.of() : List.of(count(r.getLeft()), count(r.getRight())));
+    }
+
+    /** Surveil: the cards put into the graveyard are public, the ones left on top only by number. */
+    private void surveil(ImmutablePair<CardCollection, CardCollection> r) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_CARDS, "arrangeForSurveil",
+            r == null || r.getRight() == null ? List.of() : r.getRight(), null,
+            r == null ? List.of() : List.of(count(r.getLeft())));
+    }
+
+    /** The order cards go to a zone in: public, except into a library (only their number). */
+    private void moveOrder(CardCollectionView r, ZoneType destination) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        if (destination == ZoneType.Library) {
+            session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_CARDS, "orderMoveToZoneList", null, null,
+                List.of(count(r == null ? null : new ArrayList<>(r))));
+        } else {
+            objects("orderMoveToZoneList", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r == null ? null : new ArrayList<>(r));
+        }
+    }
+
+    /** Combat damage of one attacker: each recipient (the defender for a null key) with its amount. */
+    private void damage(Map<Card, Integer> r, GameEntity defender) {
+        if (weighing || answering > 0) {
+            return;
+        }
+        List<GameObject> to = new ArrayList<>();
+        List<ChoiceValue> amounts = new ArrayList<>();
+        if (r != null) {
+            for (Map.Entry<Card, Integer> e : r.entrySet()) {
+                to.add(e.getKey() == null ? defender : e.getKey());
+                amounts.add(ChoiceValue.newBuilder().setNumber(e.getValue() == null ? 0 : e.getValue()).build());
+            }
+        }
+        session.choice(player, DecisionType.DECISION_TYPE_DAMAGE_ASSIGNMENT, "assignCombatDamage", to, null, amounts);
+    }
+
+    /** New targets chosen for a copy. */
+    private void newTargets(TargetChoices r) {
+        List<GameObject> to = new ArrayList<>();
+        if (r != null) {
+            to.addAll(r);
+        }
+        objects("chooseNewTargetsFor", DecisionType.DECISION_TYPE_TARGET, to);
+    }
+
+    // ---- public choices (protocol 9): reported once here, answered by answer* ----
+    // A choice with one possible answer is not reported (it tells a human opponent nothing), and a replay answers it
+    // without looking at the record.
+
+    @Override
+    public final CardCollectionView choosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChoosePermanentsToSacrifice(sa, min, max, validTargets, message);
+        } finally {
+            answering--;
+        }
+        objects("choosePermanentsToSacrifice", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView choosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChoosePermanentsToDestroy(sa, min, max, validTargets, message);
+        } finally {
+            answering--;
+        }
+        objects("choosePermanentsToDestroy", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final Integer announceRequirements(SpellAbility ability, int min, int max, String announce) {
+        Integer r;
+        answering++;
+        try {
+            r = answerAnnounceRequirements(ability, min, max, announce);
+        } finally {
+            answering--;
+        }
+        number("announceRequirements", r);
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max,
+                                                   boolean isOptional, Map<String, Object> params) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final <T extends GameEntity> T chooseSingleEntityForEffect(FCollectionView<T> optionList, DelayedReveal delayedReveal, SpellAbility sa,
+                                                               String title, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
+        T r;
+        answering++;
+        try {
+            r = answerChooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
+        } finally {
+            answering--;
+        }
+        objects("chooseSingleEntityForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, list(r));
+        return r;
+    }
+
+    @Override
+    public final <T extends GameEntity> List<T> chooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal,
+                                                                 SpellAbility sa, String title, Player relatedPlayer, Map<String, Object> params) {
+        List<T> r;
+        answering++;
+        try {
+            r = answerChooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, relatedPlayer, params);
+        } finally {
+            answering--;
+        }
+        objects("chooseEntitiesForEffect", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final List<SpellAbility> chooseSpellAbilitiesForEffect(List<SpellAbility> spells, SpellAbility sa, String title, int num,
+                                                           Map<String, Object> params) {
+        List<SpellAbility> r;
+        answering++;
+        try {
+            r = answerChooseSpellAbilitiesForEffect(spells, sa, title, num, params);
+        } finally {
+            answering--;
+        }
+        options("chooseSpellAbilitiesForEffect", indices(spells, r));
+        return r;
+    }
+
+    @Override
+    public final SpellAbility chooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title, Map<String, Object> params) {
+        SpellAbility r;
+        answering++;
+        try {
+            r = answerChooseSingleSpellForEffect(spells, sa, title, params);
+        } finally {
+            answering--;
+        }
+        if (spells.size() > 1) {
+            options("chooseSingleSpellForEffect", indices(spells, one(r)));
+        }
+        return r;
+    }
+
+    @Override
+    public final boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow,
+                                 Map<String, Object> params) {
+        boolean r;
+        answering++;
+        try {
+            r = answerConfirmAction(sa, mode, message, options, cardToShow, params);
+        } finally {
+            answering--;
+        }
+        flag("confirmAction", r);
+        return r;
+    }
+
+    @Override
+    public final boolean confirmReplacementEffect(ReplacementEffect replacementEffect, SpellAbility effectSA, GameEntity affected, String question) {
+        boolean r;
+        answering++;
+        try {
+            r = answerConfirmReplacementEffect(replacementEffect, effectSA, affected, question);
+        } finally {
+            answering--;
+        }
+        flag("confirmReplacementEffect", r);
+        return r;
+    }
+
+    @Override
+    public final boolean confirmTrigger(WrappedAbility sa) {
+        boolean r;
+        answering++;
+        try {
+            r = answerConfirmTrigger(sa);
+        } finally {
+            answering--;
+        }
+        flag("confirmTrigger", r);
+        return r;
+    }
+
+    @Override
+    public final CardCollection orderBlockers(Card attacker, CardCollection blockers) {
+        CardCollection r;
+        answering++;
+        try {
+            r = answerOrderBlockers(attacker, blockers);
+        } finally {
+            answering--;
+        }
+        objects("orderBlockers", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final ImmutablePair<CardCollection, CardCollection> arrangeForScry(CardCollection topN) {
+        ImmutablePair<CardCollection, CardCollection> r;
+        answering++;
+        try {
+            r = answerArrangeForScry(topN);
+        } finally {
+            answering--;
+        }
+        scry(r);
+        return r;
+    }
+
+    @Override
+    public final ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
+        ImmutablePair<CardCollection, CardCollection> r;
+        answering++;
+        try {
+            r = answerArrangeForSurveil(topN);
+        } finally {
+            answering--;
+        }
+        surveil(r);
+        return r;
+    }
+
+    @Override
+    public final boolean willPutCardOnTop(Card c) {
+        boolean r;
+        answering++;
+        try {
+            r = answerWillPutCardOnTop(c);
+        } finally {
+            answering--;
+        }
+        flag("willPutCardOnTop", r);
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerOrderMoveToZoneList(cards, destinationZone, source);
+        } finally {
+            answering--;
+        }
+        moveOrder(r, destinationZone);
+        return r;
+    }
+
+    @Override
+    public final CardCollection chooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection validCards, int min, int max,
+                                                       CardCollectionView visibleToChooser) {
+        CardCollection r;
+        answering++;
+        try {
+            r = answerChooseCardsToDiscardFrom(playerDiscard, sa, validCards, min, max, visibleToChooser);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsToDiscardFrom", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChooseCardsToDiscardToMaximumHandSize(numDiscard);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsToDiscardToMaximumHandSize", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView chooseCardsToDelve(int genericAmount, CardCollection grave) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChooseCardsToDelve(genericAmount, grave);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsToDelve", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final List<AbilitySub> chooseModeForAbility(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
+        List<AbilitySub> r;
+        answering++;
+        try {
+            r = answerChooseModeForAbility(sa, possible, min, num, allowRepeat);
+        } finally {
+            answering--;
+        }
+        options("chooseModeForAbility", session.modeIndices(sa, r));
+        return r;
+    }
+
+    @Override
+    public final int chooseNumber(SpellAbility sa, String title, List<Integer> values, Player relatedPlayer) {
+        int r;
+        answering++;
+        try {
+            r = answerChooseNumber(sa, title, values, relatedPlayer);
+        } finally {
+            answering--;
+        }
+        if (values.size() > 1) {
+            number("chooseNumber", r);
+        }
+        return r;
+    }
+
+    @Override
+    public final int chooseNumber(SpellAbility sa, String title, int min, int max) {
+        int r;
+        answering++;
+        try {
+            r = answerChooseNumber(sa, title, min, max);
+        } finally {
+            answering--;
+        }
+        if (max > min) {
+            number("chooseNumber", r);
+        }
+        return r;
+    }
+
+    @Override
+    public final boolean chooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
+        boolean r;
+        answering++;
+        try {
+            r = answerChooseBinary(sa, question, kindOfChoice, defaultChoice);
+        } finally {
+            answering--;
+        }
+        flag("chooseBinary", r);
+        return r;
+    }
+
+    @Override
+    public final byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
+        byte r;
+        answering++;
+        try {
+            r = answerChooseColor(message, sa, colors);
+        } finally {
+            answering--;
+        }
+        if (colors.countColors() > 1) {
+            text("chooseColor", DecisionType.DECISION_TYPE_CHOOSE_OPTION, ObservationBuilder.colorLetter(r));
+        }
+        return r;
+    }
+
+    @Override
+    public final CounterType chooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
+        CounterType r;
+        answering++;
+        try {
+            r = answerChooseCounterType(options, sa, prompt, params);
+        } finally {
+            answering--;
+        }
+        if (options.size() > 1) {
+            text("chooseCounterType", DecisionType.DECISION_TYPE_CHOOSE_OPTION, r == null ? null : ObservationBuilder.counterName(r));
+        }
+        return r;
+    }
+
+    @Override
+    public final CardCollectionView chooseCardsForCost(CardCollectionView optionList, SpellAbility sa, CostPartWithList cpl, int amount,
+                                                 boolean isOptional, String prompt) {
+        CardCollectionView r;
+        answering++;
+        try {
+            r = answerChooseCardsForCost(optionList, sa, cpl, amount, isOptional, prompt);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsForCost", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList,
+                                              DelayedReveal delayedReveal, String selectPrompt, boolean isOptional, Player decider) {
+        Card r;
+        answering++;
+        try {
+            r = answerChooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal, selectPrompt, isOptional, decider);
+        } finally {
+            answering--;
+        }
+        objects("chooseSingleCardForZoneChange", DecisionType.DECISION_TYPE_CHOOSE_CARDS, list(r));
+        return r;
+    }
+
+    @Override
+    public final List<Card> chooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList, int min,
+                                               int max, DelayedReveal delayedReveal, String selectPrompt, Player decider) {
+        List<Card> r;
+        answering++;
+        try {
+            r = answerChooseCardsForZoneChange(destination, origin, sa, fetchList, min, max, delayedReveal, selectPrompt, decider);
+        } finally {
+            answering--;
+        }
+        objects("chooseCardsForZoneChange", DecisionType.DECISION_TYPE_CHOOSE_CARDS, r);
+        return r;
+    }
+
+    @Override
+    public final List<SpellAbility> chooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
+        List<SpellAbility> r;
+        answering++;
+        try {
+            r = answerChooseSaToActivateFromOpeningHand(usableFromOpeningHand);
+        } finally {
+            answering--;
+        }
+        options("chooseSaToActivateFromOpeningHand", indices(usableFromOpeningHand, r));
+        return r;
+    }
+
+    @Override
+    public final String chooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes, boolean isOptional) {
+        String r;
+        answering++;
+        try {
+            r = answerChooseSomeType(kindOfType, sa, validTypes, isOptional);
+        } finally {
+            answering--;
+        }
+        text("chooseSomeType", DecisionType.DECISION_TYPE_NAME, r);
+        return r;
+    }
+
+    @Override
+    public final String chooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
+        String r;
+        answering++;
+        try {
+            r = answerChooseCardName(sa, faces, message);
+        } finally {
+            answering--;
+        }
+        text("chooseCardName", DecisionType.DECISION_TYPE_NAME, r == null ? null : session.keys().oracleIdByName(r));
+        return r;
+    }
+
+    @Override
+    public final String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
+        String r;
+        answering++;
+        try {
+            r = answerChooseCardName(sa, cpp, valid, message);
+        } finally {
+            answering--;
+        }
+        text("chooseCardName", DecisionType.DECISION_TYPE_NAME, r == null ? null : session.keys().oracleIdByName(r));
+        return r;
+    }
+
+    @Override
+    public final ReplacementEffect chooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
+        ReplacementEffect r;
+        answering++;
+        try {
+            r = answerChooseSingleReplacementEffect(possibleReplacers);
+        } finally {
+            answering--;
+        }
+        if (possibleReplacers.size() > 1) {
+            options("chooseSingleReplacementEffect", indices(possibleReplacers, one(r)));
+        }
+        return r;
+    }
+
+    @Override
+    public final int chooseNumberForCostReduction(SpellAbility sa, int min, int max) {
+        int r;
+        answering++;
+        try {
+            r = answerChooseNumberForCostReduction(sa, min, max);
+        } finally {
+            answering--;
+        }
+        if (max > min) {
+            number("chooseNumberForCostReduction", r);
+        }
+        return r;
+    }
+
+    @Override
+    public final int chooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
+        int r;
+        answering++;
+        try {
+            r = answerChooseNumberForKeywordCost(sa, cost, keyword, prompt, max);
+        } finally {
+            answering--;
+        }
+        if (max > 0) {
+            number("chooseNumberForKeywordCost", r);
+        }
+        return r;
+    }
+
+    @Override
+    public final Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
+                                                 int damageDealt, GameEntity defender, boolean overrideOrder) {
+        Map<Card, Integer> r;
+        answering++;
+        try {
+            r = answerAssignCombatDamage(attacker, blockers, remaining, damageDealt, defender, overrideOrder);
+        } finally {
+            answering--;
+        }
+        damage(r, defender);
+        return r;
+    }
+
+    @Override
+    public final TargetChoices chooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter, boolean optional) {
+        TargetChoices r;
+        answering++;
+        try {
+            r = answerChooseNewTargetsFor(ability, filter, optional);
+        } finally {
+            answering--;
+        }
+        newTargets(r);
+        return r;
+    }
+
+    protected boolean answerConfirmPayment(CostPart costPart, String string, SpellAbility sa) {
+        return super.confirmPayment(costPart, string, sa);
+    }
+
+    @Override
+    public final boolean confirmPayment(CostPart costPart, String string, SpellAbility sa) {
+        boolean r;
+        answering++;
+        try {
+            r = answerConfirmPayment(costPart, string, sa);
+        } finally {
+            answering--;
+        }
+        flag("confirmPayment", r);
+        return r;
+    }
+
+    protected boolean answerPayCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+        return super.payCostToPreventEffect(cost, sa, alreadyPaid, allPayers);
+    }
+
+    @Override
+    public final boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+        boolean r;
+        answering++;
+        try {
+            r = answerPayCostToPreventEffect(cost, sa, alreadyPaid, allPayers);
+        } finally {
+            answering--;
+        }
+        flag("payCostToPreventEffect", r);
+        return r;
+    }
+
+    protected List<OptionalCostValue> answerChooseOptionalCosts(SpellAbility choosen, List<OptionalCostValue> optionalCostValues) {
+        return super.chooseOptionalCosts(choosen, optionalCostValues);
+    }
+
+    @Override
+    public final List<OptionalCostValue> chooseOptionalCosts(SpellAbility choosen, List<OptionalCostValue> optionalCostValues) {
+        List<OptionalCostValue> r;
+        answering++;
+        try {
+            r = answerChooseOptionalCosts(choosen, optionalCostValues);
+        } finally {
+            answering--;
+        }
+        if (session.inAction()) {
+            // Forge AI also asks this while it only weighs a spell; the choice is made when the spell is cast
+            options("chooseOptionalCosts", indices(optionalCostValues, r));
+        }
         return r;
     }
 
@@ -501,8 +1219,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.divideShield(effectSource, affected, shieldAmount);
     }
 
-    @Override
-    public TargetChoices chooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter, boolean optional) {
+    protected TargetChoices answerChooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter, boolean optional) {
         delegated("chooseNewTargetsFor", DecisionType.DECISION_TYPE_TARGET); // new targets for a copy
         return super.chooseNewTargetsFor(ability, filter, optional);
     }
@@ -591,8 +1308,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.chooseCardsToRevealFromHand(min, max, valid);
     }
 
-    @Override
-    public List<SpellAbility> chooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
+    protected List<SpellAbility> answerChooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
         unclassified("chooseSaToActivateFromOpeningHand");
         return super.chooseSaToActivateFromOpeningHand(usableFromOpeningHand);
     }
@@ -609,8 +1325,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.chooseManaFromPool(manaChoices);
     }
 
-    @Override
-    public String chooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes, boolean isOptional) {
+    protected String answerChooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes, boolean isOptional) {
         unclassified("chooseSomeType");
         return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
     }
@@ -693,14 +1408,12 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.vote(sa, prompt, options, votes, forPlayer, optional);
     }
 
-    @Override
-    public int chooseNumberForCostReduction(SpellAbility sa, int min, int max) {
+    protected int answerChooseNumberForCostReduction(SpellAbility sa, int min, int max) {
         unclassified("chooseNumberForCostReduction");
         return super.chooseNumberForCostReduction(sa, min, max);
     }
 
-    @Override
-    public int chooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
+    protected int answerChooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
         unclassified("chooseNumberForKeywordCost");
         return super.chooseNumberForKeywordCost(sa, cost, keyword, prompt, max);
     }
@@ -753,8 +1466,7 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.chooseKeywordForPump(options, sa, prompt, tgtCard);
     }
 
-    @Override
-    public ReplacementEffect chooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
+    protected ReplacementEffect answerChooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
         unclassified("chooseSingleReplacementEffect");
         return super.chooseSingleReplacementEffect(possibleReplacers);
     }
@@ -789,20 +1501,17 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.payCombatCost(card, cost, sa, prompt);
     }
 
-    @Override
-    public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
+    protected String answerChooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
         unclassified("chooseCardName");
         return super.chooseCardName(sa, cpp, valid, message);
     }
 
-    @Override
-    public String chooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
+    protected String answerChooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
         unclassified("chooseCardName");
         return super.chooseCardName(sa, faces, message);
     }
 
-    @Override
-    public int chooseNumber(SpellAbility sa, String title, List<Integer> values, Player relatedPlayer) {
+    protected int answerChooseNumber(SpellAbility sa, String title, List<Integer> values, Player relatedPlayer) {
         unclassified("chooseNumber(values)");
         return super.chooseNumber(sa, title, values, relatedPlayer);
     }

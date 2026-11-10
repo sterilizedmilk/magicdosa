@@ -45,6 +45,24 @@ final class EntityIds {
         return next++;
     }
 
+    /**
+     * Shadow game: {@code c} is the object the real game named {@code id} (a game rebuilt from a turn-start snapshot).
+     * Call before the first {@link #sync}.
+     */
+    void adopt(Card c, long id) {
+        cards.put(c.getId(), new Tracked(id, c.getZone() == null ? null : c.getZone().getZoneType(), c));
+        next = Math.max(next, id + 1);
+    }
+
+    /** Shadow game: the next ID the real game will issue. */
+    void continueFrom(long nextId) {
+        next = Math.max(next, nextId);
+    }
+
+    long nextId() {
+        return next;
+    }
+
     /** Current entity ID of a card (0 when it has never been seen; call {@link #sync} first). */
     long idOf(Card c) {
         if (c == null) {
@@ -52,6 +70,16 @@ final class EntityIds {
         }
         Tracked t = cards.get(c.getId());
         return t == null ? 0 : t.id();
+    }
+
+    /** The card that has entity ID {@code id} now, or null. */
+    Card cardOf(long id) {
+        for (Tracked t : cards.values()) {
+            if (t.id() == id) {
+                return t.card().getGame().getCardState(t.card());
+            }
+        }
+        return null;
     }
 
     /** The ID the object had in its previous zone, 0 if none. */
