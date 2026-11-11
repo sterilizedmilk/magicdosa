@@ -53,6 +53,10 @@ public final class Fingerprint {
             b.setBundle(r.getBundle().toBuilder().clearId());
         }
         b.setObservation(normalise(r.getObservation()));
+        if (r.hasContext() && !r.getContext().getEnginePrompt().isEmpty()) {
+            // engine text for debugging; Forge's own card numbers in it ("No More Lies (118)") are not game state
+            b.setContext(r.getContext().toBuilder().setEnginePrompt(r.getContext().getEnginePrompt().replaceAll("\\(\\d+\\)", "(#)")));
+        }
         return b.build();
     }
 

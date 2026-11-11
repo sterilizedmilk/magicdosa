@@ -39,7 +39,7 @@ public final class RandomGames {
 
     /** One run's report and verdict, plus the totals AllPairings adds up. */
     record Summary(List<String> lines, boolean pass, DecisionStats stats, int matches, int games, int errors,
-                   double seconds, int logProblems, Set<String> unmapped) {}
+                   double seconds, int logProblems, Set<String> unmapped) implements java.io.Serializable {}
 
     /** Headless Forge; samples the priority candidates (CandidateCheck) unless set otherwise. Call once per JVM. */
     static void initForge() {

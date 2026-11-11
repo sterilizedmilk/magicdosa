@@ -283,7 +283,10 @@ final class ObservationBuilder {
             .setToken(c.isToken())
             .setFaceDown(c.isFaceDown());
         int viewerSeat = session.seat(viewer);
-        boolean known = z == ZoneType.Library && session.facts().knows(viewerSeat, c); // E3: scried, put back
+        boolean known = z == ZoneType.Library && session.facts().knows(viewerSeat, c) // E3: scried, put back
+            // a card in a hand the viewer has seen as this object (revealed from that hand, or seen before it went
+            // there): confirmed information
+            || z == ZoneType.Hand && session.seen(viewerSeat, session.ids().idOf(c));
         if (visible || known) {
             b.setOracleId(session.keys().oracleId(c)).setFace(session.keys().face(c)).setCopy(c.isCloned());
             if (c.isToken()) {

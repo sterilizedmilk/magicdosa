@@ -59,7 +59,8 @@ mvn -pl agent-core exec:exec "-Dexec.mainClass=magicdosa.agent.AgentCore" "-Dexe
 mvn -pl runner/forge exec:exec   # 1단계 게이트: 랜덤 정책 vs Forge AI (기본 20매치, agent-core를 별도 JVM으로 띄움, 비의도 폴백 0이면 PASS)
 mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AdapterDeterminism" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 20"
 mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.LogReplay" "-Dexec.args=<절대경로 decks> IzzetProwess.dck EsperBlink.dck 10 <절대경로 빈 로그 폴더>"
-mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --threads 8"   # 16조합 게이트. --threads는 스레드 병렬이라 판정에 쓰지 않음(프로세스 병렬 실행기로 교체 예정)
+mvn -pl runner/forge exec:exec "-Djvm.args=-Xmx1g -Dmagicdosa.agentXmx=1g" "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings" "-Dexec.args=<절대경로 decks> 60 <절대경로 빈 로그 폴더> --workers 8 --worker-xmx 2g"   # 16조합 게이트. 조합마다 워커 JVM 하나(동시 8개), 워커마다 agent-core JVM 하나
+mvn -pl agent-core exec:exec "-Djvm.args=-Xmx1g" "-Dexec.mainClass=magicdosa.agent.shadow.ShadowCheck" "-Dexec.args=<절대경로 게이트 로그 폴더> --workers 8 --worker-xmx 2g"   # 그림자 검증 ①. 로그 폴더(조합)마다 JVM 하나
 cd python; pip install -e ".[dev]"
 ```
 
@@ -133,7 +134,8 @@ vocab 3). 최종 게이트 AllPairings 16×60(8스레드) PASS: 비의도 폴백
 - 게이트(AllPairings)는 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
 - **병렬은 프로세스 단위 (2026-11-11 결정):** 한 JVM에서 Forge 게임을 여러 스레드로 동시에 돌리면 게임끼리 간섭한다
   (Forge 능력 ID 전역 카운터가 스레드 안전하지 않음, `docs/upstream-candidates.md` 1번). 실행기·게이트·agent-core·
-  ShadowCheck는 JVM 하나에 한 번에 게임 하나만 돌리고, 병렬은 프로세스를 여러 개 띄워서 한다. `--threads`로 낸 결과는
+  ShadowCheck는 JVM 하나에 한 번에 게임 하나만 돌리고, 병렬은 프로세스를 여러 개 띄워서 한다(`--workers N`, 워커 JVM 최대 힙
+  약 1~1.4 GB). `--threads`로 낸 결과는
   게이트 판정에 쓰지 않는다. 업스트림 수정이 고정 커밋에 들어오면 스레드 병렬로 돌아온다.
 - 엔진 거부는 0건이 목표다. 거부가 한 건이라도 나오면 어댑터 결함으로 본다(재요청은 안전망).
 

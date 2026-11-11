@@ -29,6 +29,7 @@ import magicdosa.protocol.v1.Hello;
 import magicdosa.protocol.v1.HelloReply;
 import magicdosa.protocol.v1.LibraryOrder;
 import magicdosa.protocol.v1.MatchPlayer;
+import magicdosa.protocol.v1.Privileged;
 import magicdosa.protocol.v1.PrivilegedRecord;
 import magicdosa.protocol.v1.TurnStartSnapshot;
 
@@ -78,12 +79,23 @@ public final class ShadowGame {
     }
 
     /** What the run measured. */
-    public static final class Result {
+    public static final class Result implements java.io.Serializable {
         public final String game;
         /** Decisions as first asked (the gate) and after recovery; decided without search after recovery failed. */
         public int decisions, decisionsMatched, decisionsMatchedAfterRecovery, searchSkipped;
-        /** Decisions where a mana pool took the real order (verification of public state; counted). */
+        /** Decisions where a mana pool took the real (public) order (verification of public state; counted). */
         public int poolOrders;
+        /**
+         * Event-log replay (Q19): the other seat's recorded actions and public choices since the last (re)build and how
+         * many of them the replay used; whether the shadow ended as the log did (winner, reason, turns); and whether the
+         * game was reproduced end to end (every decision at the first try, no recovery, every recorded action of the
+         * other seat used, no replay problem, the same end).
+         */
+        public int opponentRecorded, opponentReplayed;
+        public String endReal = "", endShadow = "";
+        public boolean sameEnd, reproduced;
+        /** Verification ②: belief samples drawn, samples that found no fitting 60, identity swaps and their failures. */
+        public int samples2, sampleFailures, identitySwaps, identitySwapFailures, sixtyChanges;
         /** Recoveries: ① memento and the turn again, ② rebuild from the turn-start snapshot, ③ search skip. */
         public int recoveries1, recoveries2, recoveries3;
         public int mementos, libraryCorrections, hostRepairs;
@@ -129,6 +141,17 @@ public final class ShadowGame {
             r.rebuilds = rebuilds;
             r.hostRepairs = hostRepairs;
             r.poolOrders = poolOrders;
+            r.opponentRecorded = opponentRecorded;
+            r.opponentReplayed = opponentReplayed;
+            r.endReal = endReal;
+            r.endShadow = endShadow;
+            r.sameEnd = sameEnd;
+            r.reproduced = reproduced;
+            r.samples2 = samples2;
+            r.sampleFailures = sampleFailures;
+            r.identitySwaps = identitySwaps;
+            r.identitySwapFailures = identitySwapFailures;
+            r.sixtyChanges = sixtyChanges;
             r.libraryCorrections = libraryCorrections;
             r.gaps.addAll(new ArrayList<>(gaps));
             r.replayMismatches.addAll(new ArrayList<>(replayMismatches));
@@ -143,6 +166,9 @@ public final class ShadowGame {
     private final GameRecord rec;
     private final CardKeys keys;
     private final boolean forcedRegeneration;
+    private final boolean beliefSamples;
+    /** IDs whose identity the real game has shown the viewer (identity swaps never take these cards). */
+    private final Set<Long> shownIds = new java.util.HashSet<>();
     private final Result result;
     private final int viewer;
     private final int opponent;
@@ -177,9 +203,19 @@ public final class ShadowGame {
     private int lastComparedTurn = -1;
 
     public ShadowGame(GameRecord rec, CardKeys keys, boolean forcedRegeneration) {
+        this(rec, keys, forcedRegeneration, false);
+    }
+
+    /**
+     * {@code beliefSamples}: verification ② (design: 개요 2단계): the hidden cards are a belief sample instead of the
+     * real ones (BeliefSampler at every (re)build); identities are swapped when the real game shows them; nothing hidden
+     * is taken from the privileged records.
+     */
+    public ShadowGame(GameRecord rec, CardKeys keys, boolean forcedRegeneration, boolean beliefSamples) {
         this.rec = rec;
         this.keys = keys;
         this.forcedRegeneration = forcedRegeneration;
+        this.beliefSamples = beliefSamples;
         this.viewer = rec.viewer;
         this.opponent = 1 - rec.viewer;
         this.result = new Result(rec.header.getGameId() + "/seat" + rec.viewer);
@@ -259,6 +295,7 @@ public final class ShadowGame {
             }
             startSnapshot = rec.snapshots.get(si);
             rebuild(startSnapshot);
+            startDecisionIdx = decisionIdx; // decisions before the game start (sideboarding, play or draw) are not replayed
             long firstSeq = rec.snapshots.get(si).snapshot().getSeq();
             while (true) {
                 try {
@@ -269,6 +306,7 @@ public final class ShadowGame {
                     loop();
                     result.end = game.isGameOver() ? "game over" : "loop ended";
                     eventCounts(firstSeq);
+                    replayVerdict();
                     return;
                 } catch (Throwable t) {
                     Unwind u = unwind(t);
@@ -378,6 +416,322 @@ public final class ShadowGame {
         result.decisions = firstTry.size();
         result.decisionsMatched = (int) firstTry.values().stream().filter(x -> x).count();
         result.decisionsMatchedAfterRecovery = (int) lastTry.values().stream().filter(x -> x).count();
+    }
+
+    private int startDecisionIdx;
+
+    /**
+     * Verification ②: which library card a draw takes is public (its entity ID), its identity is not. The cards the
+     * real stream takes from the seat's library after {@code fromSeq}, up to the next shuffle, go on top in that order
+     * (design: 내 드로우는 실제로 뽑은 카드를 라이브러리 맨 위에 놓고 적용; the identities stay the sampled ones until shown).
+     */
+    private void departuresOnTop(int seat, long fromSeq) {
+        List<Long> leaving = departures(seat, fromSeq);
+        placeOnTop(seat, leaving);
+    }
+
+    /**
+     * The library cards the real stream takes from the top of the seat's library after {@code fromSeq}, or looks at
+     * there (a dig: look at the top N), in that order, up to the next shuffle; a run of looks followed by a shuffle is
+     * a search (the whole library), not the top. Public: which object a draw takes is known, not what it is.
+     */
+    private List<Long> departures(int seat, long fromSeq) {
+        List<Long> leaving = new ArrayList<>();
+        int keptLeft = 0;
+        int bottomed = 0;
+        List<Event> after = new ArrayList<>(rec.events.tailMap(fromSeq, false).values());
+        // cards the viewer looks at in its own library without a reveal event (a dig: "look at the top N") are the
+        // library cards among a real request's candidates, at the point of that request
+        TreeMap<Long, List<Long>> looked = new TreeMap<>();
+        if (seat == viewer) {
+            for (GameRecord.Decision d : rec.decisions) {
+                var r = d.record().getRequest();
+                if (r.getAppliedSeq() < fromSeq || r.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
+                    continue;
+                }
+                Set<Long> inLibrary = new java.util.HashSet<>();
+                for (var g : r.getObservation().getObjectsList()) {
+                    if (g.getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY && g.getOwnerSeat() == seat) {
+                        inLibrary.add(g.getId());
+                    }
+                }
+                List<Long> ids = new ArrayList<>();
+                for (var c : r.getCandidatesList()) {
+                    long id = c.hasTarget() ? c.getTarget().getEntityId() : c.getCardId();
+                    if (inLibrary.contains(id)) {
+                        ids.add(id);
+                    }
+                }
+                boolean search = false; // a search: a shuffle of that library follows at once
+                int n = 0;
+                for (Event f : rec.events.tailMap(r.getAppliedSeq(), false).values()) {
+                    if (++n > 12) {
+                        break;
+                    }
+                    if (f.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && f.getLibraryShuffled().getSeat() == seat) {
+                        search = true;
+                        break;
+                    }
+                }
+                if (!ids.isEmpty() && !search) {
+                    looked.merge(r.getAppliedSeq(), ids, (x, y) -> { x.addAll(y); return x; });
+                }
+            }
+        }
+        for (int i = 0; i < after.size(); i++) {
+            Event e = after.get(i);
+            while (!looked.isEmpty() && looked.firstKey() < e.getSeq()) {
+                for (long id : looked.pollFirstEntry().getValue()) {
+                    if (!leaving.contains(id)) {
+                        leaving.add(id);
+                    }
+                }
+            }
+            if (e.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && e.getLibraryShuffled().getSeat() == seat) {
+                break;
+            }
+            if (e.getBodyCase() == Event.BodyCase.ZONE_MOVE && e.getZoneMove().getFrom() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY
+                    && e.getZoneMove().getOwnerSeat() == seat) {
+                // a card searched for (a shuffle of that library follows at once) does not come from the top
+                boolean searched = false;
+                for (int k = i + 1; k < Math.min(after.size(), i + 6); k++) {
+                    Event f = after.get(k);
+                    if (f.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && f.getLibraryShuffled().getSeat() == seat) {
+                        searched = true;
+                        break;
+                    }
+                }
+                if (!searched) {
+                    leaving.add(e.getZoneMove().getPrevId());
+                    if (keptLeft > 0 && --keptLeft == 0) {
+                        for (int b = 0; b < bottomed; b++) {
+                            leaving.add(UNKNOWN); // a card the arrangement put on the bottom: not one taken later
+                        }
+                        bottomed = 0;
+                    }
+                }
+            } else if (e.getBodyCase() == Event.BodyCase.RESOLUTION_CHOICE && e.getResolutionChoice().getChosenCount() > 0) {
+                // cards chosen from among the top cards (Expressive Iteration's card for the bottom): library cards of
+                // this seat named by a public choice, unless the choice is a search (a shuffle follows)
+                boolean search = false;
+                for (int k = i + 1; k < Math.min(after.size(), i + 8); k++) {
+                    Event f = after.get(k);
+                    if (f.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && f.getLibraryShuffled().getSeat() == seat) {
+                        search = true;
+                        break;
+                    }
+                }
+                if (!search) {
+                    Player owner = game.getRegisteredPlayers().get(seat);
+                    for (var c : e.getResolutionChoice().getChosenList()) {
+                        Card card = c.getEntityId() == 0 ? null : session.cardOf(c.getEntityId());
+                        if (card != null && card.getOwner() == owner && card.isInZone(ZoneType.Library)
+                                && !leaving.contains(c.getEntityId())) {
+                            leaving.add(c.getEntityId());
+                        }
+                    }
+                }
+            } else if (e.getBodyCase() == Event.BodyCase.LIBRARY_ARRANGED && e.getLibraryArranged().getSeat() == seat
+                    && e.getLibraryArranged().getToBottom() > 0 && e.getLibraryArranged().getCardsCount() == 0) {
+                // (an arrangement that names its cards is the viewer's own: they were looked at, so already listed)
+                // scry: the cards looked at were on top (their IDs are hidden): those kept come out first (they are the
+                // next cards taken), those put on the bottom were above the cards after them
+                keptLeft = e.getLibraryArranged().getToTop();
+                bottomed = e.getLibraryArranged().getToBottom();
+                if (keptLeft == 0) {
+                    for (int b = 0; b < bottomed; b++) {
+                        leaving.add(UNKNOWN);
+                    }
+                    bottomed = 0;
+                }
+            } else if (e.getBodyCase() == Event.BodyCase.CARD_REVEALED
+                    && e.getCardRevealed().getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY) {
+                int end = i;
+                while (end + 1 < after.size() && after.get(end + 1).getBodyCase() == Event.BodyCase.CARD_REVEALED) {
+                    end++;
+                }
+                boolean search = false;
+                for (int k = end + 1; k < Math.min(after.size(), end + 8); k++) {
+                    Event f = after.get(k);
+                    if (f.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && f.getLibraryShuffled().getSeat() == seat) {
+                        search = true;
+                        break;
+                    }
+                }
+                if (!search) {
+                    for (int k = i; k <= end; k++) {
+                        if (after.get(k).getCardRevealed().getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY) {
+                            leaving.add(after.get(k).getCardRevealed().getId());
+                        }
+                    }
+                }
+                i = end;
+            }
+        }
+        return leaving;
+    }
+
+    /** A slot in {@link #departures} for a card whose ID is hidden (put on the bottom by a scry). */
+    private static final long UNKNOWN = -1;
+
+    private void placeOnTop(int seat, List<Long> leaving) {
+        Player owner = game.getRegisteredPlayers().get(seat);
+        List<Card> now = new ArrayList<>();
+        owner.getCardsIn(ZoneType.Library).forEach(now::add);
+        Set<Card> named = new java.util.HashSet<>();
+        for (long id : leaving) {
+            Card c = id == UNKNOWN ? null : session.cardOf(id);
+            if (c != null) {
+                named.add(c);
+            }
+        }
+        List<Card> others = new ArrayList<>();
+        for (Card c : now) {
+            if (!named.contains(c)) {
+                others.add(c);
+            }
+        }
+        List<Card> top = new ArrayList<>();
+        int nextOther = 0;
+        for (long id : leaving) {
+            Card c = id == UNKNOWN ? (nextOther < others.size() ? others.get(nextOther++) : null) : session.cardOf(id);
+            if (c != null && now.contains(c) && !top.contains(c)) {
+                top.add(c);
+            }
+        }
+        if (top.isEmpty()) {
+            return;
+        }
+        List<Card> order = new ArrayList<>(top);
+        for (Card c : now) {
+            if (!top.contains(c)) {
+                order.add(c);
+            }
+        }
+        owner.getZone(ZoneType.Library).setCards(order);
+    }
+
+    private static boolean publicZone(magicdosa.protocol.v1.Zone z) {
+        return z == magicdosa.protocol.v1.Zone.ZONE_BATTLEFIELD || z == magicdosa.protocol.v1.Zone.ZONE_GRAVEYARD
+            || z == magicdosa.protocol.v1.Zone.ZONE_EXILE || z == magicdosa.protocol.v1.Zone.ZONE_STACK
+            || z == magicdosa.protocol.v1.Zone.ZONE_COMMAND;
+    }
+
+    private List<Long> libraryTop(int seat) {
+        List<Long> out = new ArrayList<>();
+        for (Card c : game.getRegisteredPlayers().get(seat).getCardsIn(ZoneType.Library)) {
+            out.add(session.idOf(c));
+            if (out.size() >= 8) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private static String candidateIds(DecisionRequest r) {
+        List<String> out = new ArrayList<>();
+        for (var c : r.getCandidatesList()) {
+            out.add(c.hasTarget() ? "t" + c.getTarget().getEntityId() : String.valueOf(c.getCardId()));
+        }
+        return out.toString();
+    }
+
+    private static DecisionRequest sortedCandidates(DecisionRequest r) {
+        List<magicdosa.protocol.v1.Candidate> c = new ArrayList<>(r.getCandidatesList());
+        c.sort(java.util.Comparator.comparing(com.google.protobuf.TextFormat::shortDebugString));
+        return r.toBuilder().clearCandidates().addAllCandidates(c).build();
+    }
+
+    /**
+     * Verification ②: the cards a recorded cost uses (a card exiled from hand for evoke, a discarded card) are the
+     * cards their move shows right after.
+     */
+    private void costIdentities(long seq, List<Long> costIds) {
+        for (long id : costIds) {
+            for (Event m : rec.events.tailMap(seq, false).headMap(seq + 40).values()) {
+                if (m.getBodyCase() == Event.BodyCase.ZONE_MOVE && m.getZoneMove().getPrevId() == id) {
+                    identity(id, m.getZoneMove().getOracleId());
+                    break;
+                }
+            }
+        }
+    }
+
+    /** Verification ②: the object {@code id} is {@code oracle} (shown by the real game); swap if the sample says otherwise. */
+    private boolean identity(long id, String oracle) {
+        return identity(id, oracle, true);
+    }
+
+    private boolean identity(long id, String oracle, boolean sync) {
+        if (oracle.isEmpty()) {
+            return false;
+        }
+        // the opponent's 60 is itself a sample in games 2 and 3: a card it left out comes in from the sideboard
+        Card owner = session.cardOf(id);
+        boolean sampledSixty = startSnapshot.snapshot().getObservation().getMatch().getGameNumber() > 1
+            && owner != null && game.getRegisteredPlayers().indexOf(owner.getOwner()) != viewer;
+        int r = session.swapIdentity(id, oracle, shownIds, sync, sampledSixty);
+        if (r == 2) {
+            result.sixtyChanges++;
+        }
+        shownIds.add(id);
+        if (r > 0) {
+            result.identitySwaps++;
+        } else if (r < 0) {
+            result.identitySwapFailures++;
+            Card a = session.cardOf(id);
+            StringBuilder where = new StringBuilder();
+            if (a != null) {
+                for (Card c : a.getOwner().getAllCards()) {
+                    if (oracle.equals(keys.oracleId(c))) {
+                        long cid = session.idOf(c);
+                        where.append(" ").append(cid).append("@").append(c.getZone() == null ? "-" : c.getZone().getZoneType())
+                            .append(shownIds.contains(cid) ? "(shown)" : "");
+                    }
+                }
+            }
+            sample(result.samples, "identity swap failed: " + id + " is " + oracle + " (the shadow's card there: "
+                + (a == null ? "none" : a + " in " + a.getZone()) + "), cards of it:" + where);
+        }
+        return r > 0;
+    }
+
+    /** Verification ②: every identity the viewer's observation shows is taken; true when a card was swapped. */
+    private boolean reconcile(magicdosa.protocol.v1.Observation o) {
+        for (var g : o.getObjectsList()) {
+            if (!g.getOracleId().isEmpty() && !g.getToken()) {
+                shownIds.add(g.getId());
+            }
+        }
+        boolean changed = false;
+        for (var g : o.getObjectsList()) {
+            if (!g.getOracleId().isEmpty() && !g.getToken()) {
+                changed |= identity(g.getId(), g.getOracleId());
+            }
+        }
+        return changed;
+    }
+
+    /** Event-log replay (Q19): did the shadow reproduce the logged game, the other seat's decisions included? */
+    private void replayVerdict() {
+        int used = 0;
+        for (int i = 0; i < opponentRecord.size(); i++) {
+            if (i < opponentIdx || opponentUsed.contains(i)) {
+                used++;
+            }
+        }
+        result.opponentRecorded = opponentRecord.size();
+        result.opponentReplayed = used;
+        if (rec.gameOver != null && game.isGameOver()) {
+            magicdosa.protocol.v1.GameOver mine = session.outcome().toBuilder().setGameId(rec.gameOver.getGameId()).build();
+            result.endReal = com.google.protobuf.TextFormat.shortDebugString(rec.gameOver);
+            result.endShadow = com.google.protobuf.TextFormat.shortDebugString(mine);
+            result.sameEnd = mine.equals(rec.gameOver);
+        }
+        boolean allFirst = !firstTry.isEmpty() && firstTry.values().stream().allMatch(x -> x)
+            && firstTry.size() == rec.decisions.size() - startDecisionIdx;
+        result.reproduced = allFirst && result.recoveries1 + result.recoveries2 + result.recoveries3 == 0
+            && used == opponentRecord.size() && result.replayMismatches.isEmpty() && result.sameEnd;
     }
 
     /** Recovery ③ past the shadow: the real decisions up to {@code to} (exclusive) are decided without search. */
@@ -527,6 +881,58 @@ public final class ShadowGame {
     private void rebuild(GameRecord.Snapshot snap) {
         TurnStartSnapshot s = snap.snapshot();
         PrivilegedRecord hidden = rec.privilegedAt(s.getSeq());
+        if (beliefSamples) {
+            // cards from outside the game (a companion: in the command zone, or put into hand from there) are not
+            // part of the 60
+            Map<Integer, Set<String>> outside = new java.util.HashMap<>();
+            Map<Long, String> known = new java.util.HashMap<>();
+            for (var g : s.getObservation().getObjectsList()) {
+                if (g.getZone() == magicdosa.protocol.v1.Zone.ZONE_COMMAND && !g.getOracleId().isEmpty()) {
+                    outside.computeIfAbsent(g.getOwnerSeat(), k -> new java.util.HashSet<>()).add(g.getOracleId());
+                }
+            }
+            // identities the viewer saw, followed through moves into hidden zones from public ones (the stream does
+            // not repeat the identity there)
+            Map<Long, String> oracleOf = new java.util.HashMap<>();
+            for (var g : startSnapshot.snapshot().getObservation().getObjectsList()) {
+                if (!g.getOracleId().isEmpty()) {
+                    oracleOf.put(g.getId(), g.getOracleId());
+                }
+            }
+            for (Event e : rec.events.headMap(s.getSeq(), true).values()) {
+                if (e.getBodyCase() == Event.BodyCase.CARD_REVEALED && !e.getCardRevealed().getOracleId().isEmpty()) {
+                    oracleOf.put(e.getCardRevealed().getId(), e.getCardRevealed().getOracleId());
+                }
+                if (e.getBodyCase() != Event.BodyCase.ZONE_MOVE) {
+                    continue;
+                }
+                var m = e.getZoneMove();
+                String o = !m.getOracleId().isEmpty() ? m.getOracleId() : publicZone(m.getFrom()) ? oracleOf.get(m.getPrevId()) : null;
+                if (o == null) {
+                    continue;
+                }
+                oracleOf.put(m.getId(), o);
+                if (m.getOracleId().isEmpty()) {
+                    known.put(m.getId(), o);
+                }
+                if (m.getFrom() == magicdosa.protocol.v1.Zone.ZONE_COMMAND) {
+                    outside.computeIfAbsent(m.getOwnerSeat(), k -> new java.util.HashSet<>()).add(o);
+                }
+            }
+            Privileged sampled = BeliefSampler.sample(s.getObservation(), outside, known,
+                new java.util.Random(rec.header.getGameSeed() * 31 + s.getSeq()), 50);
+            result.samples2++;
+            if (sampled == null) {
+                result.sampleFailures++;
+                sample(result.samples, "no belief sample at turn " + s.getObservation().getGame().getTurn() + ": "
+                    + BeliefSampler.lastFailure.get());
+                throw new Unwind("no belief sample fits the snapshot at turn " + s.getObservation().getGame().getTurn(),
+                    Unwind.Kind.END);
+            }
+            hidden = PrivilegedRecord.newBuilder().setSeq(s.getSeq()).setSeat(viewer).setPrivileged(sampled).build();
+            shownIds.clear();
+            pendingReveals.clear();
+        }
         if (hidden == null) {
             throw new Unwind("no hidden state recorded at the snapshot (seq " + s.getSeq() + ")", Unwind.Kind.END);
         }
@@ -576,7 +982,14 @@ public final class ShadowGame {
         candidate = null;
         turnStart = null;
         stage = 0;
-        checkLibraries(hidden, "rebuild at turn " + s.getObservation().getGame().getTurn());
+        if (!beliefSamples) {
+            checkLibraries(hidden, "rebuild at turn " + s.getObservation().getGame().getTurn());
+        } else {
+            for (Player p : game.getRegisteredPlayers()) {
+                departuresOnTop(game.getRegisteredPlayers().indexOf(p), s.getSeq());
+            }
+            revealsAheadAfterRebuild = s.getSeq();
+        }
         // the record from here on
         long before = 0; // the last decision asked before the snapshot
         for (GameRecord.Decision d : rec.decisions) {
@@ -605,6 +1018,10 @@ public final class ShadowGame {
             }
         }
         lastComparedTurn = s.getObservation().getGame().getTurn() - 1;
+        if (revealsAheadAfterRebuild >= 0) {
+            revealsAhead(revealsAheadAfterRebuild);
+            revealsAheadAfterRebuild = -1;
+        }
     }
 
     /**
@@ -734,6 +1151,30 @@ public final class ShadowGame {
             }
             shadowEvents.add(e);
             Event real = rec.events.get(e.getSeq());
+            if (beliefSamples && !pendingReveals.isEmpty() && e.getBodyCase() == Event.BodyCase.ZONE_MOVE) {
+                applyPendingReveals(false);
+            }
+            if (beliefSamples && real != null) {
+                // a card the real game shows as it moves or is revealed takes that identity at once (design: 턴 중에
+                //카드가 공개되면 손패·라이브러리 사이에서 카드 정체를 교환), before the next request is built
+                if (real.getBodyCase() == Event.BodyCase.ZONE_MOVE && e.getBodyCase() == Event.BodyCase.ZONE_MOVE
+                        && real.getZoneMove().getId() == e.getZoneMove().getId()) {
+                    identity(real.getZoneMove().getId(), real.getZoneMove().getOracleId(), false);
+                } else if (real.getBodyCase() == Event.BodyCase.CARD_REVEALED) {
+                    // also when the shadow revealed another card at this point (a search shows the searcher the
+                    // library: the real cards get their identities before the choice is asked); the whole run of
+                    // real reveals from here, as the shadow may reveal fewer cards than the real game did
+                    for (Event r : rec.events.tailMap(e.getSeq(), true).values()) {
+                        if (r.getBodyCase() != Event.BodyCase.CARD_REVEALED) {
+                            break;
+                        }
+                        identity(r.getCardRevealed().getId(), r.getCardRevealed().getOracleId(), false);
+                        if (r.getCardRevealed().getRevealedToSeatsList().contains(viewer)) {
+                            session.markSeen(r.getCardRevealed().getId());
+                        }
+                    }
+                }
+            }
             if (real != null && real.equals(e)) {
                 result.eventsMatched++;
             } else {
@@ -744,7 +1185,17 @@ public final class ShadowGame {
                 int seat = e.getLibraryShuffled().getSeat();
                 int k = shuffles.merge(seat, 1, Integer::sum) - 1;
                 List<Long> realSeqs = realShuffles.getOrDefault(seat, List.of());
-                if (k < realSeqs.size()) {
+                if (beliefSamples && !realSeqs.isEmpty()) {
+                    // ②: the real shuffle of this library nearest to this point (the k-th one is off when the shadow
+                    // shuffled a different number of times, e.g. in mulligans)
+                    long near = realSeqs.get(0);
+                    for (long r : realSeqs) {
+                        if (Math.abs(r - e.getSeq()) < Math.abs(near - e.getSeq())) {
+                            near = r;
+                        }
+                    }
+                    departuresOnTop(seat, near);
+                } else if (k < realSeqs.size()) {
                     reorderLibrary(seat, realSeqs.get(k));
                 } else {
                     sample(result.samples, "shuffle " + (k + 1) + " of seat " + seat + " has no real counterpart");
@@ -762,11 +1213,18 @@ public final class ShadowGame {
             } else {
                 var a = Fingerprint.normalise(real.snapshot());
                 var b = Fingerprint.normalise(s);
+                if (beliefSamples) {
+                    for (Player p : game.getRegisteredPlayers()) {
+                        departuresOnTop(game.getRegisteredPlayers().indexOf(p), real.snapshot().getSeq());
+                    }
+                }
                 if (Fingerprint.hash(a).equals(Fingerprint.hash(b))) {
                     result.snapshotsMatched++;
                     // verification ①: hidden library order from the record at the turn start too (the other seat
                     // may draw before any decision of ours in its turn)
-                    libraryCorrections += syncLibraries(rec.privilegedAt(real.snapshot().getSeq()), "turn " + turn + " start");
+                    if (!beliefSamples) {
+                        libraryCorrections += syncLibraries(rec.privilegedAt(real.snapshot().getSeq()), "turn " + turn + " start");
+                    }
                     if (turn > stageTurn) {
                         stage = 0; // a new turn starts matching: tracking again (design: 다음 턴 시작에 ... 이어서 추적)
                     }
@@ -809,7 +1267,18 @@ public final class ShadowGame {
             long id = real.getDecisionId();
             // verification ①: hidden cards take their real values at every decision (library order is hidden; a
             // card put into a library in an order the stream does not show is placed as it really is)
-            libraryCorrections += syncLibraries(id);
+            if (!beliefSamples) {
+                libraryCorrections += syncLibraries(id);
+            } else {
+                // the cards the real stream takes from each library from here on go on top (robust to a different
+                // number of shuffles in the shadow, e.g. during mulligans)
+                for (Player p : game.getRegisteredPlayers()) {
+                    departuresOnTop(game.getRegisteredPlayers().indexOf(p), real.getAppliedSeq());
+                }
+                if (reconcile(real.getObservation())) {
+                    request = session.reask(request);
+                }
+            }
             // mana pools take the real (public) order: the other seat's Forge AI, weighing its action, test-pays from
             // pools and the refund moves mana to the end (the replayed seat does not weigh)
             boolean reordered = false;
@@ -828,6 +1297,16 @@ public final class ShadowGame {
             }
             DecisionRequest a = Fingerprint.normalise(real);
             DecisionRequest b = Fingerprint.normalise(request);
+            if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
+                // verification ②: cards chosen from a hidden zone (a library search) come in that zone's order,
+                // which is hidden: the candidates are compared as a set (answers are matched by candidate anyway)
+                a = sortedCandidates(a);
+                b = sortedCandidates(b);
+                if (!a.getCandidatesList().equals(b.getCandidatesList()) && !firstTry.containsKey(real.getDecisionId())) {
+                    sample(result.samples, "decision " + real.getDecisionId() + " choose cards (" + real.getContext().getEnginePrompt()
+                        + "): real " + candidateIds(a) + " shadow " + candidateIds(b) + "; shadow library top " + libraryTop(viewer));
+                }
+            }
             boolean match = Fingerprint.hash(a).equals(Fingerprint.hash(b));
             boolean first = !firstTry.containsKey(id);
             if (first) {
@@ -895,7 +1374,59 @@ public final class ShadowGame {
                 }
                 out.addChosen(j);
             }
+            if (beliefSamples) {
+                revealsAhead(real.getAppliedSeq());
+            }
             return out.build();
+        }
+    }
+
+    /**
+     * Verification ②: the identities the real game shows before our next decision are taken now, before the action
+     * just answered starts to use the cards (Ancient Stirrings takes the top five before it shows them: a swap after
+     * that would move the cards it holds to other IDs). The cards are where the real game says at this point.
+     */
+    /** Set by a rebuild in verification ②: the reveals up to the first decision are taken once the record cursor is set. */
+    private long revealsAheadAfterRebuild = -1;
+
+    private void revealsAhead(long fromSeq) {
+        long to = Long.MAX_VALUE;
+        if (decisionIdx < rec.decisions.size()) {
+            to = rec.decisions.get(decisionIdx).record().getRequest().getAppliedSeq();
+        }
+        for (Event r : rec.events.subMap(fromSeq, false, to, true).values()) {
+            if (r.getBodyCase() == Event.BodyCase.CARD_REVEALED) {
+                pendingReveals.add(r.getCardRevealed());
+            } else if (r.getBodyCase() == Event.BodyCase.ZONE_MOVE && !r.getZoneMove().getOracleId().isEmpty()
+                    && (r.getZoneMove().getFrom() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY
+                        || r.getZoneMove().getFrom() == magicdosa.protocol.v1.Zone.ZONE_HAND)) {
+                // a card leaving a hidden zone face up (milled, surveilled, discarded, searched for): its identity is
+                // taken before the effect that moves it starts holding the cards it looks at
+                pendingReveals.add(magicdosa.protocol.v1.CardRevealed.newBuilder().setId(r.getZoneMove().getPrevId())
+                    .setOracleId(r.getZoneMove().getOracleId()).build());
+            }
+        }
+        applyPendingReveals(true);
+    }
+
+    /** Reveals of the real game taken ahead whose card the shadow has not made yet (a card a mulligan draws later). */
+    private final List<magicdosa.protocol.v1.CardRevealed> pendingReveals = new ArrayList<>();
+
+    private void applyPendingReveals(boolean sync) {
+        for (var it = pendingReveals.iterator(); it.hasNext(); ) {
+            var r = it.next();
+            if (session.cardOf(r.getId()) == null) {
+                continue;
+            }
+            it.remove();
+            identity(r.getId(), r.getOracleId(), sync);
+            Card c = session.cardOf(r.getId());
+            // the other seat's card the real game showed the viewer (an opening-hand reveal the shadow did not make);
+            // the viewer's own cards it sees anyway (marking them ahead would only drop the shadow's own reveal)
+            if (r.getRevealedToSeatsList().contains(viewer) && c != null
+                    && game.getRegisteredPlayers().indexOf(c.getOwner()) != viewer) {
+                session.markSeen(r.getId());
+            }
         }
     }
 
@@ -1053,7 +1584,20 @@ public final class ShadowGame {
             if (opponentIdx >= opponentRecord.size() && opponentRecord.size() > 0 && rec.events.lastKey() <= lastSeq()) {
                 throw new Unwind("the record of the other seat has no more", Unwind.Kind.END);
             }
-            return opponentIdx < opponentRecord.size() ? opponentRecord.get(opponentIdx) : null;
+            Event next = opponentIdx < opponentRecord.size() ? opponentRecord.get(opponentIdx) : null;
+            if (beliefSamples && next != null) {
+                // the card a recorded cast or land play uses is the card the record names
+                switch (next.getBodyCase()) {
+                    case CAST_SPELL -> {
+                        identity(next.getCastSpell().getCardId(), next.getCastSpell().getSpell().getCard().getOracleId());
+                        costIdentities(next.getSeq(), next.getCastSpell().getCostIdsList());
+                    }
+                    case ACTIVATE_ABILITY -> costIdentities(next.getSeq(), next.getActivateAbility().getCostIdsList());
+                    case PLAY_LAND -> identity(next.getPlayLand().getCardId(), next.getPlayLand().getLand().getOracleId());
+                    default -> { }
+                }
+            }
+            return next;
         }
 
         @Override
@@ -1072,6 +1616,17 @@ public final class ShadowGame {
                 }
                 if (!opponentUsed.contains(i) && e.getResolutionChoice().getEnginePrompt().equals(method)) {
                     opponentUsed.add(i);
+                    if (beliefSamples) {
+                        // a chosen hidden card (discard, search) is the card its later move shows
+                        for (var c : e.getResolutionChoice().getChosenList()) {
+                            for (Event m : rec.events.tailMap(e.getSeq(), false).values()) {
+                                if (m.getBodyCase() == Event.BodyCase.ZONE_MOVE && m.getZoneMove().getPrevId() == c.getEntityId()) {
+                                    identity(c.getEntityId(), m.getZoneMove().getOracleId());
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     return e;
                 }
             }
@@ -1079,7 +1634,17 @@ public final class ShadowGame {
         }
 
         @Override
+        public boolean noRecordMeansNone() {
+            return beliefSamples;
+        }
+
+        @Override
         public List<Long> libraryAfter(int seat, long seq) {
+            if (beliefSamples) {
+                // verification ②: the order the real stream later takes cards from the top is public (which
+                // objects, not what they are); the rest is left to Forge AI's arrangement
+                return departures(seat, seq);
+            }
             // the next hidden-state record after the event, with the cards that left that library in between put
             // back in front, in the order they left (drawn, milled, ...)
             PrivilegedRecord next = null;

@@ -370,6 +370,95 @@ public final class ForgeGameSession {
         return true;
     }
 
+    /**
+     * Shadow games with sampled hidden cards (verification 2): the object {@code id} turns out to be {@code oracle}.
+     * When the shadow's card under that ID is another card, it trades places and entity IDs with a card of
+     * {@code oracle} of the same owner from a hand or library slot not in {@code locked} (IDs whose identity the real
+     * game shows; design: 공개되면 손패·라이브러리 사이에서 카드 정체를 교환). Returns 0 when nothing had to change, 1 after a swap,
+     * -1 when no such card was there (an identity-swap failure).
+     */
+    public int swapIdentity(long id, String oracle, Set<Long> locked) {
+        return swapIdentity(id, oracle, locked, true, false);
+    }
+
+    public int swapIdentity(long id, String oracle, Set<Long> locked, boolean sync) {
+        return swapIdentity(id, oracle, locked, sync, false);
+    }
+
+    /** {@code sync} false: called while the session reports an event (its IDs are in sync already). */
+    /**
+     * {@code fromSideboard}: when no hand or library card fits, a card of {@code oracle} from the owner's sideboard
+     * takes the place (a sampled 60 that left it out: design 공개된 카드가 샘플 구성에 없으면 구성을 다시 샘플링).
+     */
+    public int swapIdentity(long id, String oracle, Set<Long> locked, boolean sync, boolean fromSideboard) {
+        if (sync) {
+            syncZones(); // IDs as the shadow game stands now
+        }
+        Card a = ids.cardOf(id);
+        if (a == null || oracle.isEmpty() || oracle.equals(keys.oracleId(a))) {
+            return 0;
+        }
+        Player owner = a.getOwner();
+        Card b = null;
+        // a card of the same zone first: an effect under way holds the cards it looks at (a surveil), and a card
+        // brought over from another zone would be moved by it from there
+        List<ZoneType> zones = a.isInZone(ZoneType.Hand) ? List.of(ZoneType.Hand, ZoneType.Library)
+            : List.of(ZoneType.Library, ZoneType.Hand);
+        for (ZoneType z : zones) {
+            for (Card c : owner.getCardsIn(z)) {
+                if (c != a && oracle.equals(keys.oracleId(c)) && !locked.contains(ids.idOf(c)) && !knownToAgents(c)) {
+                    b = c;
+                    break;
+                }
+            }
+            if (b != null) {
+                break;
+            }
+        }
+        if (b == null && fromSideboard) {
+            for (Card c : owner.getCardsIn(ZoneType.Sideboard)) {
+                if (oracle.equals(keys.oracleId(c))) {
+                    forge.game.zone.Zone za = a.getZone();
+                    forge.game.zone.Zone sb = c.getZone();
+                    ids.replace(a, c);
+                    List<Card> ca = new ArrayList<>(za.getCards());
+                    ca.set(ca.indexOf(a), c);
+                    List<Card> cs = new ArrayList<>(sb.getCards());
+                    cs.set(cs.indexOf(c), a);
+                    za.setCards(ca);
+                    sb.setCards(cs);
+                    return 2;
+                }
+            }
+        }
+        if (b == null) {
+            return -1;
+        }
+        forge.game.zone.Zone za = a.getZone();
+        forge.game.zone.Zone zb = b.getZone();
+        // IDs first (with the zones they go to): Zone.setCards fires a zone event, and the session's sync must then
+        // find every card where its ID says it is
+        ids.swap(a, b);
+        if (za == zb) {
+            List<Card> cs = new ArrayList<>(za.getCards());
+            int ia = cs.indexOf(a);
+            int ib = cs.indexOf(b);
+            cs.set(ia, b);
+            cs.set(ib, a);
+            za.setCards(cs);
+        } else {
+            List<Card> ca = new ArrayList<>(za.getCards());
+            List<Card> cb = new ArrayList<>(zb.getCards());
+            int ia = ca.indexOf(a);
+            int ib = cb.indexOf(b);
+            ca.set(ia, b);
+            cb.set(ib, a);
+            za.setCards(ca);
+            zb.setCards(cb);
+        }
+        return 1;
+    }
+
     public DecisionRequest reask(DecisionRequest r) {
         return r.toBuilder().setObservation(observations.build(r.getSeat())).build();
     }
@@ -498,6 +587,31 @@ public final class ForgeGameSession {
 
     void tookMulligan(Player p) {
         mulligans.merge(seat(p), 1, Integer::sum);
+    }
+
+    /** Shadow games: the agent seats have seen the object {@code id} (the real game showed it to them). */
+    public void markSeen(long id) {
+        for (int s : agentSeats) {
+            visibleIds.get(s).add(id);
+        }
+    }
+
+    /** Whether an agent seat sees the card or has seen it as this object (its identity is not a sample). */
+    private boolean knownToAgents(Card c) {
+        for (int s : agentSeats) {
+            // the agent's own hand; a shadow's own "seen" is no guide here (it saw sampled identities: what the real
+            // game showed is in {@code locked})
+            if (c.isInZone(ZoneType.Hand) && visible(c, player(s))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether the viewer has seen the object that has entity ID {@code id} now (same object: rule 400.7). */
+    boolean seen(int viewer, long id) {
+        Set<Long> s = visibleIds.get(viewer);
+        return s != null && id != 0 && s.contains(id);
     }
 
     boolean visible(Card c, Player viewer) {
@@ -741,7 +855,13 @@ public final class ForgeGameSession {
                     .setTo(ObservationBuilder.zone(m.to())).setOwnerSeat(seat(c.getOwner()))
                     .setControllerSeat(seat(c.getController())).setFaceDown(c.isFaceDown());
                 boolean sawIt = m.to() == ZoneType.Library && m.prevId() != 0 && visibleIds.get(viewer).contains(m.prevId());
-                if (vis || sawIt) {
+                // a card the viewer saw that goes into a hand (a companion put into hand, a creature returned to its
+                // owner's hand) stays known there: confirmed information (rule 400.7: the same object until it moves)
+                boolean intoHand = m.to() == ZoneType.Hand && m.prevId() != 0 && visibleIds.get(viewer).contains(m.prevId());
+                if (intoHand) {
+                    visibleIds.get(viewer).add(m.newId());
+                }
+                if (vis || sawIt || intoHand) {
                     z.setOracleId(keys.oracleId(c)).setFace(keys.face(c));
                     if (m.to() == ZoneType.Library) {
                         z.setPosition(c.getZone().getCards().indexOf(c));
@@ -1294,7 +1414,10 @@ public final class ForgeGameSession {
     private List<ManaPayment> payment(SpellAbility sa) {
         List<ManaPayment> out = new ArrayList<>();
         for (Mana m : sa.getPayingMana()) {
-            ManaAbilityUse.Builder u = ManaAbilityUse.newBuilder().setSourceId(ids.idOf(m.getSourceCard()))
+            // the source's ID when the action began: a source sacrificed for its mana (an Eldrazi Spawn) has left
+            Card src = m.getSourceCard();
+            long srcId = src == null ? 0 : idsAtActionStart.getOrDefault(src.getId(), ids.idOf(src));
+            ManaAbilityUse.Builder u = ManaAbilityUse.newBuilder().setSourceId(srcId)
                 .addProduced(ManaUnit.newBuilder().setColor(ObservationBuilder.colorLetter(m.getColor())).setAmount(1));
             if (m.getManaAbility() != null && m.getManaAbility().getSourceSA() != null) {
                 AbilityKey k = keys.abilityKey(m.getManaAbility().getSourceSA());
@@ -1558,9 +1681,16 @@ public final class ForgeGameSession {
     /** Sends the game end (with privileged data in training mode) and logs it. Call after the game is over. */
     public GameOver finish() {
         syncZones();
+        GameOver over = outcome().toBuilder().addAllPrivileged(privileged).build();
+        send(AdapterMessage.newBuilder().setGameOver(over).build());
+        log.write(LogRecord.newBuilder().setGameOver(over).build());
+        return over;
+    }
+
+    /** The game end as {@link #finish()} reports it (winner, reason, turns), without the privileged records; not sent. */
+    public GameOver outcome() {
         GameOutcome outcome = game.getOutcome();
-        GameOver.Builder g = GameOver.newBuilder().setGameId(gameId).setTurns(game.getPhaseHandler().getTurn())
-            .addAllPrivileged(privileged);
+        GameOver.Builder g = GameOver.newBuilder().setGameId(gameId).setTurns(game.getPhaseHandler().getTurn());
         if (outcome != null && !outcome.isDraw() && outcome.getWinningPlayer() != null) {
             Player winner = null;
             for (Player p : game.getRegisteredPlayers()) {
@@ -1575,10 +1705,7 @@ public final class ForgeGameSession {
         } else {
             g.setReason(GameEndReason.GAME_END_REASON_DRAW);
         }
-        GameOver over = g.build();
-        send(AdapterMessage.newBuilder().setGameOver(over).build());
-        log.write(LogRecord.newBuilder().setGameOver(over).build());
-        return over;
+        return g.build();
     }
 
 }

@@ -11,7 +11,7 @@ import java.util.TreeMap;
  * Per-game decision counts for the fallback gate (design: 폴백 검증 집계): decisions by agent-core per type, intended
  * delegations per Forge method, and every unintended fallback with its reason. Game-thread only.
  */
-public final class DecisionStats {
+public final class DecisionStats implements java.io.Serializable {
     private final Map<DecisionType, Integer> decided = new TreeMap<>();
     private final Map<String, Integer> delegated = new TreeMap<>();
     private final List<String> fallbacks = new ArrayList<>();

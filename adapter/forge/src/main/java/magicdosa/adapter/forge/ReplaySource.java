@@ -31,6 +31,15 @@ public interface ReplaySource {
         return List.of();
     }
 
+    /**
+     * Whether a choice the record does not hold means "the seat chose nothing" where nothing may be chosen: true where
+     * the replayed seat's hidden cards are a sample (verification 2), so Forge AI's own answer would weigh the sample
+     * (it may see a card the real game did not have, as in "look at the top five, you may take a historic card").
+     */
+    default boolean noRecordMeansNone() {
+        return false;
+    }
+
     /** The shadow game asked something the record does not answer, or the record holds something it did not ask. */
     void mismatch(int seat, String what);
 }

@@ -27,7 +27,13 @@ import java.util.concurrent.Future;
  * then one line per pairing and each pairing's full report, saved as {@code runs/<date>-AllPairings-<n>/summary.txt}.
  *
  * <pre>mvn -pl runner/forge exec:exec "-Dexec.mainClass=magicdosa.runner.forge.harness.AllPairings"
- *     "-Dexec.args=&lt;abs decks dir&gt; 5 &lt;abs empty log dir&gt; [spawn|local|host:port] [--threads N]"</pre>
+ *     "-Dexec.args=&lt;abs decks dir&gt; 5 &lt;abs empty log dir&gt; [spawn|local|host:port] [--workers N] [--worker-xmx 2g]"</pre>
+ *
+ * {@code --workers N} (2026-11-11 decision): pairings run in N worker JVMs at a time ({@link PairingWorker}, one JVM
+ * per pairing, its games one after another), each with its own agent-core connection by the agent spec (spawn: its own
+ * agent-core JVM). Forge games running at the same time in one JVM affect each other (docs/upstream-candidates.md), so
+ * gate verdicts come from runs without threads. {@code --threads N} (pairings on threads of this JVM) is kept for
+ * comparison only; its result is marked as not valid for a verdict.
  */
 public final class AllPairings {
     private AllPairings() {}
@@ -36,15 +42,49 @@ public final class AllPairings {
     private static final List<String> WATCHED = List.of("chooseNewTargetsFor", "cost:", "chooseTargetsFor(divided)",
         "orderCosts");
 
+    /** Runs one pairing in its own JVM ({@link PairingWorker}) and reads its result. */
+    private static PairingWorker.Result worker(String deckDir, String a, String b, int matches, Path logs, String agentSpec,
+                                               String name, Path logRoot, String xmx) throws Exception {
+        Path result = logRoot.resolve(name + ".worker.bin");
+        List<String> cmd = new ArrayList<>();
+        cmd.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        cmd.add("-Xmx" + xmx);
+        cmd.add("-Dfile.encoding=UTF-8");
+        for (String k : System.getProperties().stringPropertyNames()) {
+            if (k.startsWith("magicdosa.")) {
+                cmd.add("-D" + k + "=" + System.getProperty(k)); // reproducible, agentXmx, candidateCheck, shards, ...
+            }
+        }
+        cmd.add("-cp");
+        cmd.add(System.getProperty("java.class.path"));
+        cmd.add(PairingWorker.class.getName());
+        cmd.addAll(List.of(deckDir, a, b, String.valueOf(matches), logs.toString(), agentSpec, name + "-m", result.toString()));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true)
+            .redirectOutput(logRoot.resolve(name + ".worker.txt").toFile()).start();
+        int code = p.waitFor();
+        if (code != 0 || !Files.exists(result)) {
+            throw new IllegalStateException("worker for " + name + " failed (exit " + code + "), see " + name + ".worker.txt");
+        }
+        try (java.io.ObjectInputStream in = new java.io.ObjectInputStream(Files.newInputStream(result))) {
+            return (PairingWorker.Result) in.readObject();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         String deckDir = args[0];
         int matches = Integer.parseInt(args[1]);
         Path logRoot = Path.of(args[2]);
         String agentSpec = "spawn";
         int threads = 1;
+        int workers = 0;
+        String workerXmx = "2g";
         for (int i = 3; i < args.length; i++) {
             if (args[i].equals("--threads")) {
                 threads = Integer.parseInt(args[++i]);
+            } else if (args[i].equals("--workers")) {
+                workers = Integer.parseInt(args[++i]);
+            } else if (args[i].equals("--worker-xmx")) {
+                workerXmx = args[++i];
             } else {
                 agentSpec = args[i];
             }
@@ -64,24 +104,38 @@ public final class AllPairings {
         int logProblems = 0;
         double seconds = 0;
         Set<String> unmapped = new TreeSet<>();
-        AgentConnection agent = AgentConnection.open(agentSpec);
+        AgentConnection agent = workers > 0 ? null : AgentConnection.open(agentSpec);
+        int poolSize = workers > 0 ? workers : threads;
         // --threads N: pairings run on N threads at once (2026-11-10). Each match seeds its own thread's Forge random
         // (ForgeRandom, InheritableThreadLocal) and creates its game through GameCreation; one agent-core serves every
         // game on its own stream. Results are read back in pairing order, so the summary does not depend on threads.
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(poolSize);
         List<String> names = new ArrayList<>();
-        List<Future<RandomGames.Summary>> runs = new ArrayList<>();
+        List<Future<PairingWorker.Result>> runs = new ArrayList<>();
+        String fWorkerXmx = workerXmx;
+        String fAgentSpec = agentSpec;
+        boolean byWorkers = workers > 0;
         long wallStart = System.nanoTime();
+        List<PairingWorker.Result> workerResults = new ArrayList<>();
         for (String a : decks) {
             for (String b : decks) {
                 String name = a.replace(".dck", "") + "-vs-" + b.replace(".dck", "");
                 Path logs = logRoot.resolve(name);
                 Files.createDirectories(logs);
                 names.add(name);
+                if (byWorkers) {
+                    runs.add(pool.submit(() -> {
+                        PairingWorker.Result r = worker(deckDir, a, b, matches, logs, fAgentSpec, name, logRoot, fWorkerXmx);
+                        System.out.println(String.format("%-40s %s  %s  (peak heap %d of %d MB)", name,
+                            r.summary().pass() ? "PASS" : "FAIL", r.summary().lines().get(1), r.peakHeapMb(), r.maxHeapMb()));
+                        return r;
+                    }));
+                    continue;
+                }
                 runs.add(pool.submit(() -> {
                     RandomGames.Summary r = RandomGames.run(deckDir, a, b, matches, logs, agent, keys, name + "-m");
                     System.out.println(String.format("%-40s %s  %s", name, r.pass() ? "PASS" : "FAIL", r.lines().get(1)));
-                    return r;
+                    return new PairingWorker.Result(r, 0, true, "", Set.of(), 0, 0);
                 }));
             }
         }
@@ -89,7 +143,9 @@ public final class AllPairings {
         for (int k = 0; k < runs.size(); k++) {
             {
                 String name = names.get(k);
-                RandomGames.Summary s = runs.get(k).get();
+                PairingWorker.Result wr = runs.get(k).get();
+                RandomGames.Summary s = wr.summary();
+                workerResults.add(wr);
                 pass &= s.pass();
                 total.add(s.stats());
                 allMatches += s.matches();
@@ -104,12 +160,35 @@ public final class AllPairings {
             }
         }
         double wallSeconds = (System.nanoTime() - wallStart) / 1e9;
-        agent.close();
-        // with threads, a pairing's own unmapped list may name what another pairing met first; the gate uses the run's
-        unmapped = new TreeSet<>(keys.unmapped());
-        unmapped.removeAll(unmappedBefore);
-        int protocolErrors = agent.protocolErrorCount();
-        boolean shardsClean = agent.shardsClean();
+        int protocolErrors;
+        boolean shardsClean;
+        String shardReport;
+        long peakHeap = 0;
+        long maxHeap = 0;
+        if (agent != null) {
+            agent.close();
+            // with threads, a pairing's own unmapped list may name what another pairing met first; the gate uses the run's
+            unmapped = new TreeSet<>(keys.unmapped());
+            unmapped.removeAll(unmappedBefore);
+            protocolErrors = agent.protocolErrorCount();
+            shardsClean = agent.shardsClean();
+            shardReport = agent.shardReport();
+        } else {
+            protocolErrors = 0;
+            shardsClean = true;
+            List<String> reports = new ArrayList<>();
+            for (PairingWorker.Result r : workerResults) {
+                unmapped.addAll(r.unmapped());
+                protocolErrors = protocolErrors < 0 || r.protocolErrors() < 0 ? -1 : protocolErrors + r.protocolErrors();
+                shardsClean &= r.shardsClean();
+                if (r.shardReport() != null && !r.shardReport().isEmpty()) {
+                    reports.add(r.shardReport());
+                }
+                peakHeap = Math.max(peakHeap, r.peakHeapMb());
+                maxHeap = Math.max(maxHeap, r.maxHeapMb());
+            }
+            shardReport = reports.isEmpty() ? null : reports.size() + " workers, first: " + reports.get(0);
+        }
         String shardDir = System.getProperty("magicdosa.shards");
         long shardFiles = -1;
         if (shardDir != null) {
@@ -140,7 +219,7 @@ public final class AllPairings {
         });
         gate.add("game copies (agent-core GameCopier): " + total.copyFailures() + " failed of " + total.copies()
             + "; candidate omissions " + total.candidateOmissions() + " in " + total.candidateChecks() + " checks");
-        gate.add("training shards: " + agent.shardReport() + (shardFiles < 0 ? "" : "; files " + shardFiles + " for " + games
+        gate.add("training shards: " + shardReport + (shardFiles < 0 ? "" : "; files " + shardFiles + " for " + games
             + " games") + (shardsClean ? "" : " NOT CLEAN"));
         gate.add("decision types (decided / intended delegations / refusals):");
         List<String> neverSeen = new ArrayList<>();
@@ -174,6 +253,14 @@ public final class AllPairings {
         gate.add(String.format("priority stops (Q14): %d requests (%.1f per game), %d auto passes, %.0f%% with an action",
             total.priorityAsks(), games == 0 ? 0.0 : (double) total.priorityAsks() / games, total.autoPasses(),
             total.priorityAsks() == 0 ? 0.0 : 100.0 * total.priorityAsksWithAction() / total.priorityAsks()));
+        if (workers > 0) {
+            gate.add(String.format("worker JVMs: %d at a time, one per pairing, -Xmx%s; peak heap of the busiest worker %d MB"
+                + " (max %d MB); agent-core: %s per worker", workers, workerXmx, peakHeap, maxHeap, agentSpec));
+        } else if (threads > 1) {
+            gate.add("NOT VALID FOR A GATE VERDICT: " + threads + " threads in one JVM (Forge games running at the same time"
+                + " in one JVM affect each other; use --workers)");
+            pass = false;
+        }
         gate.add(String.format("throughput: %d thread(s), wall %.0f s, %.1f games/min, %.2f s/game per thread (sum %.0f s),"
                 + " %d agent-core decisions, %.2f ms/decision waiting for agent-core", threads, wallSeconds,
             wallSeconds == 0 ? 0.0 : games * 60.0 / wallSeconds, games == 0 ? 0.0 : seconds / games, seconds, decided,

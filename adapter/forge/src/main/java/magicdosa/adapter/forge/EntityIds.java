@@ -54,6 +54,28 @@ final class EntityIds {
         next = Math.max(next, id + 1);
     }
 
+    /**
+     * Shadow game with sampled hidden cards: {@code a} and {@code b} trade entity IDs (they also trade places, see
+     * {@link ForgeGameSession#swapIdentity}).
+     */
+    void swap(Card a, Card b) {
+        Tracked ta = cards.get(a.getId());
+        Tracked tb = cards.get(b.getId());
+        if (ta == null || tb == null) {
+            return;
+        }
+        cards.put(a.getId(), new Tracked(tb.id(), tb.zone(), a));
+        cards.put(b.getId(), new Tracked(ta.id(), ta.zone(), b));
+    }
+
+    /** Shadow game with sampled hidden cards: {@code b} (not tracked: from the sideboard) takes {@code a}'s ID. */
+    void replace(Card a, Card b) {
+        Tracked ta = cards.remove(a.getId());
+        if (ta != null) {
+            cards.put(b.getId(), new Tracked(ta.id(), ta.zone(), b));
+        }
+    }
+
     /** Shadow game: the next ID the real game will issue. */
     void continueFrom(long nextId) {
         next = Math.max(next, nextId);

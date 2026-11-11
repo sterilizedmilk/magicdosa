@@ -118,12 +118,25 @@ public class ReplayAiController extends ObservedAiController {
                     return null;
                 }
                 case CAST_SPELL, ACTIVATE_ABILITY, PLAY_LAND, ACTIVATE_MANA_ABILITY -> {
-                    if (e.getBodyCase() == Event.BodyCase.CAST_SPELL || e.getBodyCase() == Event.BodyCase.ACTIVATE_ABILITY) {
+                    // a cost that uses cards (discard, exile, sacrifice) is paid with the recorded cards: Forge AI would
+                    // pick its own, which are not public when hidden (from a hand)
+                    List<Long> costIds = e.getBodyCase() == Event.BodyCase.CAST_SPELL ? e.getCastSpell().getCostIdsList()
+                        : e.getBodyCase() == Event.BodyCase.ACTIVATE_ABILITY ? e.getActivateAbility().getCostIdsList() : List.of();
+                    boolean costCards = false;
+                    for (long id : costIds) {
+                        Card c = card(id);
+                        costCards |= c != null && c.isInZone(ZoneType.Hand);
+                    }
+                    if ((e.getBodyCase() == Event.BodyCase.CAST_SPELL || e.getBodyCase() == Event.BodyCase.ACTIVATE_ABILITY)
+                            && !costCards) {
                         // Forge AI first: in the same state it chooses the same action, prepared its own way (costs it
                         // chose while weighing it); otherwise the recorded action is set up here
                         List<SpellAbility> own = forgeAiAction();
                         if (own != null && own.size() == 1 && sameAction(own.get(0), e)) {
                             source.consume(seat);
+                            // the modes Forge AI chose while weighing are the recorded ones (sameAction): their
+                            // recorded choice belongs to this cast
+                            source.takeChoice(seat, "chooseModeForAbility");
                             aiPrepared = own.get(0);
                             preparedPayment = e.getBodyCase() == Event.BodyCase.CAST_SPELL ? e.getCastSpell().getPaymentList()
                                 : e.getActivateAbility().getPaymentList();
@@ -357,6 +370,16 @@ public class ReplayAiController extends ObservedAiController {
             if (forge.ai.ComputerUtil.playNoStack(player, m, player.getGame(), false)) {
                 return;
             }
+        }
+        for (forge.game.mana.Mana m : player.getManaPool()) {
+            if (m.getSourceCard() != null && m.getSourceCard().getId() == c.getId()) {
+                return; // made earlier (a priority action) and floating: the payment takes it from the pool
+            }
+        }
+        if (c.isTapped()) {
+            // already tapped for this payment (Forge AI tapped it while weighing how to pay): the payment goes on with
+            // what is there; a payment that ends differently shows in the decisions and the game end
+            return;
         }
         source.mismatch(seat, "mana ability " + use.getAbility() + " of " + c + " could not be activated");
     }
@@ -702,6 +725,9 @@ public class ReplayAiController extends ObservedAiController {
     protected CardCollectionView answerChooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa, String title, int min, int max,
                                                              boolean isOptional, Map<String, Object> params) {
         ResolutionChoice r = choice("chooseCardsForEffect");
+        if (r == null && min == 0 && source.noRecordMeansNone()) {
+            return new CardCollection();
+        }
         return r == null ? super.answerChooseCardsForEffect(sourceList, sa, title, min, max, isOptional, params) : new CardCollection(cards(r));
     }
 
@@ -720,6 +746,9 @@ public class ReplayAiController extends ObservedAiController {
     protected <T extends GameEntity> List<T> answerChooseEntitiesForEffect(FCollectionView<T> optionList, int min, int max, DelayedReveal delayedReveal,
                                                                            SpellAbility sa, String title, Player relatedPlayer, Map<String, Object> params) {
         ResolutionChoice r = choice("chooseEntitiesForEffect");
+        if (r == null && min == 0 && source.noRecordMeansNone()) {
+            return new ArrayList<>();
+        }
         return r == null ? super.answerChooseEntitiesForEffect(optionList, min, max, delayedReveal, sa, title, relatedPlayer, params)
             : entities(r, optionList);
     }
@@ -952,6 +981,9 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected List<SpellAbility> answerChooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
         ResolutionChoice r = choice("chooseSaToActivateFromOpeningHand");
+        if (r == null && source.noRecordMeansNone()) {
+            return new ArrayList<>(); // the real seat revealed nothing from its opening hand (its hand is a sample here)
+        }
         if (r == null) {
             return super.answerChooseSaToActivateFromOpeningHand(usableFromOpeningHand);
         }
@@ -969,8 +1001,32 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected boolean answerPayCostToPreventEffect(forge.game.cost.Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
         ResolutionChoice r = choice("payCostToPreventEffect");
+        if (r != null && !flag(r, false)) {
+            return false;
+        }
         // the payment itself is Forge AI's, as in the real game
-        return r == null || flag(r, false) ? super.answerPayCostToPreventEffect(cost, sa, alreadyPaid, allPayers) : false;
+        boolean paid = super.answerPayCostToPreventEffect(cost, sa, alreadyPaid, allPayers);
+        if (!paid && r != null && flag(r, false) && payLifeOnly(cost, sa)) {
+            // the record says it paid; Forge AI declined here (its decision weighs what it holds, which is a sample in
+            // verification 2): a cost of life alone (a shock land's 2 life) is paid as recorded
+            return true;
+        }
+        return paid;
+    }
+
+    /** Pays {@code cost} when it is only life; false (nothing paid) otherwise. */
+    private boolean payLifeOnly(forge.game.cost.Cost cost, SpellAbility sa) {
+        int life = 0;
+        for (forge.game.cost.CostPart part : cost.getCostParts()) {
+            if (!(part instanceof forge.game.cost.CostPayLife pl)) {
+                return false;
+            }
+            life += pl.getAbilityAmount(sa);
+        }
+        if (life <= 0 || !player.canPayLife(life, false, sa)) {
+            return false;
+        }
+        return player.payLife(life, sa, false);
     }
 
     @Override

@@ -232,7 +232,11 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
 - Several Forge games running at the same time in one JVM affect each other (Forge's global SpellAbility / Trigger /
   StaticAbility / ReplacementEffect ID counters are not thread-safe, and abilities compare by that ID): a parallel
   gate run on threads is not reproducible on one thread, and real games of it lost triggers. Measurements of the
-  shadow use one JVM per pairing (`RandomGames ... local <match prefix>` with `-Dmagicdosa.reproducible=true`).
+  shadow use one JVM per pairing: `AllPairings ... --workers N` starts one `PairingWorker` JVM per pairing, N at a
+  time (each with its own agent-core connection by the agent spec), and `ShadowCheck <dir> --workers N` one JVM per
+  folder of logs; results come back by file and are reported together. `--threads` remains for comparison only and is
+  marked not valid for a verdict. Sizing (16 x 10, 8 workers): runner worker peak heap ~1.0 GB, ShadowCheck worker
+  ~1.1 GB (both -Xmx2g), agent-core -Xmx1g.
   Harness `ReplayCheck` replays a gate run's logs on one thread and lists the matches that differ. Open question for
   the runner and agent-core (see the phase-2 report).
 

@@ -39,6 +39,8 @@ public final class GameRecord {
     public final List<Decision> decisions = new ArrayList<>();
     /** The viewer's hidden-state records in log order. */
     public final List<PrivilegedRecord> privileged = new ArrayList<>();
+    /** The game end of the log (winner, reason, turns), or null when the log has none. */
+    public magicdosa.protocol.v1.GameOver gameOver;
     public final Path file;
 
     private GameRecord(Path file, LogHeader header, int viewer) {
@@ -85,6 +87,7 @@ public final class GameRecord {
                         g.privileged.add(r.getPrivileged());
                     }
                 }
+                case GAME_OVER -> g.gameOver = r.getGameOver().toBuilder().clearPrivileged().build();
                 default -> { }
             }
         }
