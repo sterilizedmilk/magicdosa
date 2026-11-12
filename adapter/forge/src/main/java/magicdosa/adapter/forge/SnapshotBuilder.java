@@ -233,6 +233,13 @@ public final class SnapshotBuilder {
                 Player controller = game.getPlayers().get(g.getControllerSeat());
                 c.setController(controller, game.getNextTimestamp());
             }
+            if (g.getZone() == Zone.ZONE_BATTLEFIELD) {
+                // tapped and summoning sickness as the snapshot shows them (a card made for the rebuild comes in
+                // untapped and sick; a token is put there directly)
+                Card now = game.getCardState(c);
+                now.setTapped(g.getTapped());
+                now.setSickness(g.getSummoningSick());
+            }
         }
         restoreZoneOrder(game, o, hidden, ids);
         Map<Object, Long> effectIds = effects(game, o, ids, gaps, keys);
@@ -280,6 +287,12 @@ public final class SnapshotBuilder {
                     case ZONE_EXILE -> owner.getZone(ZoneType.Exile).add(c);
                     case ZONE_COMMAND -> owner.getZone(ZoneType.Command).add(c);
                     case ZONE_BATTLEFIELD -> {
+                        if (c.isToken()) {
+                            // a token does not move from hand to play (Forge leaves it in hand): it is put there
+                            // directly, as Forge's GameState puts tokens on the battlefield
+                            owner.getZone(ZoneType.Battlefield).add(c);
+                            continue;
+                        }
                         boolean tapped = c.isTapped();
                         boolean sick = c.hasSickness();
                         var counters = c.getCounters();
@@ -396,6 +409,20 @@ public final class SnapshotBuilder {
                 Card effect = Player.createCompanionEffect(game.getCardState(companion));
                 companion.getOwner().getZone(ZoneType.Command).add(effect);
                 out.put(effect, e.getId());
+                continue;
+            }
+            if (source != null && e.getKind() == magicdosa.protocol.v1.EffectKind.EFFECT_KIND_DELAYED_TRIGGER) {
+                forge.game.trigger.Trigger t = DelayedTriggers.rebuild(game, game.getCardState(source), controller, e, byId);
+                if (t != null) {
+                    out.put(t, e.getId());
+                    continue;
+                }
+            }
+            if (source != null && e.getKind() == magicdosa.protocol.v1.EffectKind.EFFECT_KIND_CONTINUOUS
+                    && e.getDescription().startsWith("Warped ") && source.isInZone(ZoneType.Exile)) {
+                // warp: the card exiled at the end step may be cast from exile on a later turn (made as Forge's
+                // ChangeZoneEffect makes it)
+                out.put(WarpEffect.make(game.getCardState(source)), e.getId());
                 continue;
             }
             if (source != null && controller != null && e.getKind() == magicdosa.protocol.v1.EffectKind.EFFECT_KIND_CONTINUOUS

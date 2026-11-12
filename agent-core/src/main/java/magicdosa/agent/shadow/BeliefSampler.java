@@ -53,10 +53,18 @@ final class BeliefSampler {
             int seat = mp.getSeat();
             // the identities the viewer sees of this seat's cards (tokens are not part of the 60)
             Map<String, Integer> seen = new TreeMap<>();
+            Map<String, Integer> seenWhere = new TreeMap<>();
             List<GameObject> hidden = new ArrayList<>();
             List<GameObject> library = new ArrayList<>();
             java.util.Set<String> notInSixty = outside.getOrDefault(seat, java.util.Set.of());
+            java.util.Set<String> outsideVisible = new java.util.HashSet<>();
             for (GameObject g : o.getObjectsList()) {
+                if (g.getOwnerSeat() == seat && notInSixty.contains(g.getOracleId())) {
+                    outsideVisible.add(g.getOracleId());
+                }
+                if (g.getOwnerSeat() == seat && known.containsKey(g.getId()) && notInSixty.contains(known.get(g.getId()))) {
+                    outsideVisible.add(known.get(g.getId()));
+                }
                 if (g.getOwnerSeat() != seat || g.getToken() || g.getZone() == Zone.ZONE_COMMAND
                         || notInSixty.contains(g.getOracleId())) {
                     continue;
@@ -78,6 +86,7 @@ final class BeliefSampler {
                     hidden.add(g);
                 } else {
                     seen.merge(g.getOracleId(), 1, Integer::sum);
+                    seenWhere.merge(g.getZone().name() + (g.getCopy() ? "(copy)" : ""), 1, Integer::sum);
                 }
             }
             // game 1: the registered main deck; games 2 and 3: the opponent's 60 is drawn from the 75
@@ -94,6 +103,13 @@ final class BeliefSampler {
                     pool.add(e.getKey());
                 }
             }
+            // a card from outside the 60 (a companion) that is in the game but nowhere visible is one of the hidden
+            // cards (put into hand, then shuffled into the library by Day's Undoing)
+            for (String outsideCard : notInSixty) {
+                if (!outsideVisible.contains(outsideCard)) {
+                    pool.add(outsideCard);
+                }
+            }
             if (pool.size() < hidden.size()) {
                 Map<String, Integer> over = new TreeMap<>();
                 seen.forEach((k, v) -> {
@@ -105,7 +121,8 @@ final class BeliefSampler {
                 hidden.forEach(h -> byZone.merge(h.getZone().name(), 1, Integer::sum));
                 int seenTotal = seen.values().stream().mapToInt(Integer::intValue).sum();
                 lastFailure.set("seat " + seat + ": " + hidden.size() + " hidden " + byZone + ", " + seenTotal + " seen, "
-                    + pool.size() + " left of the 60; seen beyond it " + over);
+                    + pool.size() + " left of the 60; seen beyond it " + over + "; seen by zone " + seenWhere
+                    + "; known " + seen);
                 return null; // the observation shows more of a card than this 60 has
             }
             Collections.shuffle(pool, rnd);

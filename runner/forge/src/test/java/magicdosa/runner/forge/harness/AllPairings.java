@@ -202,7 +202,18 @@ public final class AllPairings {
         List<String> gate = new ArrayList<>();
         int ignored = total.rejections(DecisionStats.RejectionKind.IGNORED_CONSTRAINT);
         gate.add(String.format("gate over %d pairings: matches=%d games=%d match errors=%d", table.size(), allMatches, games, errors));
-        gate.add("unintended fallbacks: " + total.fallbacks().size());
+        Map<String, Long> byFallback = new TreeMap<>();
+        total.fallbacks().forEach(f -> byFallback.merge(f, 1L, Long::sum));
+        gate.add("unintended fallbacks: " + total.fallbacks().size() + " " + byFallback);
+        Map<String, Integer> notes = new TreeMap<>();
+        total.notes().forEach((k, v) -> {
+            if (k.startsWith("Forge AI's answer") || k.contains("(shadow Forge AI)")) {
+                notes.put(k, v);
+            }
+        });
+        if (!notes.isEmpty()) {
+            gate.add("delegation notes: " + notes);
+        }
         gate.add("protocol errors seen by agent-core: " + (protocolErrors < 0 ? "not reported" : protocolErrors));
         gate.add("unmapped names: " + unmapped.size() + (unmapped.isEmpty() ? "" : " " + unmapped));
         gate.add("unclassified decisions: " + total.unclassified().values().stream().mapToInt(Integer::intValue).sum()

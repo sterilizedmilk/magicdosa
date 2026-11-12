@@ -46,7 +46,10 @@ final class AgentCostDecision extends AiCostDecision {
         if (options.size() == amount) {
             return PaymentDecision.card(options);
         }
-        List<Card> chosen = agent.chooseCostCards(cost.getClass().getSimpleName(), options, amount, ability);
+        List<Card> chosen = agent.chooseCostCards(cost.getClass().getSimpleName(), options, amount, ability, () -> {
+            PaymentDecision d = forgeAi.get(); // Forge AI's payment, when the decision is delegated to it
+            return d == null ? null : d.cards;
+        });
         return chosen == null ? forgeAi.get() : PaymentDecision.card(new CardCollection(chosen));
     }
 

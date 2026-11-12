@@ -44,7 +44,8 @@ public final class LogDump {
                     var pool = d.getRequest().getObservation().getPlayers(d.getRequest().getSeat()).getManaPoolList();
                     System.out.println("DECISION " + TextFormat.shortDebugString(d.toBuilder()
                         .setRequest(d.getRequest().toBuilder().clearObservation()).build()) + " POOL "
-                        + pool.stream().map(TextFormat::shortDebugString).toList());
+                        + pool.stream().map(TextFormat::shortDebugString).toList() + " POTENTIAL "
+                        + d.getRequest().getObservation().getPotentialCastsList().stream().map(TextFormat::shortDebugString).toList());
                     continue;
                 }
                 if (r.hasDecision() || r.hasPrivileged() || r.hasSnapshot()) {

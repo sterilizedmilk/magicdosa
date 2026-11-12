@@ -380,7 +380,7 @@ final class ObservationBuilder {
                 b.setAbility(key);
             }
         }
-        b.addAllTargets(session.targets(sa)).addAllModes(session.modes(sa));
+        b.addAllTargets(session.targets(sa)).addAllModes(session.stackModes(si, sa));
         if (sa.getXManaCostPaid() != null) {
             b.setX(sa.getXManaCostPaid());
         }

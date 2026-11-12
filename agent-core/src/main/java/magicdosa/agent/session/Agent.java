@@ -36,8 +36,25 @@ public final class Agent {
     }
 
     public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards) {
+        this(policy, shards, null);
+    }
+
+    /**
+     * {@code shadowKeys}: the shadow Forge AI policy (Forge initialised in this JVM): every game gets a live shadow
+     * whose Forge AI answers its first agent seat's requests; {@code policy} answers what the shadow cannot.
+     */
+    public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards, magicdosa.adapter.forge.CardKeys shadowKeys) {
         this.policy = policy;
         this.shards = shards;
+        this.shadowKeys = shadowKeys;
+    }
+
+    private final magicdosa.adapter.forge.CardKeys shadowKeys;
+
+    /** The live shadow of a new game (shadow Forge AI policy), or null. */
+    magicdosa.agent.shadow.LiveShadow liveShadow(Hello hello) {
+        return shadowKeys == null ? null
+            : new magicdosa.agent.shadow.LiveShadow(hello, hello.getAgentSeats(0), shadowKeys, policy);
     }
 
     magicdosa.agent.encoder.ShardWriter shards() {
@@ -101,7 +118,10 @@ public final class Agent {
 
     /** The stream of a game ended without a game over (adapter gone, or a protocol error). */
     public void abandoned(String gameId) {
-        open.remove(gameId);
+        GameSession s = open.remove(gameId);
+        if (s != null) {
+            s.abandon();
+        }
         accepted.remove(gameId);
     }
 
@@ -123,6 +143,7 @@ public final class Agent {
         return "games finished=" + finished.get() + " refused=" + refused.get() + " open=" + open.size() + " events="
             + events.get() + " decisions=" + decisions.get() + " protocolErrors=" + protocolErrors().size()
             + (shards == null ? "" : " shards=" + shardsWritten.get() + " shardErrors=" + shardErrors.get()
-                + " oov=" + shards.vocabulary().oovCount() + " " + shards.vocabulary().oovValues().keySet());
+                + " oov=" + shards.vocabulary().oovCount() + " " + shards.vocabulary().oovValues().keySet())
+            + (shadowKeys == null ? "" : " " + magicdosa.agent.shadow.LiveShadow.totals());
     }
 }

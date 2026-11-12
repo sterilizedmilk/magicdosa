@@ -149,9 +149,14 @@ public final class ForgeGameSession {
         }
     }
 
-    record Asked(DecisionRequest request, DecisionResponse response, FallbackReason failure) {
+    /** {@code delegate}: the client handed the decision to Forge AI of this game (see {@link DelegatingClient}). */
+    record Asked(DecisionRequest request, DecisionResponse response, FallbackReason failure, boolean delegate) {
+        Asked(DecisionRequest request, DecisionResponse response, FallbackReason failure) {
+            this(request, response, failure, false);
+        }
+
         boolean ok() {
-            return failure == null;
+            return failure == null && !delegate;
         }
     }
 
@@ -1028,11 +1033,33 @@ public final class ForgeGameSession {
     }
 
     /** Chosen modes of a modal spell or ability: 0-based indices in oracle order (Q1). */
+    /**
+     * The modes each stack item was put on the stack with. Forge AI may reset a charm's chosen list after the cast
+     * (CharmAi weighing the same spell again; GameActionUtil's rollback) while the chosen modes stay in its sub-ability
+     * chain: the stack item keeps the modes its cast reported.
+     */
+    private final Map<SpellAbilityStackInstance, List<Integer>> stackModes = new java.util.WeakHashMap<>();
+
+    /** The modes of a stack item: as Forge holds them, else as its cast reported them. */
+    List<Integer> stackModes(SpellAbilityStackInstance si, SpellAbility sa) {
+        List<Integer> m = modes(sa);
+        return m.isEmpty() ? stackModes.getOrDefault(si, m) : m;
+    }
+
     List<Integer> modes(SpellAbility sa) {
         SpellAbility root = sa.getRootAbility();
         List<Integer> out = new ArrayList<>();
         if (root.getChosenList() == null) {
-            return out;
+            if (root.getApi() != forge.game.ability.ApiType.Charm) {
+                return out;
+            }
+            // a charm cast on the human play path (a replayed cast) chains its chosen modes as its sub-abilities
+            // without keeping the chosen list
+            List<forge.game.spellability.AbilitySub> chain = new ArrayList<>();
+            for (forge.game.spellability.AbilitySub s = root.getSubAbility(); s != null; s = s.getSubAbility()) {
+                chain.add(s);
+            }
+            return modeIndices(sa, chain);
         }
         return modeIndices(sa, root.getChosenList());
     }
@@ -1352,6 +1379,10 @@ public final class ForgeGameSession {
             }
             return;
         }
+        List<Integer> chosenModes = modes(sa);
+        if (!chosenModes.isEmpty()) {
+            stackModes.put(si, chosenModes);
+        }
         if (sa.isSpell()) {
             CastSpell.Builder c = CastSpell.newBuilder().setSeat(seat).setCardId(ids.prevIdOf(hostId)).setSpellId(hostId)
                 .setSpell(keys.spellKey(sa)).addAllTargets(targets).addAllPayment(payment(sa)).addAllModes(modes(sa))
@@ -1530,6 +1561,12 @@ public final class ForgeGameSession {
     /** {@code bundle}: this request is the next step of a step bundle (Q18), or null. */
     Asked ask(Player decider, Player acting, DecisionType type, List<Candidate> candidates, SelectionConstraints constraints,
               DecisionContext context, List<Rejection> rejections, Bundle bundle) {
+        if (forgeAiDepth > 0) {
+            // a decision Forge AI asks itself while it computes a delegated answer (PlayerControllerAi calls its own
+            // controller methods): part of that answer, Forge AI's too; no request, nothing recorded
+            return new Asked(DecisionRequest.newBuilder().setGameId(gameId).setType(type).addAllCandidates(candidates)
+                .setConstraints(constraints).build(), null, null, true);
+        }
         Player p = decider;
         syncZones();
         if (snapshotTurn < 0) {
@@ -1567,6 +1604,9 @@ public final class ForgeGameSession {
             stats.decideNanos += System.nanoTime() - waitStart;
         } catch (Exception e) {
             return new Asked(request, null, FallbackReason.FALLBACK_REASON_COMMUNICATION_ERROR);
+        }
+        if (client instanceof DelegatingClient d && d.delegateLast()) {
+            return new Asked(request, null, null, true);
         }
         if (!valid(request, response)) {
             return new Asked(request, response, FallbackReason.FALLBACK_REASON_ILLEGAL_ACTION);
@@ -1619,7 +1659,65 @@ public final class ForgeGameSession {
         stats.note("safety cap: " + what);
     }
 
+    /**
+     * A delegated decision (see {@link DelegatingClient}): {@code forgeAi} gives Forge AI's answer as candidate indices
+     * of the request. The result is an answer like agent-core's, its step marked as an intended delegation, so the
+     * caller goes on as usual (and logs it as a delegation); an answer that maps to no candidate (or breaks the
+     * constraints) becomes an unintended fallback, counted by decision type. Not delegated: {@code asked} unchanged.
+     */
+    Asked resolveDelegation(Asked asked, java.util.function.Supplier<List<Integer>> forgeAi, String engineDecision) {
+        if (!asked.delegate()) {
+            return asked;
+        }
+        DecisionRequest req = asked.request();
+        boolean nested = forgeAiDepth > 0;
+        if (!nested) {
+            delegationDetail = null;
+        }
+        List<Integer> chosen = null;
+        if (forgeAi != null) {
+            forgeAiDepth++;
+            try {
+                chosen = forgeAi.get();
+            } catch (RuntimeException e) {
+                stats.note("Forge AI's answer failed (" + engineDecision + "): " + e);
+            } finally {
+                forgeAiDepth--;
+            }
+        }
+        DecisionResponse resp = chosen == null ? null : DecisionResponse.newBuilder().setGameId(req.getGameId())
+            .setDecisionId(req.getDecisionId()).addAllChosen(chosen)
+            .addSteps(DecisionStep.newBuilder().setDecider(Decider.DECIDER_INTENDED_DELEGATION)).build();
+        if (nested) {
+            return resp == null || !valid(req, resp) ? new Asked(req, null, FallbackReason.FALLBACK_REASON_ILLEGAL_ACTION)
+                : new Asked(req, resp, null);
+        }
+        DelegatingClient d = (DelegatingClient) client;
+        if (resp == null || !valid(req, resp)) {
+            stats.note("Forge AI's answer matched no candidate: " + req.getType() + " " + engineDecision);
+            d.unmapped(req, delegationDetail == null ? engineDecision : engineDecision + ": " + delegationDetail);
+            return new Asked(req, null, FallbackReason.FALLBACK_REASON_ILLEGAL_ACTION);
+        }
+        d.delegated(req, chosen, engineDecision);
+        return new Asked(req, resp, null);
+    }
+
+    /** What Forge AI answered, for the report of an answer that maps to no candidate. */
+    private String delegationDetail;
+
+    void delegationDetail(String detail) {
+        if (forgeAiDepth <= 1) {
+            delegationDetail = detail;
+        }
+    }
+
+    /** Depth of Forge AI computing a delegated answer (decisions asked inside it are part of it). */
+    private int forgeAiDepth;
+
     void record(Asked asked, List<Integer> applied, String engineDecision, boolean fellBack, FallbackReason reason) {
+        if (asked.request().getDecisionId() == 0) {
+            return; // asked by Forge AI inside a delegated answer: not a decision of its own
+        }
         DecisionRecord.Builder r = DecisionRecord.newBuilder().setRequest(asked.request()).setEngineDecision(engineDecision)
             .addAllApplied(applied);
         if (asked.response() != null) {
@@ -1628,6 +1726,11 @@ public final class ForgeGameSession {
         if (fellBack) {
             r.setDecider(Decider.DECIDER_UNINTENDED_FALLBACK).setFallbackReason(reason);
             stats.fallback(engineDecision + ": " + reason);
+        } else if (asked.response() != null && asked.response().getStepsCount() > 0
+                && asked.response().getSteps(0).getDecider() == Decider.DECIDER_INTENDED_DELEGATION) {
+            // agent-core answered with the shadow game's Forge AI (design: 의도된 위임)
+            r.setDecider(Decider.DECIDER_INTENDED_DELEGATION);
+            stats.delegated(engineDecision + "(shadow Forge AI)", asked.request().getType());
         } else {
             r.setDecider(Decider.DECIDER_MODEL);
             stats.decided(asked.request().getType());

@@ -49,6 +49,11 @@ public final class GameRecord {
         this.viewer = viewer;
     }
 
+    /** Live mode: an empty record that the stream fills as the game runs (no hidden state). */
+    public static GameRecord live(LogHeader header, int viewer) {
+        return new GameRecord(null, header, viewer);
+    }
+
     public static List<LogRecord> read(Path file) throws IOException {
         List<LogRecord> out = new ArrayList<>();
         try (InputStream in = new GZIPInputStream(new BufferedInputStream(Files.newInputStream(file)))) {

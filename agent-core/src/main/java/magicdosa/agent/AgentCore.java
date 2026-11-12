@@ -28,20 +28,50 @@ public final class AgentCore {
         int port = DEFAULT_PORT;
         boolean untilStdinCloses = false;
         java.nio.file.Path shardDir = null;
+        String policyName = "random";
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 port = Integer.parseInt(args[++i]);
             } else if (args[i].equals("--shards") && i + 1 < args.length) {
                 shardDir = java.nio.file.Path.of(args[++i]);
+            } else if (args[i].equals("--policy") && i + 1 < args.length) {
+                policyName = args[++i];
             } else if (args[i].equals("--until-stdin-closes")) {
                 untilStdinCloses = true;
             } else {
                 throw new IllegalArgumentException("unknown argument " + args[i]);
             }
         }
-        RandomPolicy policy = new RandomPolicy();
+        magicdosa.agent.policy.Policy policy;
+        magicdosa.adapter.forge.CardKeys shadowKeys = null;
+        if (policyName.equals("random")) {
+            policy = new RandomPolicy();
+        } else if (policyName.equals("shadow-forge-ai")) {
+            // the shadow game's Forge AI decides (phase-2 gate): a live shadow per game, Forge in this JVM (run it with
+            // forge-gui as the working directory); the random policy answers what the shadow cannot
+            System.setProperty("java.awt.headless", "true");
+            System.setProperty("java.util.Arrays.useLegacyMergeSort", "true");
+            forge.gui.GuiBase.setInterface(new forge.GuiDesktop());
+            forge.model.FModel.initialize(null, null);
+            shadowKeys = magicdosa.adapter.forge.CardKeys.load();
+            RandomPolicy random = new RandomPolicy();
+            policy = new magicdosa.agent.policy.Policy() {
+                @Override
+                public String modelVersion() {
+                    return "shadow-forge-ai";
+                }
+
+                @Override
+                public magicdosa.protocol.v1.DecisionResponse decide(magicdosa.protocol.v1.DecisionRequest request) {
+                    return random.decide(request);
+                }
+            };
+        } else {
+            throw new IllegalArgumentException("unknown policy " + policyName + " (random, shadow-forge-ai)");
+        }
         Agent agent = new Agent(policy, shardDir == null ? null : new magicdosa.agent.encoder.ShardWriter(
-            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir, policy.modelVersion()));
+            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir, policy.modelVersion()),
+            shadowKeys);
         AgentCoreServer server = AgentCoreServer.start(port, agent);
         System.out.println("agent-core: protocol " + Versions.PROTOCOL + ", encoder " + ENCODER_VERSION + ", model "
             + policy.modelVersion());

@@ -147,6 +147,11 @@ final class GameFacts {
             if (key != null) {
                 b.setAbility(key);
             }
+            for (Object r : t.getTriggerRemembered()) {
+                if (r instanceof GameEntity g) {
+                    b.addAffected(session.ref(g)); // what it will act on (the rebound card, a player to draw)
+                }
+            }
             return b.build();
         }
         Card eff = (Card) o;

@@ -101,7 +101,9 @@ public final class RandomGames {
         long start = System.nanoTime();
         for (int m = 0; m < matches; m++) {
             try {
-                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, Set.of(0), 1000 + m, logDir);
+                // -Dmagicdosa.agentSeats=none: plain Forge AI in both seats (win-rate reference, no decision layer)
+                Set<Integer> seats = "none".equals(System.getProperty("magicdosa.agentSeats")) ? Set.of() : Set.of(0);
+                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seats, 1000 + m, logDir);
                 total.add(r.stats());
                 gameWins[0] += r.gamesWon()[0];
                 gameWins[1] += r.gamesWon()[1];

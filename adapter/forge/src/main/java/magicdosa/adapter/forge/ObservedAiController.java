@@ -132,6 +132,10 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.tuckCardsViaMulligan(hand, cardsToReturn);
     }
 
+    protected final int forgeAiNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
+        return super.chooseNumberForKeywordCost(sa, cost, keyword, prompt, max);
+    }
+
     protected final Player forgeAiStartingPlayer(boolean isFirstGame) {
         return super.chooseStartingPlayer(isFirstGame);
     }
@@ -1207,7 +1211,8 @@ public class ObservedAiController extends PlayerControllerAi {
     // ---- decisions not classified yet: Forge AI answers and each call is counted (docs/player-controller-methods.md) ----
 
     private void unclassified(String method) {
-        if (forAgent) {
+        // inside forgeAi(...) the decision is a classified one answered by Forge AI (a delegation or a recorded fallback)
+        if (forAgent && !fallingBack) {
             session.unclassified(player, method);
         }
     }

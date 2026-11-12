@@ -44,6 +44,9 @@ final class AgentConnection implements AutoCloseable {
         if (spec.equals("local")) {
             return new AgentConnection(new LocalDecisionClient(new RandomPolicy()), null);
         }
+        if (spec.equals("forge-ai")) {
+            return new AgentConnection(new ForgeAiClient(), null); // baseline: the real game's Forge AI decides
+        }
         if (spec.equals("spawn")) {
             return spawn();
         }
@@ -55,6 +58,20 @@ final class AgentConnection implements AutoCloseable {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         List<String> cmd = new ArrayList<>(List.of(java, "-Xmx" + System.getProperty("magicdosa.agentXmx", "1g"), "--add-opens=java.base/java.nio=ALL-UNNAMED",
             "-cp", System.getProperty("java.class.path"), "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes"));
+        String policy = System.getProperty("magicdosa.agentPolicy");
+        if (policy != null) {
+            // e.g. shadow-forge-ai: the shadow game's Forge AI decides (Forge runs in agent-core too: the same working
+            // directory, forge-gui)
+            cmd.addAll(List.of("--policy", policy));
+        }
+        for (String k : System.getProperties().stringPropertyNames()) {
+            if (k.startsWith("magicdosa.shadow")) {
+                cmd.add(cmd.indexOf("-cp"), "-D" + k + "=" + System.getProperty(k)); // shadowStats, shadowDump, ...
+            }
+        }
+        if (policy != null) {
+            cmd.add(cmd.indexOf("-cp"), "-Dfile.encoding=UTF-8");
+        }
         String shards = System.getProperty("magicdosa.shards");
         if (shards != null) {
             cmd.addAll(List.of("--shards", shards)); // training samples (Arrow) of every finished game

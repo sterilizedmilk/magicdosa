@@ -346,6 +346,19 @@ public class ReplayAiController extends ObservedAiController {
         m.getManaPart().setExpressChoice(String.join(" ", units));
     }
 
+    /** Whether the mana ability can make each of the colors (letters, "C" colorless). */
+    private static boolean makes(SpellAbility m, List<String> colors) {
+        if (m.getManaPart() == null) {
+            return false;
+        }
+        for (String c : colors) {
+            if (!m.getManaPart().canProduce(c, m)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Activates the recorded mana ability of a source for the recorded mana (it goes to the pool). */
     private void makeMana(magicdosa.protocol.v1.ManaAbilityUse use) {
         Card c = card(use.getSourceId());
@@ -359,9 +372,11 @@ public class ReplayAiController extends ObservedAiController {
                 units.add(m.getColor());
             }
         });
-        String colors = String.join(" ", units);
-        // (kept for the caller below)
-        for (SpellAbility m : c.getManaAbilities()) {
+        // abilities under the recorded key; one printed "Add {W} or {U}" is one Forge ability per color: the one that
+        // makes the recorded colors first
+        List<SpellAbility> abilities = new ArrayList<>(c.getManaAbilities());
+        abilities.sort(java.util.Comparator.comparing(m -> !makes(m, units)));
+        for (SpellAbility m : abilities) {
             m.setActivatingPlayer(player);
             if (!use.getAbility().equals(session.keys().abilityKey(m)) || !m.canPlay()) {
                 continue;
@@ -995,6 +1010,11 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected boolean answerConfirmPayment(forge.game.cost.CostPart costPart, String string, SpellAbility sa) {
         ResolutionChoice r = choice("confirmPayment");
+        if (r == null && scripted) {
+            // a cost of the recorded action played here: the real game paid it (Forge AI pays without being asked; its
+            // own answer here weighs its life, e.g. a fetch land's 1 life at low life, and could cancel the action)
+            return true;
+        }
         return r == null ? super.answerConfirmPayment(costPart, string, sa) : flag(r, false);
     }
 

@@ -163,6 +163,39 @@ public final class ShadowGame {
         }
     }
 
+    /**
+     * Live mode (the shadow Forge AI policy): the record grows while the real game runs. The shadow runs only while
+     * the real game waits for the answer to its newest request, so it never runs past the real stream; the newest
+     * request is answered by the shadow game's Forge AI (an intended delegation) while the shadow tracks, otherwise
+     * without the shadow (counted with the reason).
+     */
+    public interface Live {
+        /** The newest real request, not answered yet; null once the game is over. */
+        DecisionRequest pending();
+
+        /** Whether the real game is over (its end is in the record). */
+        boolean over();
+
+        /**
+         * Answers the pending request (it joins the record with its answer) and waits until the next request or the
+         * game over is in the record.
+         */
+        void answer(DecisionResponse response, String how);
+
+        /** An answer without the shadow (the network alone; here the random policy), counted with its reason. */
+        DecisionResponse withoutShadow(DecisionRequest request, String why);
+
+        /**
+         * Forge AI's answer matched no real candidate: no answer goes to the real game (an unintended fallback there,
+         * counted by decision type); the record keeps an unknown answer. Waits like {@link #answer}.
+         */
+        void unmapped(DecisionRequest request, String engineDecision, String why);
+    }
+
+    /** The record marks an answer the shadow does not know (an unintended fallback of the real game) with this ID. */
+    static final long UNKNOWN_ANSWER = 0;
+
+    private final Live live;
     private final GameRecord rec;
     private final CardKeys keys;
     private final boolean forcedRegeneration;
@@ -186,7 +219,7 @@ public final class ShadowGame {
     private final List<StateCopy> controllers = new ArrayList<>();
 
     /** Everything a recovery ① needs to go back to the start of the turn. */
-    private record TurnPoint(int turn, GameMemento memento, Runnable session, List<StateCopy> controllers, int decisionIdx,
+    private record TurnPoint(int turn, GameMemento memento, Runnable gaps, Runnable session, List<StateCopy> controllers, int decisionIdx,
                              int opponentIdx, Set<Integer> opponentUsed, Map<Integer, Integer> shuffles, long lastShadowSeq,
                              int shadowEvents) {}
 
@@ -212,6 +245,16 @@ public final class ShadowGame {
      * is taken from the privileged records.
      */
     public ShadowGame(GameRecord rec, CardKeys keys, boolean forcedRegeneration, boolean beliefSamples) {
+        this(rec, keys, forcedRegeneration, beliefSamples, null);
+    }
+
+    /** Live mode (verification ② on belief samples, the record filled as the real game runs). */
+    public ShadowGame(GameRecord rec, CardKeys keys, Live live) {
+        this(rec, keys, false, true, live);
+    }
+
+    private ShadowGame(GameRecord rec, CardKeys keys, boolean forcedRegeneration, boolean beliefSamples, Live live) {
+        this.live = live;
         this.rec = rec;
         this.keys = keys;
         this.forcedRegeneration = forcedRegeneration;
@@ -243,6 +286,26 @@ public final class ShadowGame {
             r.decisionsMatchedAfterRecovery = (int) lastTry.values().stream().filter(x -> x).count();
         }
         return r;
+    }
+
+    /** Live mode: runs the shadow on the calling thread (a Game-shadow-* thread) until the real game ends. */
+    public Result runLive() {
+        long start = System.nanoTime(); // measurement only
+        body();
+        result.millis = (System.nanoTime() - start) / 1_000_000;
+        tally();
+        dump();
+        return result;
+    }
+
+    /** Live mode: the shadow unwinds at its next question about the record (the stream was abandoned). */
+    public void stop() {
+        stop = true;
+    }
+
+    /** An unwind that ends the shadow (live mode: stopped from outside). */
+    static Error stopped(String why) {
+        return new Unwind(why, Unwind.Kind.END);
     }
 
     private Result run0() {
@@ -295,15 +358,44 @@ public final class ShadowGame {
             }
             startSnapshot = rec.snapshots.get(si);
             rebuild(startSnapshot);
-            startDecisionIdx = decisionIdx; // decisions before the game start (sideboarding, play or draw) are not replayed
+            // decisions before the game start (sideboarding, play or draw) are not replayed, also when the last
+            // turn-0 snapshot of this seat came before them (the other seat chose play or draw)
+            while (decisionIdx < rec.decisions.size()) {
+                var t = rec.decisions.get(decisionIdx).record().getRequest().getType();
+                if (t != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_SIDEBOARD
+                        && t != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PLAY_OR_DRAW) {
+                    break;
+                }
+                decisionIdx++;
+            }
+            startDecisionIdx = decisionIdx;
             long firstSeq = rec.snapshots.get(si).snapshot().getSeq();
+            // an unwind is handled at the top of the loop, so that one thrown while recovering (a rebuild whose belief
+            // sample does not fit: recovery 3 to the next turn start) is handled in turn
+            Unwind carried = null;
             while (true) {
                 try {
+                    if (carried != null) {
+                        Unwind u = carried;
+                        carried = null;
+                        if (recover(u, firstSeq)) {
+                            return;
+                        }
+                        continue;
+                    }
                     if (pregame) {
                         pregame = false;
                         pregame();
                     }
                     loop();
+                    if (live != null && !live.over()) {
+                        // live: the shadow game ended but the real one goes on (it diverged): recovery 3 from the
+                        // next real turn start
+                        result.recoveries3++;
+                        carried = new Unwind("the shadow game ended before the real game", Unwind.Kind.NEXT_TURN,
+                            game.getPhaseHandler().getTurn());
+                        continue;
+                    }
                     result.end = game.isGameOver() ? "game over" : "loop ended";
                     eventCounts(firstSeq);
                     replayVerdict();
@@ -313,48 +405,7 @@ public final class ShadowGame {
                     if (u == null) {
                         throw t;
                     }
-                    if (u.kind == Unwind.Kind.END) {
-                        result.end = u.why;
-                        eventCounts(firstSeq);
-                        return;
-                    }
-                    if (u.kind == Unwind.Kind.RESTORE && turnStart != null) {
-                        restore(turnStart);
-                        continue;
-                    }
-                    if (u.kind == Unwind.Kind.NEXT_TURN) {
-                        GameRecord.Snapshot next = null;
-                        for (GameRecord.Snapshot x : rec.snapshots) {
-                            if (x.snapshot().getObservation().getGame().getTurn() > u.turn) {
-                                next = x;
-                                break;
-                            }
-                        }
-                        if (next == null) {
-                            // no later turn start: the rest of the game is decided without search
-                            skipDecisions(rec.decisions.size());
-                            result.end = u.why + " (no later turn start)";
-                            eventCounts(firstSeq);
-                            return;
-                        }
-                        int from = decisionIdx;
-                        rebuild(next);
-                        int to = decisionIdx;
-                        decisionIdx = from;
-                        skipDecisions(to);
-                        continue;
-                    }
-                    // recovery ②, a turn start that does not match, or forced per-turn regeneration (measurement):
-                    // rebuild from the real snapshot of the turn
-                    int turn = u.kind == Unwind.Kind.RESTORE ? game.getPhaseHandler().getTurn() : lastComparedTurn;
-                    GameRecord.Snapshot s = snapshotOfTurn(turn);
-                    if (s == null) {
-                        result.end = "no snapshot for turn " + turn;
-                        return;
-                    }
-                    int keep = stage;
-                    rebuild(s);
-                    stage = keep;
+                    carried = u;
                 }
             }
         } catch (Throwable e) {
@@ -369,6 +420,54 @@ public final class ShadowGame {
                 result.error += "\n    at " + st[i];
             }
         }
+    }
+
+    /** Handles an unwind of the shadow; true when the shadow ends. May throw another unwind (handled in turn). */
+    private boolean recover(Unwind u, long firstSeq) {
+        if (u.kind == Unwind.Kind.END) {
+            result.end = u.why;
+            eventCounts(firstSeq);
+            return true;
+        }
+        if (u.kind == Unwind.Kind.RESTORE && turnStart != null) {
+            restore(turnStart);
+            return false;
+        }
+        if (u.kind == Unwind.Kind.NEXT_TURN) {
+            GameRecord.Snapshot next = snapshotAfter(u.turn);
+            while (next == null && live != null && live.pending() != null) {
+                // live: the real game has not reached a later turn start yet; its requests until then are
+                // decided without the shadow (search skipped)
+                DecisionRequest p = live.pending();
+                live.answer(live.withoutShadow(p, "search skipped: " + u.why), "without shadow");
+                next = snapshotAfter(u.turn);
+            }
+            if (next == null) {
+                // no later turn start: the rest of the game is decided without search
+                skipDecisions(rec.decisions.size());
+                result.end = u.why + " (no later turn start)";
+                eventCounts(firstSeq);
+                return true;
+            }
+            int from = decisionIdx;
+            rebuild(next);
+            int to = decisionIdx;
+            decisionIdx = from;
+            skipDecisions(to);
+            return false;
+        }
+        // recovery 2, a turn start that does not match, or forced per-turn regeneration (measurement):
+        // rebuild from the real snapshot of the turn
+        int turn = u.kind == Unwind.Kind.RESTORE ? game.getPhaseHandler().getTurn() : lastComparedTurn;
+        GameRecord.Snapshot snap = snapshotOfTurn(turn);
+        if (snap == null) {
+            result.end = "no snapshot for turn " + turn;
+            return true;
+        }
+        int keep = stage;
+        rebuild(snap);
+        stage = keep;
+        return false;
     }
 
     /** The unwind behind {@code t}, also when Forge wrapped it on the way out (AbilityFactory wraps Errors). */
@@ -490,6 +589,28 @@ public final class ShadowGame {
             if (e.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && e.getLibraryShuffled().getSeat() == seat) {
                 break;
             }
+            if (e.getBodyCase() == Event.BodyCase.CARD_REVEALED
+                    && e.getCardRevealed().getReason() == magicdosa.protocol.v1.RevealReason.REVEAL_REASON_LOOKED_AT
+                    && e.getCardRevealed().getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY && inLibraryOf(seat, e.getCardRevealed().getId())) {
+                // a seat looks at its top cards (Narset, Consult the Star Charts; the viewer sees which objects even
+                // when it is the other seat): they are on top in that order, unless the run of looks is a search (a
+                // shuffle of that library follows)
+                int k = i;
+                while (k < after.size() && after.get(k).getBodyCase() == Event.BodyCase.CARD_REVEALED) {
+                    k++;
+                }
+                boolean search = false;
+                for (int f = k; f < Math.min(after.size(), k + 8); f++) {
+                    if (after.get(f).getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED && after.get(f).getLibraryShuffled().getSeat() == seat) {
+                        search = true;
+                        break;
+                    }
+                }
+                if (!search && !leaving.contains(e.getCardRevealed().getId())) {
+                    leaving.add(e.getCardRevealed().getId());
+                }
+                continue;
+            }
             if (e.getBodyCase() == Event.BodyCase.ZONE_MOVE && e.getZoneMove().getFrom() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY
                     && e.getZoneMove().getOwnerSeat() == seat) {
                 // a card searched for (a shuffle of that library follows at once) does not come from the top
@@ -573,6 +694,53 @@ public final class ShadowGame {
 
     /** A slot in {@link #departures} for a card whose ID is hidden (put on the bottom by a scry). */
     private static final long UNKNOWN = -1;
+
+    /**
+     * Verification ②: library cards whose position the viewer knows (put on top or bottom where it saw them) take that
+     * position as the real observation shows it, after the cards that leave later were put on top.
+     */
+    private boolean knownPositions(int seat, magicdosa.protocol.v1.Observation o) {
+        Player owner = game.getRegisteredPlayers().get(seat);
+        List<Card> lib = new ArrayList<>();
+        owner.getCardsIn(ZoneType.Library).forEach(lib::add);
+        int n = lib.size();
+        Card[] slots = new Card[n];
+        Set<Card> placed = new java.util.HashSet<>();
+        for (var g : o.getObjectsList()) {
+            if (g.getZone() != magicdosa.protocol.v1.Zone.ZONE_LIBRARY || g.getOwnerSeat() != seat || !g.hasLibraryPosition()) {
+                continue;
+            }
+            Card c = session.cardOf(g.getId());
+            if (c == null || !lib.contains(c) || placed.contains(c)) {
+                continue;
+            }
+            var pos = g.getLibraryPosition();
+            int at = pos.hasFromTop() ? pos.getFromTop() : pos.hasFromBottom() ? n - 1 - pos.getFromBottom() : -1;
+            if (at >= 0 && at < n && slots[at] == null) {
+                slots[at] = c;
+                placed.add(c);
+            }
+        }
+        if (placed.isEmpty()) {
+            return false;
+        }
+        List<Card> order = new ArrayList<>();
+        java.util.Iterator<Card> rest = lib.stream().filter(c -> !placed.contains(c)).iterator();
+        for (int i = 0; i < n; i++) {
+            order.add(slots[i] != null ? slots[i] : rest.next());
+        }
+        if (!order.equals(lib)) {
+            owner.getZone(ZoneType.Library).setCards(order);
+            return true;
+        }
+        return false;
+    }
+
+    /** Whether {@code id} is a card in the seat's library in the shadow now. */
+    private boolean inLibraryOf(int seat, long id) {
+        Card c = session.cardOf(id);
+        return c != null && c.isInZone(ZoneType.Library) && game.getRegisteredPlayers().indexOf(c.getOwner()) == seat;
+    }
 
     private void placeOnTop(int seat, List<Long> leaving) {
         Player owner = game.getRegisteredPlayers().get(seat);
@@ -696,6 +864,164 @@ public final class ShadowGame {
         return r > 0;
     }
 
+    /**
+     * Verification ②: the viewer looks through its library when it searches it, and the real request names the library
+     * objects that qualify. Where the sample gave the qualifying identities to other library objects, those identities
+     * move to the objects the real request names (which real object is which of them is not known: in candidate
+     * order; the move that follows shows it). True when an identity was swapped.
+     */
+    private boolean searchIdentities(DecisionRequest real, DecisionRequest shadow) {
+        List<Long> r = libraryCandidates(real), s = libraryCandidates(shadow);
+        List<Long> missing = new ArrayList<>(r), extra = new ArrayList<>(s);
+        missing.removeAll(s);
+        extra.removeAll(r);
+        if (missing.isEmpty() && !extra.isEmpty()) {
+            return lookedAtIdentities(s, extra);
+        }
+        if (missing.isEmpty() || missing.size() != extra.size()) {
+            return false;
+        }
+        boolean changed = false;
+        for (int i = 0; i < missing.size(); i++) {
+            Card c = session.cardOf(extra.get(i));
+            String oracle = c == null ? null : keys.oracleId(c);
+            if (oracle != null) {
+                changed |= identity(missing.get(i), oracle, false);
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Verification ②: the viewer looks at its top cards and the real request offers fewer of them than the shadow
+     * (Narset, Consult the Star Charts: the ones that qualify). A shadow candidate the real game does not offer does
+     * not qualify: it takes the identity of a looked-at card that does not qualify in the shadow either, swapped from
+     * deeper in the library (the looked-at cards are kept out of the swap). True when an identity was swapped.
+     */
+    private boolean lookedAtIdentities(List<Long> shadowCandidates, List<Long> extra) {
+        List<Card> lib = new ArrayList<>();
+        game.getRegisteredPlayers().get(viewer).getCardsIn(ZoneType.Library).forEach(lib::add);
+        int deepest = -1;
+        for (int i = 0; i < lib.size(); i++) {
+            if (shadowCandidates.contains(session.idOf(lib.get(i)))) {
+                deepest = i;
+            }
+        }
+        if (deepest < 0) {
+            return false;
+        }
+        List<Long> window = new ArrayList<>();
+        List<String> ineligible = new ArrayList<>();
+        for (int i = 0; i <= deepest; i++) {
+            long id = session.idOf(lib.get(i));
+            window.add(id);
+            String o = keys.oracleId(lib.get(i));
+            if (!shadowCandidates.contains(id) && o != null && !ineligible.contains(o)) {
+                ineligible.add(o);
+            }
+        }
+        if (ineligible.isEmpty()) {
+            return false;
+        }
+        List<Long> added = new ArrayList<>();
+        for (long id : window) {
+            if (shownIds.add(id)) {
+                added.add(id);
+            }
+        }
+        boolean changed = false;
+        try {
+            for (long e : extra) {
+                shownIds.remove(e);
+                for (String o : ineligible) {
+                    if (identity(e, o, false)) {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } finally {
+            shownIds.removeAll(added);
+        }
+        return changed;
+    }
+
+    /**
+     * Verification ②: a shadow candidate among the viewer's library cards that the real request does not offer still
+     * qualifies after {@link #lookedAtIdentities} (no looked-at card was there to lend an identity): identities from
+     * deeper in the library are tried one by one, the shadow's own request telling whether the card still qualifies.
+     */
+    private DecisionRequest notQualifying(DecisionRequest real, DecisionRequest request) {
+        List<Long> r = libraryCandidates(real);
+        List<Long> extra = new ArrayList<>(libraryCandidates(request));
+        extra.removeAll(r);
+        if (extra.isEmpty() || !r.containsAll(libraryCandidates(request).stream().filter(r::contains).toList())
+                || !libraryCandidates(request).containsAll(r)) {
+            return request;
+        }
+        List<Card> lib = new ArrayList<>();
+        game.getRegisteredPlayers().get(viewer).getCardsIn(ZoneType.Library).forEach(lib::add);
+        for (long e : extra) {
+            Set<String> tried = new java.util.HashSet<>();
+            Card ce = session.cardOf(e);
+            if (ce != null) {
+                tried.add(keys.oracleId(ce));
+            }
+            for (int li = 0; li < lib.size(); li++) {
+                Card c = lib.get(li);
+                long id = session.idOf(c);
+                String o = keys.oracleId(c);
+                if (li < 8 || id == e || r.contains(id) || o == null || !tried.add(o) || tried.size() > 12) {
+                    continue;
+                }
+                // the cards looked at stay where they are: the top of the library (8 cards at least) is kept out of
+                // the swap, so the identity comes from below it
+                List<Long> keep = new ArrayList<>(r);
+                for (int t = 0; t < Math.min(8, lib.size()); t++) {
+                    keep.add(session.idOf(lib.get(t)));
+                }
+                List<Long> added = new ArrayList<>();
+                for (long k : keep) {
+                    if (k != e && shownIds.add(k)) {
+                        added.add(k);
+                    }
+                }
+                shownIds.remove(e);
+                boolean swapped;
+                try {
+                    swapped = identity(e, o, false);
+                } finally {
+                    shownIds.removeAll(added);
+                }
+                if (swapped) {
+                    request = session.reask(request);
+                    if (!libraryCandidates(request).contains(e)) {
+                        break;
+                    }
+                }
+            }
+        }
+        return request;
+    }
+
+    /** The candidates of a choice that are objects in the viewer's library (by the request's observation). */
+    private List<Long> libraryCandidates(DecisionRequest q) {
+        Set<Long> inLibrary = new java.util.HashSet<>();
+        for (var g : q.getObservation().getObjectsList()) {
+            if (g.getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY && g.getOwnerSeat() == viewer) {
+                inLibrary.add(g.getId());
+            }
+        }
+        List<Long> out = new ArrayList<>();
+        for (var c : q.getCandidatesList()) {
+            long id = c.hasTarget() ? c.getTarget().getEntityId() : c.getCardId();
+            if (inLibrary.contains(id)) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
     /** Verification ②: every identity the viewer's observation shows is taken; true when a card was swapped. */
     private boolean reconcile(magicdosa.protocol.v1.Observation o) {
         for (var g : o.getObjectsList()) {
@@ -742,6 +1068,16 @@ public final class ShadowGame {
             lastTry.put(id, false);
             result.searchSkipped++;
         }
+    }
+
+    /** The first real turn-start snapshot after {@code turn}, or null. */
+    private GameRecord.Snapshot snapshotAfter(int turn) {
+        for (GameRecord.Snapshot x : rec.snapshots) {
+            if (x.snapshot().getObservation().getGame().getTurn() > turn) {
+                return x;
+            }
+        }
+        return null;
     }
 
     private GameRecord.Snapshot snapshotOfTurn(int turn) {
@@ -814,7 +1150,8 @@ public final class ShadowGame {
         for (Player p : game.getRegisteredPlayers()) {
             ctl.add(StateCopy.of(p.getController(), forge.ai.PlayerControllerAi.class));
         }
-        TurnPoint tp = new TurnPoint(game.getPhaseHandler().getTurn(), m, session.checkpoint(), ctl, decisionIdx, opponentIdx,
+        TurnPoint tp = new TurnPoint(game.getPhaseHandler().getTurn(), m, MementoGaps.capture(game), session.checkpoint(), ctl,
+            decisionIdx, opponentIdx,
             new java.util.HashSet<>(opponentUsed), new java.util.HashMap<>(shuffles), lastShadowSeq, shadowEvents.size());
         result.mementos++;
         result.mementoNanos += System.nanoTime() - t0;
@@ -861,6 +1198,7 @@ public final class ShadowGame {
     private void restore(TurnPoint tp) {
         long t0 = System.nanoTime(); // measurement only
         tp.memento().restore();
+        tp.gaps().run(); // what the memento leaves out (until maps, cards added this / last turn)
         result.hostRepairs += repairHosts();
         tp.session().run();
         tp.controllers().forEach(StateCopy::restore);
@@ -926,8 +1264,9 @@ public final class ShadowGame {
                 result.sampleFailures++;
                 sample(result.samples, "no belief sample at turn " + s.getObservation().getGame().getTurn() + ": "
                     + BeliefSampler.lastFailure.get());
+                result.recoveries3++;
                 throw new Unwind("no belief sample fits the snapshot at turn " + s.getObservation().getGame().getTurn(),
-                    Unwind.Kind.END);
+                    Unwind.Kind.NEXT_TURN, s.getObservation().getGame().getTurn());
             }
             hidden = PrivilegedRecord.newBuilder().setSeq(s.getSeq()).setSeat(viewer).setPrivileged(sampled).build();
             shownIds.clear();
@@ -1017,6 +1356,7 @@ public final class ShadowGame {
                 opponentRecord.add(e);
             }
         }
+        ingestedSeq = rec.events.isEmpty() ? s.getSeq() : Math.max(s.getSeq(), rec.events.lastKey());
         lastComparedTurn = s.getObservation().getGame().getTurn() - 1;
         if (revealsAheadAfterRebuild >= 0) {
             revealsAhead(revealsAheadAfterRebuild);
@@ -1116,13 +1456,80 @@ public final class ShadowGame {
 
     // ---- the seat's stream: compare and answer ----
 
+    /** Differences kept per game for the report (-Dmagicdosa.shadowSamples, default 6). */
+    private static final int SAMPLES = Integer.getInteger("magicdosa.shadowSamples", 6);
+
     private void sample(List<String> where, String s) {
-        if (where.size() < 6) {
+        if (where.size() < SAMPLES) {
             where.add(s);
         }
     }
 
-    private final class Client implements DecisionClient {
+    private final class Client implements magicdosa.adapter.forge.DelegatingClient {
+        /** Live: the next answer is the shadow game's Forge AI's, for this real request. */
+        private boolean delegateNext;
+        private DecisionRequest pendingReal;
+
+        @Override
+        public boolean delegateLast() {
+            boolean d = delegateNext;
+            delegateNext = false;
+            return d;
+        }
+
+        @Override
+        public void delegated(DecisionRequest request, List<Integer> chosen, String engineDecision) {
+            DecisionRequest real = pendingReal;
+            pendingReal = null;
+            // the shadow's answer, by candidate, in the real request (equal candidates by their rank among the equal ones)
+            DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(real.getGameId())
+                .setDecisionId(real.getDecisionId());
+            for (int i : chosen) {
+                var c = request.getCandidates(i);
+                int rank = 0;
+                for (int k = 0; k < i; k++) {
+                    if (request.getCandidates(k).equals(c)) {
+                        rank++;
+                    }
+                }
+                int j = -1;
+                for (int k = 0, seen = 0; k < real.getCandidatesCount(); k++) {
+                    if (real.getCandidates(k).equals(c) && seen++ == rank) {
+                        j = k;
+                        break;
+                    }
+                }
+                if (j < 0) {
+                    unmappedLive(real, engineDecision, "the shadow's answer " + text(c) + " is not a real candidate");
+                }
+                out.addChosen(j);
+            }
+            out.addSteps(magicdosa.protocol.v1.DecisionStep.newBuilder()
+                .setDecider(magicdosa.protocol.v1.Decider.DECIDER_INTENDED_DELEGATION));
+            live.answer(out.build(), "shadow Forge AI: " + engineDecision);
+            decisionIdx++;
+            afterAnswer(real);
+            revealsAhead(real.getAppliedSeq());
+        }
+
+        @Override
+        public void unmapped(DecisionRequest request, String engineDecision) {
+            DecisionRequest real = pendingReal;
+            pendingReal = null;
+            unmappedLive(real, engineDecision, "Forge AI's answer is not a shadow candidate");
+        }
+
+        /** No answer to the real request (an unintended fallback there): the shadow goes on from the next turn start. */
+        private void unmappedLive(DecisionRequest real, String engineDecision, String why) {
+            live.unmapped(real, engineDecision, why);
+            decisionIdx++;
+            lastTry.put(real.getDecisionId(), false);
+            sample(result.samples, "decision " + real.getDecisionId() + " " + real.getType() + " (" + engineDecision
+                + "): " + why);
+            throw new Unwind("unmapped answer at decision " + real.getDecisionId() + ": " + why, Unwind.Kind.NEXT_TURN,
+                real.getObservation().getGame().getTurn());
+        }
+
         @Override
         public HelloReply hello(Hello hello) {
             return HelloReply.newBuilder().setAccepted(true).build();
@@ -1216,6 +1623,7 @@ public final class ShadowGame {
                 if (beliefSamples) {
                     for (Player p : game.getRegisteredPlayers()) {
                         departuresOnTop(game.getRegisteredPlayers().indexOf(p), real.snapshot().getSeq());
+                        knownPositions(game.getRegisteredPlayers().indexOf(p), real.snapshot().getObservation());
                     }
                 }
                 if (Fingerprint.hash(a).equals(Fingerprint.hash(b))) {
@@ -1229,10 +1637,20 @@ public final class ShadowGame {
                         stage = 0; // a new turn starts matching: tracking again (design: 다음 턴 시작에 ... 이어서 추적)
                     }
                 } else {
-                    for (Fingerprint.Diff d : Fingerprint.diff(a, b)) {
+                    List<Fingerprint.Diff> diffs = Fingerprint.diff(a, b);
+                    for (Fingerprint.Diff d : diffs) {
                         sample(result.samples, "turn " + turn + " start: " + d);
                     }
-                    if (!forcedRegeneration && turn != rebuiltTurn) {
+                    boolean critical = diffs.stream().anyMatch(Fingerprint.Diff::critical);
+                    if (!critical && !forcedRegeneration) {
+                        // minor differences only (as at a decision: recorded, no recovery)
+                        if (!beliefSamples) {
+                            libraryCorrections += syncLibraries(rec.privilegedAt(real.snapshot().getSeq()), "turn " + turn + " start");
+                        }
+                        if (turn > stageTurn) {
+                            stage = 0;
+                        }
+                    } else if (!forcedRegeneration && turn != rebuiltTurn) {
                         stage = 2;
                         result.recoveries2++;
                         throw new Unwind("turn " + turn + " start does not match: rebuild", Unwind.Kind.REBUILD);
@@ -1255,11 +1673,19 @@ public final class ShadowGame {
 
         @Override
         public DecisionResponse decide(DecisionRequest request) {
-            if (decisionIdx >= rec.decisions.size()) {
+            DecisionRequest real;
+            DecisionResponse recorded;
+            if (decisionIdx < rec.decisions.size()) {
+                var d = rec.decisions.get(decisionIdx++).record();
+                real = d.getRequest();
+                recorded = d.getResponse();
+            } else if (live != null && live.pending() != null) {
+                // live: the newest real request, not answered yet
+                real = live.pending();
+                recorded = null;
+            } else {
                 throw new Unwind("the record has no more decisions", Unwind.Kind.END);
             }
-            var d = rec.decisions.get(decisionIdx++).record();
-            DecisionRequest real = d.getRequest();
             if (request.getRejectionsCount() > 0) {
                 sample(result.samples, "shadow refused an answer before decision " + real.getDecisionId() + ": "
                     + request.getRejectionsList());
@@ -1272,10 +1698,12 @@ public final class ShadowGame {
             } else {
                 // the cards the real stream takes from each library from here on go on top (robust to a different
                 // number of shuffles in the shadow, e.g. during mulligans)
+                boolean moved = false;
                 for (Player p : game.getRegisteredPlayers()) {
                     departuresOnTop(game.getRegisteredPlayers().indexOf(p), real.getAppliedSeq());
+                    moved |= knownPositions(game.getRegisteredPlayers().indexOf(p), real.getObservation());
                 }
-                if (reconcile(real.getObservation())) {
+                if (reconcile(real.getObservation()) || moved) {
                     request = session.reask(request);
                 }
             }
@@ -1294,6 +1722,13 @@ public final class ShadowGame {
                 Player p = game.getRegisteredPlayers().get(opponent);
                 p.setLife(p.getLife() - 1, null);
                 request = session.reask(request);
+            }
+            if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS
+                    && searchIdentities(real, request)) {
+                request = session.reask(request);
+            }
+            if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
+                request = notQualifying(real, request);
             }
             DecisionRequest a = Fingerprint.normalise(real);
             DecisionRequest b = Fingerprint.normalise(request);
@@ -1343,8 +1778,24 @@ public final class ShadowGame {
                     result.searchSkipped++;
                 }
             }
+            DecisionResponse resp = recorded;
+            if (resp == null) {
+                if (stage != 3) {
+                    // live, tracking: the shadow game's Forge AI answers (the decision layer maps its answer back)
+                    pendingReal = real;
+                    delegateNext = true;
+                    return DecisionResponse.getDefaultInstance();
+                }
+                resp = live.withoutShadow(real, "search skipped: " + stageCause);
+                live.answer(resp, "without shadow");
+                decisionIdx++;
+                afterAnswer(real);
+            } else if (resp.getDecisionId() == UNKNOWN_ANSWER) {
+                lastTry.put(id, false);
+                throw new Unwind("decision " + id + ": the real game's answer is unknown (unintended fallback)",
+                    Unwind.Kind.NEXT_TURN, real.getObservation().getGame().getTurn());
+            }
             // the real answer, by candidate where the lists differ
-            DecisionResponse resp = d.getResponse();
             DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(request.getGameId())
                 .setDecisionId(request.getDecisionId());
             for (int i : resp.getChosenList()) {
@@ -1454,6 +1905,36 @@ public final class ShadowGame {
         stage = 3;
         result.recoveries3++;
         sample(result.samples, "search skipped for the rest of turn " + real.getObservation().getGame().getTurn() + ": " + cause);
+    }
+
+    /** Live mode: the last real event taken into the other seat's record and the shuffle list. */
+    private long ingestedSeq;
+
+    /** Live mode: the real events that came in since the last look join the other seat's record and the shuffles. */
+    private void extendRecord() {
+        if (rec.events.isEmpty()) {
+            return;
+        }
+        for (Event e : rec.events.tailMap(ingestedSeq, false).values()) {
+            if (e.getBodyCase() == Event.BodyCase.LIBRARY_SHUFFLED) {
+                realShuffles.computeIfAbsent(e.getLibraryShuffled().getSeat(), k -> new ArrayList<>()).add(e.getSeq());
+            }
+            if (answerBearing(e, opponent)) {
+                opponentRecord.add(e);
+            }
+        }
+        ingestedSeq = Math.max(ingestedSeq, rec.events.lastKey());
+    }
+
+    /**
+     * Live mode, after an answer went to the real game and the next request (or the end) came in: the new events join
+     * the record, and what the real stream shows up to the next request is taken (draws on top, identities shown).
+     */
+    private void afterAnswer(DecisionRequest real) {
+        extendRecord();
+        for (Player p : game.getRegisteredPlayers()) {
+            departuresOnTop(game.getRegisteredPlayers().indexOf(p), real.getAppliedSeq());
+        }
     }
 
     /** The sequence number the shadow's stream has reached. */
@@ -1581,7 +2062,8 @@ public final class ShadowGame {
             while (opponentIdx < opponentRecord.size() && opponentUsed.contains(opponentIdx)) {
                 opponentIdx++;
             }
-            if (opponentIdx >= opponentRecord.size() && opponentRecord.size() > 0 && rec.events.lastKey() <= lastSeq()) {
+            if (opponentIdx >= opponentRecord.size() && opponentRecord.size() > 0 && rec.events.lastKey() <= lastSeq()
+                    && (live == null || live.over())) {
                 throw new Unwind("the record of the other seat has no more", Unwind.Kind.END);
             }
             Event next = opponentIdx < opponentRecord.size() ? opponentRecord.get(opponentIdx) : null;

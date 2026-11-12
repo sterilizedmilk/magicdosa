@@ -30,6 +30,8 @@ public final class GameSession {
     private long events;
     private long decisions;
     private boolean over;
+    /** The shadow Forge AI policy's live shadow of this game, or null (agent-core without that policy). */
+    private final magicdosa.agent.shadow.LiveShadow shadow;
 
     GameSession(Agent agent, Hello hello, Policy policy) {
         this.agent = agent;
@@ -37,6 +39,14 @@ public final class GameSession {
         this.policy = policy;
         for (int seat : hello.getAgentSeatsList()) {
             lastSeq.put(seat, 0L);
+        }
+        this.shadow = agent.liveShadow(hello);
+    }
+
+    /** The stream ended without a game end. */
+    void abandon() {
+        if (shadow != null) {
+            shadow.abandon();
         }
     }
 
@@ -78,6 +88,9 @@ public final class GameSession {
         }
         lastSeq.put(e.getViewerSeat(), e.getSeq());
         events++;
+        if (shadow != null) {
+            shadow.event(e);
+        }
     }
 
     private void snapshot(TurnStartSnapshot s) throws ProtocolException {
@@ -85,6 +98,9 @@ public final class GameSession {
         long last = seat(s.getSeat());
         if (s.getSeq() != last) {
             throw error("seat " + s.getSeat() + " snapshot at seq " + s.getSeq() + " but last event " + last);
+        }
+        if (shadow != null) {
+            shadow.snapshot(s);
         }
     }
 
@@ -105,7 +121,17 @@ public final class GameSession {
         }
         lastDecisionId = r.getDecisionId();
         decisions++;
-        DecisionResponse response = policy.decide(r);
+        DecisionResponse response;
+        if (shadow != null) {
+            try {
+                response = shadow.decide(r);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw error("interrupted at decision " + r.getDecisionId());
+            }
+        } else {
+            response = policy.decide(r);
+        }
         if (agent.shards() != null) {
             decided.add(new magicdosa.agent.encoder.ShardWriter.Decided(r, response));
         }
@@ -119,6 +145,13 @@ public final class GameSession {
             throw error("privileged data in inference mode");
         }
         over = true;
+        if (shadow != null) {
+            try {
+                shadow.gameOver(g);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
         if (agent.shards() != null) {
             try {
                 agent.shards().write(hello, decided, g);

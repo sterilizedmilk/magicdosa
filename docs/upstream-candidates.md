@@ -61,3 +61,25 @@ evidence, our workaround, the fix we would propose upstream. Newest first.
   defenders, and the copier fails to map it.
 - **Our workaround:** our `GameCopier` copies the sideboard zone, and it gives such a card the same id -1 stand-in
   Forge uses. Details are in `docs/forge-adapter.md`.
+
+## 6. `AiController.orderPlaySa` changes the list it is given (2026-11-11)
+
+- **What:** `orderPlaySa(activePlayerSAs)` sorts by moving entries out of its input. `filterList` calls
+  `input.removeAll(...)` on the caller's list, so after the call that list is missing the abilities that were moved.
+- **How we hit it:** our decision layer asks Forge AI for its trigger order (`orderSimultaneousSa`), then maps the
+  answer back to the list it passed in. The mapping failed (72 unmapped answers in one 16x10 gate run), and the
+  caller's list was corrupted on top of that.
+- **Our workaround:** Forge AI gets a copy of the list (`AgentPlayerController.orderSimultaneousSa`).
+- **Fix upstream:** work on a copy inside `orderPlaySa`.
+
+## 7. `ComputerUtilMana.getManaSourcesToPayCost` pays the cost it is given (2026-11-11)
+
+- **What:** the method plans which sources pay a cost by paying the `ManaCostBeingPaid` passed in. After the call that
+  object reads as paid.
+- **How we hit it:** our decision layer kept using the same cost object to choose which colour of mana to make next.
+  It then saw nothing left to pay and tapped arbitrary lands. Forge AI through our layer won 32.6% of games against
+  51.7% for plain Forge AI (16x10); with a copy, 46.0%.
+- **Our workaround:** the planner gets a copy (`AgentPlayerController.priorityFor`).
+- **Fix upstream:** plan on a copy, or document the side effect.
+
+Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix options, upstream status): `docs/upstream-analysis.md`.
