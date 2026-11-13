@@ -83,6 +83,12 @@ public final class RandomGames {
         return run(deckDir, deck0Name, deck1Name, matches, logDir, agent, keys, "m");
     }
 
+    /**
+     * First match seed (default 1000): a pairing split over several workers gives each part its own range
+     * ({@code -Dmagicdosa.seedBase}).
+     */
+    private static final long SEED_BASE = Long.getLong("magicdosa.seedBase", 1000);
+
     /** {@code matchPrefix} keeps match and game IDs unique when one agent-core serves several runs (shard file names). */
     static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, AgentConnection agent,
                        CardKeys keys, String matchPrefix) throws Exception {
@@ -103,7 +109,7 @@ public final class RandomGames {
             try {
                 // -Dmagicdosa.agentSeats=none: plain Forge AI in both seats (win-rate reference, no decision layer)
                 Set<Integer> seats = "none".equals(System.getProperty("magicdosa.agentSeats")) ? Set.of() : Set.of(0);
-                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seats, 1000 + m, logDir);
+                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seats, SEED_BASE + m, logDir);
                 total.add(r.stats());
                 gameWins[0] += r.gamesWon()[0];
                 gameWins[1] += r.gamesWon()[1];

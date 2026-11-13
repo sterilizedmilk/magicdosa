@@ -37,6 +37,7 @@ public final class PairingWorker {
             RandomGames.Summary s = RandomGames.run(args[0], args[1], args[2], Integer.parseInt(args[3]),
                 Path.of(args[4]), agent, keys, args[6]);
             agent.close();
+            s.lines().forEach(System.out::println); // the pairing's summary in the worker's output too
             Set<String> unmapped = new TreeSet<>(keys.unmapped());
             unmapped.removeAll(before);
             long peak = 0;
