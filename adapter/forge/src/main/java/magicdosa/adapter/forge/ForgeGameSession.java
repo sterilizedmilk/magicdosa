@@ -1061,17 +1061,18 @@ public final class ForgeGameSession {
     List<Integer> modes(SpellAbility sa) {
         SpellAbility root = sa.getRootAbility();
         List<Integer> out = new ArrayList<>();
-        if (root.getChosenList() == null) {
-            if (root.getApi() != forge.game.ability.ApiType.Charm) {
-                return out;
-            }
-            // a charm cast on the human play path (a replayed cast) chains its chosen modes as its sub-abilities
-            // without keeping the chosen list
+        if (root.getApi() == forge.game.ability.ApiType.Charm && root.getSubAbility() != null) {
+            // the chosen modes are chained as the charm's sub-abilities on both play paths; the chosen list is kept
+            // only by Forge AI, and a cast on the human play path (a replayed cast, an agent's cast) leaves the list
+            // Forge AI stored while weighing the card earlier (CharmAi), not the modes cast
             List<forge.game.spellability.AbilitySub> chain = new ArrayList<>();
             for (forge.game.spellability.AbilitySub s = root.getSubAbility(); s != null; s = s.getSubAbility()) {
                 chain.add(s);
             }
             return modeIndices(sa, chain);
+        }
+        if (root.getChosenList() == null) {
+            return out;
         }
         return modeIndices(sa, root.getChosenList());
     }
