@@ -42,7 +42,7 @@ only to count entries per kind, so that the embedding tables are big enough.
 
 ## Shard schema relied on
 
-Written by `agent-core/.../encoder/ShardWriter` (encoder 3, vocabulary 3, protocol 9). One row per decision step.
+Written by `agent-core/.../encoder/ShardWriter` (encoder 4, vocabulary 3, protocol 10). One row per decision step.
 
 | Column(s) | Type | Use here |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # Encoder and training shards
 
-Implementation notes for agent-core's observation encoder (encoder version 3) and its Arrow shards, following
+Implementation notes for agent-core's observation encoder (encoder version 4) and its Arrow shards, following
 "관측 인코더 텐서 구성안" (https://claude.ai/artifact/WPT2PSq7RihqH7K3egDptU, E1-E7, decided 2026-11-06). The encoder is
 only in agent-core; Python reads the shards and batches them without computing features.
 
@@ -48,6 +48,29 @@ tokens chosen in earlier steps as `selected`), labels (`chosen`, `visit_ratio`, 
 `turns`), training-only columns (`priv_opp_hand`, `priv_my_library`, `priv_opp_library` from the privileged record of
 that decision), and `oov`. Metadata: protocol, encoder, vocabulary, model and engine versions, feature names, `oov`.
 Rows of the phase-1 random policy have a uniform prior and no search: `policy_rows` leaves them out.
+
+## Version history
+
+The encoder version is raised whenever what the encoder is given changes, also when the tensors' layout stays the
+same: a model trained on shards of one version is not fed observations of another.
+
+- **4 (2026-11-14)**: the encoder code and the vocabulary are unchanged (vocabulary stays 3); the observations it
+  encodes changed since encoder 3 (2026-11-10, a429203):
+  - Library positions (1fb9d38): a library card the viewer sees has an exact place only while it sees every card
+    above it, and a place known from the top (bottom) holds only while the seat knows every card above (below) it.
+    Before, a card put on the bottom in a random order (a dig's rest) kept its exact index: hidden information
+    reached the observation. Fewer library objects carry a `library_position`.
+  - Effects (f6e5190): a delayed trigger lists what it will act on in `affected` (the rebound card, a player to
+    draw), which become "affected by" relations.
+  - Hands (e403f0b): a card in the opponent's hand that the viewer saw as this object (revealed from that hand, or
+    seen before it went there) shows its identity.
+  - Stack modes (f6e5190, 2850ffd): a charm on the stack shows the modes it was cast with, read from its chained
+    modes; a cast on the human play path showed the modes Forge AI weighed earlier.
+  - Match context (124f1b7): the starting player falls back to the session's first player while Forge has none
+    (the start features of the game's first observation).
+  Not reasons: 9ee8f21 (the dug cards reach only the digger's own stream as reveals; the encoder reads the
+  observation), 269964d and 5275d58 (decision context fields the encoder does not read), and the shadow-only
+  changes.
 
 ## Commands
 
