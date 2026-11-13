@@ -223,14 +223,66 @@ public class ObservedAiController extends PlayerControllerAi {
     /** Casting, activating or playing a land: its action event comes before the changes it causes. */
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
+        // Forge AI may pay part of a cost (an Eldrazi Spawn sacrificed for its mana) and then fail to pay the rest: the
+        // action is abandoned, but what it paid stays paid (upstream candidate 8). Such an action is taken back here:
+        // the game goes back to Forge's undo mark taken before it, and the session to its state then (the events held
+        // back during the action are dropped). Forge AI has noted the failure (not part of the game), so it does not
+        // try the action again this turn. The mark reads the whole game: taken only for actions that can leave a paid
+        // cost behind.
+        forge.game.Game game = player.getGame();
+        boolean failedBefore = getAi().hasFailedToCast(sa);
+        forge.game.undo.UndoManager.Mark mark = !failedBefore && mayLeavePaidCosts(sa)
+            ? game.getUndoManager().markForRollback(game) : null;
+        Runnable sessionBefore = mark == null ? null : session.checkpoint();
         session.beginAction();
+        boolean takenBack = false;
         try {
             boolean r = super.playChosenSpellAbility(sa);
+            if (mark != null && !session.actionEventSeen() && getAi().hasFailedToCast(sa)) {
+                boolean clean = game.getUndoManager().rollbackTo(game, mark);
+                sessionBefore.run();
+                takenBack = true;
+                session.stats().note("Forge AI action abandoned after paying, taken back: " + sa.getHostCard().getName()
+                    + (clean ? "" : " (restore reported problems)"));
+                return r;
+            }
             session.playedWithoutStack(player, sa);
             return r;
         } finally {
-            session.endAction();
+            if (!takenBack) {
+                session.endAction();
+            }
         }
+    }
+
+    /** Whether paying for {@code sa} may pay something that a failed payment does not give back. */
+    private boolean mayLeavePaidCosts(SpellAbility sa) {
+        if (sa.isLandAbility() || sa.isManaAbility() || sa.isTrigger() || sa.isCopied()) {
+            return false;
+        }
+        if (irreversible(sa.getPayCosts())) {
+            return true;
+        }
+        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            for (SpellAbility m : c.getManaAbilities()) {
+                if (irreversible(m.getPayCosts())) {
+                    return true; // a mana source that sacrifices or discards (an Eldrazi Spawn)
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean irreversible(forge.game.cost.Cost cost) {
+        if (cost == null) {
+            return false;
+        }
+        for (forge.game.cost.CostPart p : cost.getCostParts()) {
+            if (!(p instanceof forge.game.cost.CostPartMana) && !(p instanceof forge.game.cost.CostTap)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

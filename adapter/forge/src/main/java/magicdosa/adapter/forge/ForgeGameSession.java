@@ -821,6 +821,11 @@ public final class ForgeGameSession {
         emitAction(b -> b.setActivateAbility(a));
     }
 
+    /** Whether the action under way has had its action event (it went on the stack, or was reported). */
+    boolean actionEventSeen() {
+        return actionEventSeen;
+    }
+
     /** True while a controller plays something (a cast, an activation, a land, triggers going on the stack). */
     boolean inAction() {
         return actionDepth > 0;
