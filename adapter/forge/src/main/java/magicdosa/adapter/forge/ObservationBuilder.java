@@ -272,6 +272,19 @@ final class ObservationBuilder {
         };
     }
 
+    /** Whether {@code viewer} sees every card above {@code c} in its library. */
+    private boolean seenAbove(Card c, Player viewer) {
+        for (Card above : c.getZone().getCards()) {
+            if (above == c) {
+                return true;
+            }
+            if (!session.visible(above, viewer)) {
+                return false;
+            }
+        }
+        return false;
+    }
+
     private magicdosa.protocol.v1.GameObject object(Card c, Player viewer) {
         ZoneType z = c.getZone() == null ? null : c.getZone().getZoneType();
         boolean visible = session.visible(c, viewer);
@@ -297,14 +310,18 @@ final class ObservationBuilder {
                 }
             }
         }
-        if (z == ZoneType.Graveyard || (z == ZoneType.Library && visible)) {
+        // a library card the viewer sees is where it is only while every card above it is seen too (the top cards
+        // looked at): Forge keeps a card it was shown visible until it changes zone, also after the effect put it
+        // back in a place the viewer does not know (a dig's rest on the bottom in a random order)
+        boolean onSeenTop = z == ZoneType.Library && visible && seenAbove(c, viewer);
+        if (z == ZoneType.Graveyard || onSeenTop) {
             b.setPosition(c.getZone().getCards().indexOf(c));
         }
         if (z == ZoneType.Library) {
             var pos = session.facts().position(viewerSeat, c);
             if (pos != null) {
                 b.setLibraryPosition(pos);
-            } else if (visible) {
+            } else if (onSeenTop) {
                 b.setLibraryPosition(magicdosa.protocol.v1.LibraryPosition.newBuilder().setFromTop(c.getZone().getCards().indexOf(c)));
             }
         }

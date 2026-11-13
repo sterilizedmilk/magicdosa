@@ -266,12 +266,30 @@ final class GameFacts {
         }
         List<Card> lib = libraryOf(c);
         int idx = lib.indexOf(c);
+        // a place counted from the top (bottom) holds while the seat knows every card above (below) it: Forge's Dig
+        // puts the cards it does not take on the bottom in a random order inside the library, without a move the
+        // session sees, and a card known on top before is then somewhere the seat does not know
+        if (k.anchor() == Anchor.TOP && !knowsAll(seat, lib.subList(0, idx))
+                || k.anchor() == Anchor.BOTTOM && !knowsAll(seat, lib.subList(idx + 1, lib.size()))) {
+            return null;
+        }
         return switch (k.anchor()) {
             case TOP -> LibraryPosition.newBuilder().setFromTop(idx).build();
             case BOTTOM -> LibraryPosition.newBuilder().setFromBottom(lib.size() - 1 - idx).build();
             case GROUP -> LibraryPosition.newBuilder().setBottomGroup(BottomGroup.newBuilder().setGroup(k.group())
                 .setSize(k.groupSize())).build();
         };
+    }
+
+    /** Whether {@code seat} knows each of {@code cards} (where it is, or sees it). */
+    private boolean knowsAll(int seat, List<Card> cards) {
+        Player p = session.player(seat);
+        for (Card x : cards) {
+            if (!knows(seat, x) && !session.visible(x, p)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     boolean knows(int seat, Card c) {
