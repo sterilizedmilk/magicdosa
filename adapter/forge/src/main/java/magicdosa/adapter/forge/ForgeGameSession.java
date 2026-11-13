@@ -1362,6 +1362,38 @@ public final class ForgeGameSession {
         emitAll(false, b -> b.setCounters(CountersChanged.newBuilder().setTarget(ref(p)).addAllCounters(counters(p))));
     }
 
+    /**
+     * The optional costs (kicker, buyback, entwine, conspire) a Forge AI seat cast its spell with, as a public choice
+     * after the cast. Forge AI does not choose them when it casts: it weighs each combination as an ability of its own
+     * and plays one, so no chooseOptionalCosts is asked. Values name the costs (Forge's OptionalCost); none chosen is
+     * an empty choice. A cast on the human play path (an agent's, a replayed one) records the choice it is asked, and
+     * nothing more is recorded for it.
+     */
+    private void optionalCosts(Player p, SpellAbility sa) {
+        boolean asked = optionalCostsAsked;
+        optionalCostsAsked = false;
+        if (asked) {
+            return;
+        }
+        Card host = sa.getHostCard();
+        boolean chosen = sa.getOptionalCosts().iterator().hasNext();
+        boolean offered = chosen || host.hasKeyword(forge.game.keyword.Keyword.KICKER)
+            || host.hasKeyword(forge.game.keyword.Keyword.BUYBACK) || host.hasKeyword(forge.game.keyword.Keyword.ENTWINE)
+            || host.hasKeyword(forge.game.keyword.Keyword.CONSPIRE);
+        if (!offered) {
+            return;
+        }
+        List<ChoiceValue> values = new ArrayList<>();
+        for (forge.game.spellability.OptionalCost c : sa.getOptionalCosts()) {
+            values.add(ChoiceValue.newBuilder().setText(c.name()).build());
+        }
+        choice(p, DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseOptionalCosts", null, null, values);
+        optionalCostsAsked = false; // recorded here for this cast
+    }
+
+    /** A chooseOptionalCosts choice was recorded since the last cast (the cast it belongs to records nothing more). */
+    private boolean optionalCostsAsked;
+
     private void castOrActivate(GameEventSpellAbilityCast e) {
         SpellAbilityStackInstance si = null;
         for (SpellAbilityStackInstance s : game.getStack()) {
@@ -1404,6 +1436,7 @@ public final class ForgeGameSession {
                 c.setX(sa.getXManaCostPaid());
             }
             emitAction(b -> b.setCastSpell(c));
+            optionalCosts(si.getActivatingPlayer(), sa);
             return;
         }
         if (sa.isTrigger()) {
@@ -1503,6 +1536,9 @@ public final class ForgeGameSession {
         }
         if (values != null) {
             r.addAllValues(values);
+        }
+        if (engineDecision.equals("chooseOptionalCosts")) {
+            optionalCostsAsked = true;
         }
         emitAll(false, b -> b.setResolutionChoice(r));
     }

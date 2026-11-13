@@ -137,6 +137,21 @@ public class ReplayAiController extends ObservedAiController {
                             // the modes Forge AI chose while weighing are the recorded ones (sameAction): their
                             // recorded choice belongs to this cast
                             source.takeChoice(seat, "chooseModeForAbility");
+                            Event oc = e.getBodyCase() == Event.BodyCase.CAST_SPELL
+                                ? source.takeChoice(seat, "chooseOptionalCosts") : null;
+                            if (oc != null && !optionalCostNames(own.get(0)).equals(optionalCostNames(oc.getResolutionChoice()))) {
+                                // Forge AI weighed another kicker combination: the recorded cast is played the
+                                // human way, with the recorded optional costs
+                                recordedOptionalCosts = oc.getResolutionChoice();
+                                SpellAbility sa = action(e);
+                                if (sa == null) {
+                                    source.mismatch(seat, "recorded " + describe(e) + " not found among the seat's abilities");
+                                    continue;
+                                }
+                                List<SpellAbility> out = new ArrayList<>();
+                                out.add(sa);
+                                return out;
+                            }
                             aiPrepared = own.get(0);
                             preparedPayment = e.getBodyCase() == Event.BodyCase.CAST_SPELL ? e.getCastSpell().getPaymentList()
                                 : e.getActivateAbility().getPaymentList();
@@ -1067,12 +1082,43 @@ public class ReplayAiController extends ObservedAiController {
         if (!session.inAction() || optionalCostValues.isEmpty()) {
             return super.answerChooseOptionalCosts(choosen, optionalCostValues);
         }
-        ResolutionChoice r = choice("chooseOptionalCosts");
+        ResolutionChoice r = recordedOptionalCosts != null ? recordedOptionalCosts : choice("chooseOptionalCosts");
+        recordedOptionalCosts = null;
         if (r == null) {
             return super.answerChooseOptionalCosts(choosen, optionalCostValues);
         }
         List<forge.game.spellability.OptionalCostValue> out = new ArrayList<>();
+        if (r.getValuesCount() > 0 || r.getOptionsCount() == 0) {
+            // a Forge AI seat's cast names its optional costs (ForgeGameSession.optionalCosts)
+            // the ability found for the recorded cast may already be one with optional costs (Forge lists each
+            // combination as an ability): those are not added again
+            List<String> names = optionalCostNames(r);
+            names.removeAll(optionalCostNames(choosen));
+            for (forge.game.spellability.OptionalCostValue v : optionalCostValues) {
+                if (names.contains(v.getType().name())) {
+                    out.add(v);
+                }
+            }
+            return out;
+        }
         r.getOptionsList().forEach(i -> out.add(optionalCostValues.get(i)));
+        return out;
+    }
+
+    /** The recorded optional costs of a Forge AI seat's cast, taken with it when Forge AI weighed another combination. */
+    private ResolutionChoice recordedOptionalCosts;
+
+    private static List<String> optionalCostNames(ResolutionChoice r) {
+        List<String> out = new ArrayList<>();
+        r.getValuesList().forEach(v -> out.add(v.getText()));
+        java.util.Collections.sort(out);
+        return out;
+    }
+
+    private static List<String> optionalCostNames(SpellAbility sa) {
+        List<String> out = new ArrayList<>();
+        sa.getOptionalCosts().forEach(c -> out.add(c.name()));
+        java.util.Collections.sort(out);
         return out;
     }
 
