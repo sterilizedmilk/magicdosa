@@ -278,6 +278,7 @@ public class ReplayAiController extends ObservedAiController {
             aiPrepared = null;
             // the recorded mana sources make their mana first; Forge AI pays from the pool before it taps anything
             // itself (otherwise it may tap other sources than the real game did: a Talisman instead of a land)
+            List<magicdosa.protocol.v1.ManaPayment> payment = preparedPayment;
             if (preparedPayment != null) {
                 for (magicdosa.protocol.v1.ManaPayment piece : preparedPayment) {
                     if (piece.hasAbility()) {
@@ -286,7 +287,11 @@ public class ReplayAiController extends ObservedAiController {
                 }
                 preparedPayment = null;
             }
-            return super.playChosenSpellAbility(sa); // as in the real game
+            boolean played = super.playChosenSpellAbility(sa); // as in the real game
+            if (played && payment != null) {
+                settlePayment(sa, payment);
+            }
+            return played;
         }
         if (sa.isLandAbility() || sa.isManaAbility()) {
             return super.playChosenSpellAbility(sa);
@@ -430,15 +435,93 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     public boolean payManaCost(forge.card.mana.ManaCost toPay, forge.game.cost.CostPartMana costPartMana, SpellAbility sa,
                                String prompt, forge.game.mana.ManaConversionMatrix matrix, boolean effect) {
+        List<magicdosa.protocol.v1.ManaPayment> payment = null;
         if (scripted && !recordedPayment.isEmpty()) {
-            for (magicdosa.protocol.v1.ManaPayment piece : recordedPayment) {
+            payment = recordedPayment;
+            recordedPayment = List.of(); // taken first: making the mana pays the mana abilities' own costs here too
+            for (magicdosa.protocol.v1.ManaPayment piece : payment) {
                 if (piece.hasAbility()) {
                     makeMana(piece.getAbility());
                 }
             }
-            recordedPayment = List.of();
         }
-        return super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
+        boolean paid = super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
+        if (paid && payment != null) {
+            settlePayment(sa, payment);
+        }
+        return paid;
+    }
+
+    /**
+     * After Forge AI paid a recorded action: the mana it spent becomes the recorded mana. The recorded sources made all
+     * their mana first ({C}{C} from an Eldrazi Temple, of which the real game spent one), so Forge AI may have spent
+     * another unit and left a recorded one floating (a {G} instead of the Temple's second {C}). Such units trade places:
+     * the recorded unit leaves the pool for the paying mana, the other one goes back to the pool. Units are told apart
+     * by color and source (the public view of the pool); Forge's Mana.equals compares by value, so the pool's own
+     * iterator removes the exact unit.
+     */
+    private void settlePayment(SpellAbility sa, List<magicdosa.protocol.v1.ManaPayment> payment) {
+        ObservationBuilder observations = session.observationBuilder();
+        List<String> recorded = new ArrayList<>();
+        for (magicdosa.protocol.v1.ManaPayment piece : payment) {
+            // a source gone since (a sacrificed Eldrazi Spawn) shows as no source on its mana
+            if (piece.hasAbility()) {
+                long id = piece.getAbility().getSourceId();
+                for (magicdosa.protocol.v1.ManaUnit u : piece.getAbility().getProducedList()) {
+                    for (int i = 0; i < Math.max(1, u.getAmount()); i++) {
+                        recorded.add(u.getColor() + "/" + (card(id) == null ? 0 : id));
+                    }
+                }
+            } else {
+                long id = piece.getPool().getSourceId();
+                recorded.add(piece.getPool().getColor() + "/" + (card(id) == null ? 0 : id));
+            }
+        }
+        List<forge.game.mana.Mana> paying = sa.getPayingMana();
+        List<String> missing = new ArrayList<>(recorded); // recorded units Forge AI did not spend
+        List<forge.game.mana.Mana> wrong = new ArrayList<>(); // units it spent that the record does not have
+        for (forge.game.mana.Mana m : paying) {
+            magicdosa.protocol.v1.PoolMana pm = observations.poolMana(m);
+            if (!missing.remove(pm.getColor() + "/" + pm.getSourceId())) {
+                wrong.add(m);
+            }
+        }
+        for (forge.game.mana.Mana w : wrong) {
+            forge.game.mana.Mana swap = null;
+            for (forge.game.mana.Mana m : player.getManaPool()) {
+                magicdosa.protocol.v1.PoolMana pm = observations.poolMana(m);
+                if (missing.contains(pm.getColor() + "/" + pm.getSourceId())) {
+                    swap = m;
+                    break;
+                }
+            }
+            if (swap == null) {
+                List<String> spent = new ArrayList<>();
+                paying.forEach(m -> spent.add(observations.poolMana(m).getColor() + "/" + observations.poolMana(m).getSourceId()));
+                source.mismatch(seat, "payment of " + sa.getHostCard() + ": recorded " + recorded + ", spent " + spent);
+                return;
+            }
+            magicdosa.protocol.v1.PoolMana pm = observations.poolMana(swap);
+            missing.remove(pm.getColor() + "/" + pm.getSourceId());
+            for (java.util.Iterator<forge.game.mana.Mana> it = player.getManaPool().iterator(); it.hasNext(); ) {
+                if (it.next() == swap) {
+                    it.remove();
+                    break;
+                }
+            }
+            player.getManaPool().addManaNoEvent(w);
+            for (int i = 0; i < paying.size(); i++) {
+                if (paying.get(i) == w) {
+                    paying.set(i, swap);
+                    break;
+                }
+            }
+        }
+        if (!missing.isEmpty()) {
+            List<String> spent = new ArrayList<>();
+            paying.forEach(m -> spent.add(observations.poolMana(m).getColor() + "/" + observations.poolMana(m).getSourceId()));
+            source.mismatch(seat, "payment of " + sa.getHostCard() + ": recorded " + recorded + ", spent " + spent);
+        }
     }
 
     @Override
