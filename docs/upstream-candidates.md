@@ -116,3 +116,20 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Our workaround:** the session keeps each permanent's last reported tapped state and, on a battlefield
   ComplexUpdate, reports the changes that came without a tap event (`ForgeGameSession.tapsWithoutEvent`).
 - **Fix upstream:** untap through the path that fires `GameEventCardTapped` (or fire it in `setTapped`).
+
+## 10. Refunding an unpaid "unless" cost undoes the spell's casting mana (2026-11-14)
+
+- **What:** a spell keeps the mana abilities that paid for casting it in `getPayingManaAbilities()`: Forge clears the
+  list before a payment (PlaySpellAbility, "reset is also done early here"), not after. When the spell asks its
+  target's controller to pay a cost while it resolves (No More Lies: "unless its controller pays {3}"),
+  `payCostDuringAbilityResolve` pays against the same spell ability and, when the payment is not made, refunds with
+  `ManaRefundService(sourceAbility)`. That undoes every listed mana ability, the caster's own casting mana included:
+  the caster's lands untap (the payer's opponent's), and the mana they made is taken back.
+- **How we hit it:** EsperBlink cast No More Lies with Watery Grave; the AzoriousControl player could not pay {3};
+  Watery Grave untapped (shown by our report of untaps without a tap event, candidate 9). The shadow game, which made
+  the caster's mana before paying, did not list it and kept it tapped.
+- **Our workaround:** before a payment while something resolves, our controllers clear the stale list
+  (`ObservedAiController.forgetCastPayment`), so a refund undoes only that payment's own sources.
+- **Fix upstream:** clear `getPayingManaAbilities()` in `payCostDuringAbilityResolve` before paying (as
+  `clearManaPaid()` does for the mana), or refund only the abilities this payment added.
+
