@@ -82,4 +82,20 @@ evidence, our workaround, the fix we would propose upstream. Newest first.
 - **Our workaround:** the planner gets a copy (`AgentPlayerController.priorityFor`).
 - **Fix upstream:** plan on a copy, or document the side effect.
 
+## 8. A Forge AI cast that fails partway keeps the costs it paid (2026-11-13)
+
+- **What:** `ComputerUtil.playStack` checks `ComputerUtilCost.canPayCost`, moves the spell to the stack, and then
+  pays with `payComputerCosts`. When the payment fails partway, it calls `GameActionUtil.rollbackAbility`. That puts
+  the card back and refunds the mana, but costs that are not mana stay paid. Unless the game-state snapshot
+  (`restoreGameState`) is on, sacrificed permanents stay gone and the triggers they caused still fire. The mana they
+  made floats. Rule 732.2 asks for a full rewind.
+- **How we hit it:** in the Broodscale mirror, Forge AI starts Kozilek's Command or Emrakul, the Promised End and
+  sacrifices Eldrazi Spawn tokens for mana. The cast then fails and the card returns to hand with no cast event. The
+  shadow game cannot replay a cast that did not happen, so it diverges: the tokens are still there and the mana pool
+  differs. In the 16x60 logs, 2 of 147 mirror games had it, 8 decisions in verification ①.
+- **Our handling:** none. It is a known cause in shadow verification, and the shadow skips search for the rest of
+  that turn.
+- **Fix upstream:** check the whole cost, mana included, before paying anything that cannot be undone, or rewind
+  fully (snapshot) when the payment fails.
+
 Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix options, upstream status): `docs/upstream-analysis.md`.
