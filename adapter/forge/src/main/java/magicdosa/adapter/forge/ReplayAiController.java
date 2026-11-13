@@ -295,11 +295,7 @@ public class ReplayAiController extends ObservedAiController {
             // itself (otherwise it may tap other sources than the real game did: a Talisman instead of a land)
             List<magicdosa.protocol.v1.ManaPayment> payment = preparedPayment;
             if (preparedPayment != null) {
-                for (magicdosa.protocol.v1.ManaPayment piece : preparedPayment) {
-                    if (piece.hasAbility()) {
-                        makeMana(piece.getAbility());
-                    }
-                }
+                mergedUses(preparedPayment).forEach(this::makeMana);
                 preparedPayment = null;
             }
             boolean played = super.playChosenSpellAbility(sa); // as in the real game
@@ -379,6 +375,31 @@ public class ReplayAiController extends ObservedAiController {
         return true;
     }
 
+    /**
+     * The recorded payment's mana ability uses, one per source and ability with all the units it made: the record has
+     * a piece per unit spent, and a source that makes two units of a choice of colors (Mystic Gate's {W}{U}) is
+     * activated once, with both.
+     */
+    private static List<magicdosa.protocol.v1.ManaAbilityUse> mergedUses(List<magicdosa.protocol.v1.ManaPayment> payment) {
+        java.util.LinkedHashMap<String, magicdosa.protocol.v1.ManaAbilityUse.Builder> uses = new java.util.LinkedHashMap<>();
+        for (magicdosa.protocol.v1.ManaPayment piece : payment) {
+            if (!piece.hasAbility()) {
+                continue;
+            }
+            var u = piece.getAbility();
+            String key = u.getSourceId() + " " + u.getAbility();
+            var b = uses.get(key);
+            if (b == null) {
+                uses.put(key, u.toBuilder());
+            } else {
+                b.addAllProduced(u.getProducedList());
+            }
+        }
+        List<magicdosa.protocol.v1.ManaAbilityUse> out = new ArrayList<>();
+        uses.values().forEach(b -> out.add(b.build()));
+        return out;
+    }
+
     /** Activates the recorded mana ability of a source for the recorded mana (it goes to the pool). */
     private void makeMana(magicdosa.protocol.v1.ManaAbilityUse use) {
         Card c = card(use.getSourceId());
@@ -402,7 +423,24 @@ public class ReplayAiController extends ObservedAiController {
                 continue;
             }
             expressChoice(m, use.getProducedList());
-            if (forge.ai.ComputerUtil.playNoStack(player, m, player.getGame(), false)) {
+            // a filter (Mystic Gate's {W/U}, {T}: Add two) pays its own cost: Forge AI spends each unit as it makes it,
+            // so the pool is empty when it activates the filter in the real game, and it pays the cost by tapping a
+            // source (that mana goes to the filter, so the record does not name it). The mana made before stays
+            // aside meanwhile (the pool's own iterator removes the exact units).
+            List<forge.game.mana.Mana> aside = new ArrayList<>();
+            if (m.getPayCosts() != null && m.getPayCosts().hasManaCost()) {
+                for (java.util.Iterator<forge.game.mana.Mana> it = player.getManaPool().iterator(); it.hasNext(); ) {
+                    aside.add(it.next());
+                    it.remove();
+                }
+            }
+            boolean made;
+            try {
+                made = forge.ai.ComputerUtil.playNoStack(player, m, player.getGame(), false);
+            } finally {
+                aside.forEach(player.getManaPool()::addManaNoEvent);
+            }
+            if (made) {
                 return;
             }
         }
@@ -454,11 +492,7 @@ public class ReplayAiController extends ObservedAiController {
         if (scripted && !recordedPayment.isEmpty()) {
             payment = recordedPayment;
             recordedPayment = List.of(); // taken first: making the mana pays the mana abilities' own costs here too
-            for (magicdosa.protocol.v1.ManaPayment piece : payment) {
-                if (piece.hasAbility()) {
-                    makeMana(piece.getAbility());
-                }
-            }
+            mergedUses(payment).forEach(this::makeMana);
         }
         boolean paid = super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
         if (paid && payment != null) {
