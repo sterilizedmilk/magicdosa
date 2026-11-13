@@ -98,8 +98,12 @@ evidence, our workaround, the fix we would propose upstream. Newest first.
   (IzzetProwess-vs-Broodscale, the Spawn targeted by a spell, then sacrificed while Forge AI paid for an ability it
   did not activate; the stack trace of the sacrifice runs through PlayerControllerAi.playChosenSpellAbility and
   ComputerUtilMana.payManaCost).
-- **Our handling:** none. It is a known cause in shadow verification, and the shadow skips search for the rest of
-  that turn.
+- **Our handling (2026-11-14):** the Forge AI seat takes Forge's undo mark (`UndoManager.markForRollback`) and a
+  session checkpoint before an action that can leave a paid cost behind, and takes the action back when it was
+  abandoned (`ObservedAiController.playChosenSpellAbility`, commit 7398386): the game keeps what it paid, nothing of
+  the attempt reaches the event stream, and Forge AI does not retry it this turn. Several cases first filed here were
+  not abandoned actions but a mana ability Forge AI played as its action without a reported event (fixed in
+  37a2235).
 - **Fix upstream:** check the whole cost, mana included, before paying anything that cannot be undone, or rewind
   fully (snapshot) when the payment fails.
 
