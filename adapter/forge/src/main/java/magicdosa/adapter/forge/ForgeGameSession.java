@@ -1010,7 +1010,19 @@ public final class ForgeGameSession {
         List<Card> all = new ArrayList<>(top);
         all.addAll(bottom);
         arrangedBy.put(s, all);
+        // where the arrangement puts them: Forge announces a scry (GameEventScry) before it moves the cards, so their
+        // places then are still the old ones. The kept cards go on top in this order; the others go to the bottom one
+        // after another, the last at the very bottom
+        for (int i = 0; i < top.size(); i++) {
+            arrangedPositions.put(top.get(i), LibraryPosition.newBuilder().setFromTop(i).build());
+        }
+        for (int i = 0; i < bottom.size(); i++) {
+            arrangedPositions.put(bottom.get(i), LibraryPosition.newBuilder().setFromBottom(bottom.size() - 1 - i).build());
+        }
     }
+
+    /** The places an arrangement puts its cards, for its LibraryArranged event. */
+    private final Map<Card, LibraryPosition> arrangedPositions = new java.util.IdentityHashMap<>();
 
     private void libraryArranged(Player owner, int toTop, int toBottom, int toGraveyard) {
         int s = seat(owner);
@@ -1018,7 +1030,7 @@ public final class ForgeGameSession {
             LibraryArranged.Builder a = LibraryArranged.newBuilder().setSeat(s).setLookedAt(toTop + toBottom + toGraveyard)
                 .setToTop(toTop).setToBottom(toBottom).setToGraveyard(toGraveyard);
             for (Card c : arrangedBy.getOrDefault(viewer, List.of())) {
-                LibraryPosition pos = facts.position(viewer, c);
+                LibraryPosition pos = arrangedPositions.containsKey(c) ? arrangedPositions.get(c) : facts.position(viewer, c);
                 if (pos != null) {
                     a.addCards(KnownLibraryCard.newBuilder().setId(ids.idOf(c)).setPosition(pos));
                 }
@@ -1026,6 +1038,7 @@ public final class ForgeGameSession {
             b.setLibraryArranged(a);
         });
         arrangedBy.clear();
+        arrangedPositions.clear();
     }
 
     /** A mana ability activated as a priority action or while paying during resolution (Q6), after it resolved. */
