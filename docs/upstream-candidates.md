@@ -93,9 +93,26 @@ evidence, our workaround, the fix we would propose upstream. Newest first.
   sacrifices Eldrazi Spawn tokens for mana. The cast then fails and the card returns to hand with no cast event. The
   shadow game cannot replay a cast that did not happen, so it diverges: the tokens are still there and the mana pool
   differs. In the 16x60 logs, 2 of 147 mirror games had it, 8 decisions in verification ①.
+- **Also abilities (2026-11-14):** an activated ability whose payment fails partway leaves no move at all (it was
+  never on the stack): an Eldrazi Spawn sacrificed for its mana and the mana floating, no event of an action
+  (IzzetProwess-vs-Broodscale, the Spawn targeted by a spell, then sacrificed while Forge AI paid for an ability it
+  did not activate; the stack trace of the sacrifice runs through PlayerControllerAi.playChosenSpellAbility and
+  ComputerUtilMana.payManaCost).
 - **Our handling:** none. It is a known cause in shadow verification, and the shadow skips search for the rest of
   that turn.
 - **Fix upstream:** check the whole cost, mana included, before paying anything that cannot be undone, or rewind
   fully (snapshot) when the payment fails.
 
 Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix options, upstream status): `docs/upstream-analysis.md`.
+
+## 9. Undoing a mana ability untaps its source without a tap event (2026-11-14)
+
+- **What:** when a payment is not made, `ManaRefundService.refundManaPaid` undoes the mana abilities that paid
+  (`SpellAbility.undo`), and `CostTap.refund` untaps the source with `Card.setTapped(false)`. That fires no
+  `GameEventCardTapped`; Forge then fires only a battlefield `GameEventZone` ComplexUpdate. A listener that follows
+  tap events misses the untap.
+- **How we hit it:** a player declines (or cannot finish) paying No More Lies' {3}; the lands it tapped untap again
+  with no event, and the shadow game kept them tapped.
+- **Our workaround:** the session keeps each permanent's last reported tapped state and, on a battlefield
+  ComplexUpdate, reports the changes that came without a tap event (`ForgeGameSession.tapsWithoutEvent`).
+- **Fix upstream:** untap through the path that fires `GameEventCardTapped` (or fire it in `setTapped`).
