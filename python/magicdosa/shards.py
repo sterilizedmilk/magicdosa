@@ -115,3 +115,92 @@ def make_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dict[st
     for name in ("priv_opp_hand", "priv_my_library", "priv_opp_library"):
         batch[name], batch[name + "_mask"] = _pad(_lists(table, name, rows), 1, 0, np.int64)
     return batch
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Training view of a batch: model inputs, labels and privileged (critic / belief) labels kept apart.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# DecisionType values (proto common.proto) the play module's policy does not learn (design 학습·평가 "결정 모듈 구조",
+# 관측·행동 "행동 스키마"): mulligan, bottom cards and play/draw are computed from the observation-only value net;
+# sideboarding belongs to the separate match module.
+DECISION_MULLIGAN = 9
+DECISION_BOTTOM_CARDS = 10
+DECISION_PLAY_OR_DRAW = 11
+DECISION_SIDEBOARD = 12
+NOT_PLAY_POLICY = (DECISION_MULLIGAN, DECISION_BOTTOM_CARDS, DECISION_PLAY_OR_DRAW, DECISION_SIDEBOARD)
+# Rewarded by the match result, not the game result (design: 보상 분리), so not a play-module value sample.
+NOT_PLAY_VALUE = (DECISION_SIDEBOARD,)
+
+# Observation tensors the play module reads, in ONNX input order. Nothing privileged is here.
+MODEL_INPUTS = ("global", "token_kind", "token_card", "token_key", "token_feat", "token_mask", "rel_src", "rel_dst",
+                "rel_kind", "rel_mask", "deck_card", "deck_count", "deck_group", "deck_mask", "decision_type",
+                "cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key", "cand_string", "cand_feat", "cand_mask")
+# Training-only columns (privileged record, Q11): critic and belief labels only.
+PRIVILEGED = ("priv_opp_hand", "priv_opp_hand_mask", "priv_my_library", "priv_my_library_mask", "priv_opp_library",
+              "priv_opp_library_mask")
+
+
+def read_shards(paths: Sequence[Path | str]) -> pa.Table:
+    """Several games' shards (each version-checked) as one table."""
+    tables = [read_shard(p) for p in paths]
+    if not tables:
+        raise ValueError("no shards")
+    names = [feature_names(t, g) for t in tables for g in ("global", "token", "candidate")]
+    first = names[:3]
+    for i in range(0, len(names), 3):
+        if names[i:i + 3] != first:
+            raise VersionMismatch(f"{paths[i // 3]}: feature names differ from {paths[0]}")
+    return pa.concat_tables(tables).replace_schema_metadata(tables[0].schema.metadata)
+
+
+def policy_target_rows(table: pa.Table) -> np.ndarray:
+    """Rows with an ExIt policy target: decided by the model, with search visit ratios, of a decision type the play
+    module's policy learns. Delegated or fallback rows are never policy samples (design: 폴백 검증 "학습 데이터")."""
+    decider = table.column("decider").to_numpy()
+    has_visits = np.array([len(v) > 0 for v in table.column("visit_ratio").to_pylist()], dtype=bool)
+    dtype = table.column("decision_type").to_numpy()
+    return (decider == DECIDER_MODEL) & has_visits & ~np.isin(dtype, NOT_PLAY_POLICY)
+
+
+def value_target_rows(table: pa.Table) -> np.ndarray:
+    """Rows with a play-module value target (the game result). PLACEHOLDER: draws are left out until the draw value
+    is decided; rows of every decider are kept (the design excludes delegated rows from the policy only)."""
+    dtype = table.column("decision_type").to_numpy()
+    draw = table.column("is_draw").to_numpy(zero_copy_only=False)
+    return ~np.isin(dtype, NOT_PLAY_VALUE) & ~draw
+
+
+def training_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dict[str, Dict[str, np.ndarray]]:
+    """make_batch split into {'inputs', 'targets', 'privileged'}. Only 'inputs' may reach the policy/value nets;
+    'privileged' feeds the training-only critic and belief labels (design: critic 격리 규칙)."""
+    if rows is None:
+        rows = range(table.num_rows)
+    rows = list(rows)
+    b = make_batch(table, rows)
+    inputs = {k: b[k].astype(np.int64) if b[k].dtype.kind == "i" else b[k] for k in MODEL_INPUTS}
+    targets = {
+        "chosen": b["chosen"].astype(np.int64),
+        "visit_ratio": b["visit_ratio"],
+        "policy_mask": policy_target_rows(table)[rows],
+        "result": b["result"].astype(np.float32),
+        "value_mask": value_target_rows(table)[rows],
+    }
+    return {"inputs": inputs, "targets": targets, "privileged": {k: b[k] for k in PRIVILEGED}}
+
+
+def vocab_sizes(path: Path | str) -> Dict[str, int]:
+    """Embedding table sizes from agent-core's vocab.tsv (append-only; indices from 3 per kind, 0 padding, 1 hidden,
+    2 not in the vocabulary). Checks the vocabulary version against versions.py. Only counts lines; no encoding."""
+    counts = {"card": 0, "ability": 0, "keyword": 0, "string": 0}
+    version = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("#version"):
+                version = int(line.split()[1])
+            elif line and not line.startswith("#"):
+                counts[line.split("\t", 1)[0].lower()] += 1
+    if version != versions.VOCAB_VERSION:
+        raise VersionMismatch(f"{path}: vocab_version {version}, expected {versions.VOCAB_VERSION}")
+    return {k: 3 + v for k, v in counts.items()}

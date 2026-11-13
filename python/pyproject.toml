@@ -14,7 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-train = ["torch", "onnx"]
+# onnxscript: the torch.export-based ONNX exporter; onnxruntime: the export round-trip test (no wheel for Python 3.15
+# yet, so the training environment runs on 3.14 or older; see docs/python-training.md)
+train = ["torch", "onnx", "onnxscript", "onnxruntime"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
