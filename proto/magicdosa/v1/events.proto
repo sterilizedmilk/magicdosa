@@ -129,6 +129,10 @@ message ManaAbilityUse {
   uint64 source_id = 1;
   AbilityKey ability = 2;
   repeated ManaUnit produced = 3;
+  // Everything the activation made, the units this payment did not spend included (they stay in the pool): set on
+  // the first payment piece of a source when it made more than the payment spent of it (Mystic Gate's {W}{U}, of
+  // which the spell took {W}). The pool is public. (protocol 10)
+  repeated ManaUnit made = 4;
 }
 
 message DeclareAttackers {

@@ -1503,6 +1503,7 @@ public final class ForgeGameSession {
 
     private List<ManaPayment> payment(SpellAbility sa) {
         List<ManaPayment> out = new ArrayList<>();
+        java.util.Set<Card> madeTold = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (Mana m : sa.getPayingMana()) {
             // the source's ID when the action began: a source sacrificed for its mana (an Eldrazi Spawn) has left
             Card src = m.getSourceCard();
@@ -1513,6 +1514,25 @@ public final class ForgeGameSession {
                 AbilityKey k = keys.abilityKey(m.getManaAbility().getSourceSA());
                 if (k != null) {
                     u.setAbility(k);
+                }
+            }
+            // a source that made more than the payment spent of it (a filter's second unit, floating): all it made,
+            // on its first piece; the units it made that are still in the pool are the rest
+            if (src != null && madeTold.add(src)) {
+                List<ManaUnit> made = new ArrayList<>();
+                for (Mana spent : sa.getPayingMana()) {
+                    if (spent.getSourceCard() == src) {
+                        made.add(ManaUnit.newBuilder().setColor(ObservationBuilder.colorLetter(spent.getColor())).setAmount(1).build());
+                    }
+                }
+                int spentCount = made.size();
+                for (Mana floating : src.getController().getManaPool()) {
+                    if (floating.getSourceCard() == src) {
+                        made.add(ManaUnit.newBuilder().setColor(ObservationBuilder.colorLetter(floating.getColor())).setAmount(1).build());
+                    }
+                }
+                if (made.size() > spentCount) {
+                    u.addAllMade(made);
                 }
             }
             out.add(ManaPayment.newBuilder().setAbility(u).build());

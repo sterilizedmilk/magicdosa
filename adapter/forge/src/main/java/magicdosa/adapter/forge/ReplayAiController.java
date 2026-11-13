@@ -382,16 +382,23 @@ public class ReplayAiController extends ObservedAiController {
      */
     private static List<magicdosa.protocol.v1.ManaAbilityUse> mergedUses(List<magicdosa.protocol.v1.ManaPayment> payment) {
         java.util.LinkedHashMap<String, magicdosa.protocol.v1.ManaAbilityUse.Builder> uses = new java.util.LinkedHashMap<>();
+        java.util.Set<String> withMade = new java.util.HashSet<>();
         for (magicdosa.protocol.v1.ManaPayment piece : payment) {
             if (!piece.hasAbility()) {
                 continue;
             }
             var u = piece.getAbility();
             String key = u.getSourceId() + " " + u.getAbility();
+            if (u.getMadeCount() > 0) {
+                // all the activation made (protocol 10): its colours, the units the payment did not spend included
+                uses.put(key, u.toBuilder().clearProduced().addAllProduced(u.getMadeList()).clearMade());
+                withMade.add(key);
+                continue;
+            }
             var b = uses.get(key);
             if (b == null) {
                 uses.put(key, u.toBuilder());
-            } else {
+            } else if (!withMade.contains(key)) {
                 b.addAllProduced(u.getProducedList());
             }
         }
