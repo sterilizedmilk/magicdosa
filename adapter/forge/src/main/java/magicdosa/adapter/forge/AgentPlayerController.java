@@ -1226,7 +1226,8 @@ public class AgentPlayerController extends ObservedAiController {
         }
         final List<Integer> offeredValues = values;
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "announceRequirements", candidates, ONE,
-            context(ability).setEnginePrompt(announce).build(),
+            // the value being announced is not paid yet: the ability's X is one left from Forge AI weighing it earlier
+            context(ability).clearX().setEnginePrompt(announce).build(),
             () -> indexOf(offeredValues, forgeAiAnnounce(ability, min, max, announce, offeredValues)));
         final List<Integer> offered = values;
         return chosen == null ? forgeAi(() -> super.answerAnnounceRequirements(ability, min, max, announce))
