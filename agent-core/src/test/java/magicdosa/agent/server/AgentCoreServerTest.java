@@ -127,6 +127,45 @@ class AgentCoreServerTest {
     }
 
     @Test
+    void handshakeRefusesAModelOfAnotherEncoder() {
+        String name = InProcessServerBuilder.generateName();
+        Agent other = new Agent(new magicdosa.agent.policy.Policy() {
+            @Override
+            public String modelVersion() {
+                return "old-model";
+            }
+
+            @Override
+            public int encoderVersion() {
+                return magicdosa.agent.AgentCore.ENCODER_VERSION - 1;
+            }
+
+            @Override
+            public magicdosa.protocol.v1.DecisionResponse decide(DecisionRequest request) {
+                throw new AssertionError("no decisions without a handshake");
+            }
+        });
+        Server s = null;
+        ManagedChannel c = null;
+        try {
+            s = InProcessServerBuilder.forName(name).directExecutor().addService(AgentCoreServer.service(other)).build().start();
+            c = InProcessChannelBuilder.forName(name).directExecutor().build();
+            var reply = AgentCoreGrpc.newBlockingStub(c).handshake(hello("g1", Mode.MODE_TRAINING));
+            assertFalse(reply.getAccepted());
+            assertTrue(reply.getReason().contains("encoder version"), reply.getReason());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        } finally {
+            if (c != null) {
+                c.shutdownNow();
+            }
+            if (s != null) {
+                s.shutdownNow();
+            }
+        }
+    }
+
+    @Test
     void answersDecisionsAndClosesAfterGameOver() throws Exception {
         AgentCoreGrpc.newBlockingStub(channel).handshake(hello("g1", Mode.MODE_TRAINING));
         Received r = play(List.of(event("g1", 1), event("g1", 2), decision("g1", 1, 2), gameOver("g1", true)));

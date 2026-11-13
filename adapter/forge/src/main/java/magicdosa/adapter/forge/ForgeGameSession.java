@@ -257,6 +257,11 @@ public final class ForgeGameSession {
         if (!reply.getAccepted()) {
             throw new IllegalStateException("agent-core refused the game: " + reply.getReason());
         }
+        if (reply.getProtocolVersion() != Versions.PROTOCOL) {
+            // design (버전): a game does not start when a version differs
+            throw new IllegalStateException("agent-core has protocol version " + reply.getProtocolVersion()
+                + ", the adapter " + Versions.PROTOCOL);
+        }
         LogHeader.Builder h = LogHeader.newBuilder()
             .setProtocolVersion(Versions.PROTOCOL).setEncoderVersion(reply.getEncoderVersion())
             .setModelVersion(reply.getModelVersion()).setAdapter("forge-adapter").setEngineVersion(engineVersion)

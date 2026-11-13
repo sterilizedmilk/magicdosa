@@ -79,9 +79,14 @@ public final class Agent {
             .setReason(reason == null ? "" : reason).build();
     }
 
-    private static String check(Hello h) {
+    private String check(Hello h) {
         if (h.getProtocolVersion() != Versions.PROTOCOL) {
             return "protocol version " + h.getProtocolVersion() + ", agent-core has " + Versions.PROTOCOL;
+        }
+        if (policy.encoderVersion() != AgentCore.ENCODER_VERSION) {
+            // design (버전): a game does not start when a version differs; the model's tensors are another encoder's
+            return "model " + policy.modelVersion() + " was trained with encoder version " + policy.encoderVersion()
+                + ", agent-core has encoder version " + AgentCore.ENCODER_VERSION;
         }
         if (h.getGameId().isEmpty()) {
             return "no game_id";
