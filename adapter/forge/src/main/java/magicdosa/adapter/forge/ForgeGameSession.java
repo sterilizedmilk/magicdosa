@@ -347,25 +347,31 @@ public final class ForgeGameSession {
         if (now.size() != order.size()) {
             return false;
         }
+        // Forge's Mana.equals compares by value (colour and ability kind, not the source card), so mana from two
+        // sources is "equal": match, remove and compare by identity
         List<forge.game.mana.Mana> left = new ArrayList<>(now);
         List<forge.game.mana.Mana> out = new ArrayList<>();
         for (magicdosa.protocol.v1.PoolMana want : order) {
-            forge.game.mana.Mana found = null;
-            for (forge.game.mana.Mana m : left) {
-                if (observations.poolMana(m).equals(want)) {
-                    found = m;
+            int found = -1;
+            for (int i = 0; i < left.size(); i++) {
+                if (observations.poolMana(left.get(i)).equals(want)) {
+                    found = i;
                     break;
                 }
             }
-            if (found == null) {
+            if (found < 0) {
                 return false;
             }
-            left.remove(found);
-            out.add(found);
+            out.add(left.remove(found));
         }
-        if (out.equals(now)) {
+        boolean same = true;
+        for (int i = 0; i < out.size(); i++) {
+            same &= out.get(i) == now.get(i);
+        }
+        if (same) {
             return false;
         }
+        // removeManaNoEvent removes the first value-equal entry; removing as many as there are empties the pool
         for (forge.game.mana.Mana m : now) {
             p.getManaPool().removeManaNoEvent(m);
         }
