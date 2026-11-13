@@ -790,12 +790,28 @@ public final class ForgeGameSession {
      * special action, CR 116.2: a companion put into hand). Reported as an activation with no ability ID.
      */
     void playedWithoutStack(Player p, SpellAbility sa) {
-        if (actionEventSeen || sa.isSpell() || sa.isManaAbility() || sa.isLandAbility()) {
+        if (actionEventSeen || sa.isSpell() || sa.isLandAbility()) {
             return;
         }
         syncZones();
         Card host = sa.getHostCard();
         long sourceId = idsAtActionStart.getOrDefault(host.getId(), ids.idOf(host));
+        if (sa.isManaAbility()) {
+            // Forge AI played a mana ability as its action (an Eldrazi Spawn sacrificed for its mana in response to a
+            // spell that targets it): reported as an agent seat's is, its source as it was when activated
+            ActivateManaAbility.Builder a = ActivateManaAbility.newBuilder().setSeat(seat(p)).setSourceId(sourceId);
+            AbilityKey key = keys.abilityKey(sa);
+            if (key != null) {
+                a.setAbility(key);
+            }
+            if (sa.getManaPart() != null) {
+                for (Mana m : sa.getManaPart().getLastManaProduced()) {
+                    a.addProduced(ManaUnit.newBuilder().setColor(ObservationBuilder.colorLetter(m.getColor())).setAmount(1));
+                }
+            }
+            emitAction(b -> b.setActivateManaAbility(a));
+            return;
+        }
         ActivateAbility.Builder a = ActivateAbility.newBuilder().setSeat(seat(p)).setSourceId(sourceId)
             .addAllTargets(targets(sa)).addAllPayment(payment(sa));
         AbilityKey key = keys.abilityKey(sa);
