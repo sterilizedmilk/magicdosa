@@ -1039,7 +1039,16 @@ public class ObservedAiController extends PlayerControllerAi {
         } finally {
             answering--;
         }
-        options("chooseSaToActivateFromOpeningHand", indices(usableFromOpeningHand, r));
+        if (!weighing && answering == 0) {
+            // the cards the abilities belong to as well: which card leaves the hand is public (it goes to the
+            // battlefield or is revealed), and the list's order depends on the hidden rest of the hand
+            List<GameObject> hosts = new ArrayList<>();
+            if (r != null) {
+                r.forEach(sa -> hosts.add(sa.getHostCard()));
+            }
+            session.choice(player, DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseSaToActivateFromOpeningHand", hosts,
+                indices(usableFromOpeningHand, r), null);
+        }
         return r;
     }
 

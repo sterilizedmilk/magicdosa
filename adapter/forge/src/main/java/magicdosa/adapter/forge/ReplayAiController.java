@@ -1132,6 +1132,20 @@ public class ReplayAiController extends ObservedAiController {
             return super.answerChooseSaToActivateFromOpeningHand(usableFromOpeningHand);
         }
         List<SpellAbility> out = new ArrayList<>();
+        if (r.getChosenCount() > 0) {
+            // by the cards the abilities belong to: with a sampled hand (verification 2) the list holds other cards'
+            // abilities and the recorded index points at another one
+            for (ObjectRef ref : r.getChosenList()) {
+                Card host = card(ref.getEntityId());
+                for (SpellAbility sa : usableFromOpeningHand) {
+                    if (host != null && player.getGame().getCardState(sa.getHostCard()) == host && !out.contains(sa)) {
+                        out.add(sa);
+                        break;
+                    }
+                }
+            }
+            return out;
+        }
         r.getOptionsList().forEach(i -> out.add(usableFromOpeningHand.get(i)));
         return out;
     }
