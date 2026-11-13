@@ -1320,6 +1320,11 @@ public final class ShadowGame {
         session = new ForgeGameSession(game, rec.header.getMatchId(), rec.header.getGameNumber(), decks, won, Set.of(viewer),
             new Client(), keys, LogSink.DISCARD, rec.header.getMode(), rec.header.getGameSeed());
         for (Player p : game.getRegisteredPlayers()) {
+            if (p.getLobbyPlayer() instanceof magicdosa.adapter.forge.AgentLobbyPlayer lobby) {
+                lobby.session(session); // the viewer controlling the other seat decides its choices, as in the real game
+            }
+        }
+        for (Player p : game.getRegisteredPlayers()) {
             int seat = game.getRegisteredPlayers().indexOf(p);
             if (seat == viewer) {
                 p.dangerouslySetController(new AgentPlayerController(game, p, p.getLobbyPlayer(), session));
@@ -1568,6 +1573,19 @@ public final class ShadowGame {
             if (next != null && (e.getBodyCase() == Event.BodyCase.DECLARE_ATTACKERS
                     || e.getBodyCase() == Event.BodyCase.DECLARE_BLOCKERS) && sameBody(next, e)) {
                 opponentIdx++;
+            }
+            // while the viewer controls the other seat (Emrakul, the Promised End), that seat's actions and choices
+            // come from the viewer's decisions in the shadow too: the recorded ones they match are used up, or the
+            // replay would play them again once the seat is its own again
+            Player other = game.getRegisteredPlayers().get(opponent);
+            if (answerBearing(e, opponent) && other.isControlled()
+                    && game.getRegisteredPlayers().indexOf(other.getControllingPlayer()) == viewer) {
+                for (int i = opponentIdx; i < opponentRecord.size() && i < opponentIdx + 200; i++) {
+                    if (!opponentUsed.contains(i) && sameBody(opponentRecord.get(i), e)) {
+                        opponentUsed.add(i);
+                        break;
+                    }
+                }
             }
             shadowEvents.add(e);
             Event real = rec.events.get(e.getSeq());

@@ -503,7 +503,9 @@ public final class SnapshotBuilder {
                 }
             }
             RegisteredPlayer rp = new RegisteredPlayer(deck);
-            rp.setPlayer(new LobbyPlayerAi("seat" + mp.getSeat(), Set.of())); // named as the runner names seats
+            // named as the runner names seats; the runner's lobby player, so that one player controlling another
+            // (Emrakul, the Promised End) gets the controller it gets in the real game once the session is set
+            rp.setPlayer(new AgentLobbyPlayer("seat" + mp.getSeat()));
             players.add(rp);
         }
         return new Match(rules, players, o.getMatch().getMatchId() + "-shadow");
