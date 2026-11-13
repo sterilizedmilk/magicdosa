@@ -57,6 +57,14 @@ public final class Fingerprint {
             // engine text for debugging; Forge's own card numbers in it ("No More Lies (118)") are not game state
             b.setContext(r.getContext().toBuilder().setEnginePrompt(r.getContext().getEnginePrompt().replaceAll("\\(\\d+\\)", "(#)")));
         }
+        if (b.getContext().hasDamage() && b.getContext().getDamage().getEngineDefaultCount() > 1) {
+            // Forge AI's default split comes from a hash map keyed by Forge's own card numbers (logs written before
+            // the adapter put it in entity-ID order): compared as a set
+            List<magicdosa.protocol.v1.DamageShare> shares = new ArrayList<>(b.getContext().getDamage().getEngineDefaultList());
+            shares.sort(Comparator.comparing(com.google.protobuf.TextFormat::shortDebugString));
+            b.setContext(b.getContext().toBuilder().setDamage(b.getContext().getDamage().toBuilder().clearEngineDefault()
+                .addAllEngineDefault(shares)));
+        }
         return b.build();
     }
 

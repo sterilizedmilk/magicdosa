@@ -2602,8 +2602,19 @@ public class AgentPlayerController extends ObservedAiController {
         DamageAssignment.Builder base = DamageAssignment.newBuilder().setTotal(damageDealt).setTrample(trample);
         lethal.forEach((c, l) -> base.addLethal(DamageShare.newBuilder().setTo(session.ref(c)).setAmount(l)));
         if (engine != null) {
-            engine.forEach((c, n) -> base.addEngineDefault(DamageShare.newBuilder()
-                .setTo(c == null ? session.ref(defender) : session.ref(c)).setAmount(n)));
+            // Forge AI's split is a hash map keyed by Forge's own card numbers: put in entity-ID order (the
+            // recipients' order), the defender last
+            for (Card c : recipients) {
+                if (engine.containsKey(c)) {
+                    base.addEngineDefault(DamageShare.newBuilder().setTo(session.ref(c)).setAmount(engine.get(c)));
+                }
+            }
+            engine.forEach((c, n) -> {
+                if (c == null || !recipients.contains(c)) {
+                    base.addEngineDefault(DamageShare.newBuilder()
+                        .setTo(c == null ? session.ref(defender) : session.ref(c)).setAmount(n));
+                }
+            });
         }
         int left = damageDealt;
         for (Card c : recipients) {
