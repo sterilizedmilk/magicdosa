@@ -872,6 +872,21 @@ public class ReplayAiController extends ObservedAiController {
         }
         ResolutionChoice r = choice("announceRequirements");
         Integer n = number(r);
+        if (n == null && scripted && !"X".equals(announce) && session.inAction()) {
+            // another number announced while casting the recorded spell, not recorded: Forge AI sets it on its own play
+            // path without asking. The ones our decks have count cards a cost takes from the hand (March of
+            // Otherworldly Light: how many white cards to exile): the recorded cost cards still in the hand.
+            int inHand = 0;
+            for (long id : recordedCosts) {
+                Card c = card(id);
+                if (c != null && c.isInZone(ZoneType.Hand)) {
+                    inHand++;
+                }
+            }
+            if (inHand >= min && inHand <= max) {
+                return inHand;
+            }
+        }
         return n == null ? super.answerAnnounceRequirements(ability, min, max, announce) : n;
     }
 
