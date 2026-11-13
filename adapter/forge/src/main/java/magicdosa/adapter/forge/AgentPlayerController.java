@@ -366,16 +366,12 @@ public class AgentPlayerController extends ObservedAiController {
         CardCollection sources = ComputerUtilMana.getManaSourcesToPayCost(new ManaCostBeingPaid(cost), want, player, false);
         if (sources != null) {
             for (Card src : sources) {
-                long id = session.ids().idOf(src);
-                for (int i = 1; i < candidates.size(); i++) {
-                    Candidate k = candidates.get(i);
-                    if (k.hasActivateAbility() && k.getActivateAbility().getManaAbility() && k.getActivateAbility().getSourceId() == id
-                            && i - 1 < actions.size() && makesNeeded(actions.get(i - 1), cost)) {
-                        // Forge AI pays for the action it chose, as it does when it taps while paying: the next priority
-                        // asks go on paying for it (asking again with mana floating could choose something else)
-                        rememberIntent(want);
-                        return List.of(i);
-                    }
+                int i = bestManaAbility(session.ids().idOf(src), want, cost, actions, candidates);
+                if (i > 0) {
+                    // Forge AI pays for the action it chose, as it does when it taps while paying: the next priority
+                    // asks go on paying for it (asking again with mana floating could choose something else)
+                    rememberIntent(want);
+                    return List.of(i);
                 }
             }
         }
@@ -392,7 +388,8 @@ public class AgentPlayerController extends ObservedAiController {
                     for (int i = 1; i < candidates.size(); i++) {
                         Candidate k = candidates.get(i);
                         if (k.hasActivateAbility() && k.getActivateAbility().getManaAbility() && i - 1 < actions.size()
-                                && actions.get(i - 1).getHostCard() != src && makesNeeded(actions.get(i - 1), input)) {
+                                && actions.get(i - 1).getHostCard() != src && makesNeeded(actions.get(i - 1), input)
+                                && !tapsOwnSource(want, actions.get(i - 1))) {
                             rememberIntent(want);
                             return List.of(i);
                         }
@@ -400,15 +397,25 @@ public class AgentPlayerController extends ObservedAiController {
                 }
             }
         }
+        // no planned source is offered (Forge AI's plan can come back empty for a part-paid cost): the sources in Forge
+        // AI's own order of use (lands without drawbacks first; creatures, sacrifices and costs last)
+        for (Card src : ComputerUtilMana.getAvailableManaSources(player, false)) {
+            int i = bestManaAbility(session.ids().idOf(src), want, cost, actions, candidates);
+            if (i > 0) {
+                rememberIntent(want);
+                return List.of(i);
+            }
+        }
         // no offered source of Forge AI's plan makes what is still needed (it counts pool mana the action cannot use,
         // restricted mana): another offered mana ability that does
         for (int i = 1; i < candidates.size(); i++) {
             Candidate k = candidates.get(i);
             if (k.hasActivateAbility() && k.getActivateAbility().getManaAbility() && i - 1 < actions.size()
-                    && makesNeeded(actions.get(i - 1), cost)) {
+                    && makesNeeded(actions.get(i - 1), cost) && !tapsOwnSource(want, actions.get(i - 1))) {
+                int best = bestManaAbility(k.getActivateAbility().getSourceId(), want, cost, actions, candidates);
                 session.stats().note("chooseSpellAbilityToPlay(shadow Forge AI): mana from a source outside Forge AI's plan");
                 rememberIntent(want);
-                return List.of(i);
+                return List.of(best > 0 ? best : i);
             }
         }
         forgeAiIntent = null;
@@ -441,6 +448,100 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<GameObject> t = plannedTargets.get(s);
         return t != null && t.size() >= min && t.size() <= max && options.containsAll(t) ? t : null;
+    }
+
+    /**
+     * Whether making mana with {@code mana} would tap the source the action itself must tap (Monumental Henge's
+     * {2}{W}{W}, {T}): that mana would leave the action unplayable.
+     */
+    private static boolean tapsOwnSource(SpellAbility want, SpellAbility mana) {
+        return mana.getHostCard() == want.getHostCard() && want.getPayCosts() != null && want.getPayCosts().hasTapCost();
+    }
+
+    /**
+     * Of a source's offered mana abilities that make what the cost still needs, the one that makes the most mana the
+     * action may spend (Eldrazi Temple: {C}{C} for a colorless Eldrazi spell rather than {C}); 0 when none.
+     */
+    private int bestManaAbility(long sourceId, SpellAbility want, ManaCostBeingPaid cost, List<SpellAbility> actions,
+                                List<Candidate> candidates) {
+        int best = 0;
+        int bestAmount = -1;
+        int bestScarcity = Integer.MAX_VALUE;
+        for (int i = 1; i < candidates.size(); i++) {
+            Candidate k = candidates.get(i);
+            if (!k.hasActivateAbility() || !k.getActivateAbility().getManaAbility() || k.getActivateAbility().getSourceId() != sourceId
+                    || i - 1 >= actions.size()) {
+                continue;
+            }
+            SpellAbility m = actions.get(i - 1);
+            if (!makesNeeded(m, cost) || m.getManaPart() == null || !m.getManaPart().meetsManaRestrictions(want)
+                    || tapsOwnSource(want, m)) {
+                continue;
+            }
+            int amount = m.amountOfManaGenerated(true);
+            int scarce = scarcity(m, cost, actions, candidates);
+            // the color the fewest other offered sources can make first (a dual land makes the color only it has:
+            // Godless Shrine's {B} for Ketramose when the other lands make {W}), then the most mana
+            if (best == 0 || scarce < bestScarcity || (scarce == bestScarcity && amount > bestAmount)) {
+                best = i;
+                bestAmount = amount;
+                bestScarcity = scarce;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * For the colored shards the cost still needs that {@code mana} can pay: the fewest other offered sources (other
+     * cards) that can pay one of them; a large number when it pays generic mana only.
+     */
+    private int scarcity(SpellAbility mana, ManaCostBeingPaid cost, List<SpellAbility> actions, List<Candidate> candidates) {
+        int least = 1000;
+        for (forge.card.mana.ManaCostShard shard : cost.getUnpaidShards()) {
+            if (shard == forge.card.mana.ManaCostShard.GENERIC || shard.isPhyrexian() || !pays(mana, shard)) {
+                continue;
+            }
+            Set<Card> others = new java.util.HashSet<>();
+            for (int i = 1; i < candidates.size() && i - 1 < actions.size(); i++) {
+                Candidate k = candidates.get(i);
+                SpellAbility o = actions.get(i - 1);
+                if (k.hasActivateAbility() && k.getActivateAbility().getManaAbility() && o.getHostCard() != mana.getHostCard()
+                        && o.getManaPart() != null && pays(o, shard)) {
+                    others.add(o.getHostCard());
+                }
+            }
+            least = Math.min(least, others.size());
+        }
+        return least;
+    }
+
+    /**
+     * Whether the mana ability makes {@code color} now: each part of it whose condition holds (River of Tears: {U}, or
+     * {B} by its sub-ability once a land was played this turn).
+     */
+    private static boolean produces(SpellAbility mana, String color) {
+        for (SpellAbility part = mana; part != null; part = part.getSubAbility()) {
+            if (part.getManaPart() != null && part.metConditions() && part.getManaPart().canProduce(color, part)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether the mana ability can make a color that pays the shard ({C} only with colorless mana). */
+    private static boolean pays(SpellAbility mana, forge.card.mana.ManaCostShard shard) {
+        if (mana.getManaPart() == null) {
+            return false;
+        }
+        for (String color : List.of("W", "U", "B", "R", "G", "C")) {
+            boolean ok = color.equals("C") ? shard == forge.card.mana.ManaCostShard.COLORLESS
+                || shard.canBePaidWithManaOfColor(forge.card.MagicColor.COLORLESS)
+                : shard.canBePaidWithManaOfColor(forge.card.MagicColor.fromName(color));
+            if (ok && produces(mana, color)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The action Forge AI chose and is making mana for (priority actions in the same window). */
@@ -495,7 +596,7 @@ public class AgentPlayerController extends ObservedAiController {
                 boolean pays = color.equals("C") ? shard == forge.card.mana.ManaCostShard.COLORLESS
                     || shard.canBePaidWithManaOfColor(forge.card.MagicColor.COLORLESS)
                     : shard.canBePaidWithManaOfColor(forge.card.MagicColor.fromName(color));
-                if (mana.getManaPart().canProduce(color, mana) && pays) {
+                if (produces(mana, color) && pays) {
                     return true;
                 }
             }
@@ -620,11 +721,16 @@ public class AgentPlayerController extends ObservedAiController {
     private int forgePoolPick(ManaCostBeingPaid toPay, List<List<Mana>> groups, int candidates) {
         List<forge.card.mana.ManaCostShard> shards = new ArrayList<>(toPay.getUnpaidShards());
         java.util.Collections.sort(shards);
-        for (forge.card.mana.ManaCostShard shard : shards) {
-            for (int g = 0; g < groups.size(); g++) {
-                Mana m = groups.get(g).get(0);
-                if (shard.canBePaidWithManaOfColor(m.getColor())) {
-                    return g;
+        // restricted mana first (it pays only some spells: Eldrazi Temple's), as Forge's payment spends it where it can
+        for (boolean restrictedPass : new boolean[] {true, false}) {
+            for (forge.card.mana.ManaCostShard shard : shards) {
+                for (int g = 0; g < groups.size(); g++) {
+                    Mana m = groups.get(g).get(0);
+                    boolean restricted = m.getManaAbility() != null && m.getManaAbility().getManaRestrictions() != null
+                        && !m.getManaAbility().getManaRestrictions().isEmpty();
+                    if (restricted == restrictedPass && shard.canBePaidWithManaOfColor(m.getColor())) {
+                        return g;
+                    }
                 }
             }
         }
@@ -1425,7 +1531,19 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseColor", candidates, ONE,
             context(sa).setEnginePrompt(message == null ? "color" : message).build(),
-            () -> indexOf(options, forgeAi(() -> super.answerChooseColor(message, sa, colors))));
+            () -> {
+                // the color a mana ability makes while this seat makes mana for Forge AI's action (Talisman of
+                // Resilience: {B} or {G}): the one that pays what that action still needs, as Forge AI's payment does
+                if (sa != null && sa.isManaAbility()) {
+                    List<Map<Byte, Integer>> single = new ArrayList<>();
+                    options.forEach(c -> single.add(Map.of(c, 1)));
+                    int forAction = comboForIntent(single);
+                    if (forAction >= 0) {
+                        return List.of(forAction);
+                    }
+                }
+                return indexOf(options, forgeAi(() -> super.answerChooseColor(message, sa, colors)));
+            });
         return chosen == null ? forgeAi(() -> super.answerChooseColor(message, sa, colors)) : options.get(chosen.get(0));
     }
 
@@ -1450,8 +1568,72 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "specifyManaCombo", candidates, ONE,
             context(sa).setEnginePrompt("mana combination").build(),
-            () -> indexOf(combos, forgeAi(() -> super.specifyManaCombo(sa, colorSet, manaAmount, different))));
+            () -> {
+                // making mana for Forge AI's action (a filter land: Mystic Gate's {W}{W}, {W}{U} or {U}{U}): the
+                // combination that pays most of what that action still needs, as Forge AI's own payment chooses it
+                int forAction = comboForIntent(combos);
+                return forAction >= 0 ? List.of(forAction)
+                    : indexOf(combos, forgeAi(() -> super.specifyManaCombo(sa, colorSet, manaAmount, different)));
+            });
         return chosen == null ? forgeAi(() -> super.specifyManaCombo(sa, colorSet, manaAmount, different)) : combos.get(chosen.get(0));
+    }
+
+    /** The combination that pays most of the remembered action's remaining cost (colored shards first); -1: none. */
+    private int comboForIntent(List<Map<Byte, Integer>> combos) {
+        if (!intentStillOn()) {
+            return -1;
+        }
+        ManaCostBeingPaid rest = remainingCost(forgeAiIntent);
+        if (rest == null || rest.isPaid()) {
+            return -1;
+        }
+        int best = -1;
+        int bestScore = -1;
+        for (int i = 0; i < combos.size(); i++) {
+            List<forge.card.mana.ManaCostShard> shards = new ArrayList<>(rest.getUnpaidShards());
+            int score = 0;
+            for (Map.Entry<Byte, Integer> e : combos.get(i).entrySet()) {
+                for (int k = 0; k < e.getValue(); k++) {
+                    forge.card.mana.ManaCostShard hit = null;
+                    for (forge.card.mana.ManaCostShard sh : shards) {
+                        if (sh != forge.card.mana.ManaCostShard.GENERIC && sh.canBePaidWithManaOfColor(e.getKey())) {
+                            hit = sh;
+                            break;
+                        }
+                    }
+                    if (hit != null) {
+                        score += 10;
+                    } else if (shards.contains(forge.card.mana.ManaCostShard.GENERIC)) {
+                        hit = forge.card.mana.ManaCostShard.GENERIC;
+                        score += 1;
+                    }
+                    if (hit != null) {
+                        shards.remove(hit);
+                    }
+                }
+            }
+            if (score > bestScore) {
+                best = i;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    /** What the action still needs: its cost as Forge AI computes it less the pool mana it can use; null if unknown. */
+    private ManaCostBeingPaid remainingCost(SpellAbility want) {
+        ManaCostBeingPaid cost;
+        try {
+            cost = ComputerUtilMana.calculateManaCost(want.getPayCosts(), want, player, true, 0, false);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        for (forge.game.mana.Mana m : com.google.common.collect.Lists.newArrayList(player.getManaPool())) {
+            if (!cost.isPaid() && m.meetsManaRestrictions(want) && cost.isNeeded(m, player.getManaPool())) {
+                cost.payMana(m, player.getManaPool());
+            }
+        }
+        return cost;
     }
 
     /** Every multiset of {@code left} mana over {@code colors} (each color at most once when {@code different}). */

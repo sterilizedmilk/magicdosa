@@ -694,7 +694,8 @@ public final class ForgeGameSession {
     /**
      * Shows {@code cards} to a seat: one about to choose among them (a search, the top of a library), or one Forge
      * reveals them to (Thoughtseize). The seat's stream learns their identities once per object (CardRevealed,
-     * LOOKED_AT); the other streams learn that it saw them, with the identity only where their own seat sees it (Q10).
+     * LOOKED_AT), and of each look at library cards (where they are); the other streams learn that it saw them, with
+     * the identity only where their own seat sees it (Q10).
      */
     void showTo(Player p, Collection<? extends Card> cards) {
         syncZones();
@@ -709,10 +710,15 @@ public final class ForgeGameSession {
             for (int stream : agentSeats) {
                 boolean itSees = who.contains(stream);
                 if (stream == viewer) {
-                    if (!visibleIds.get(viewer).add(id)) {
+                    boolean first = visibleIds.get(viewer).add(id);
+                    if (!first && !c.getZone().is(ZoneType.Library)) {
                         continue; // already seen
                     }
-                    saw(viewer, c);
+                    // a library card is looked at again where it is now (Narset's top four holding a card seen
+                    // before): which objects were looked at tells where they are, so every look is told
+                    if (first) {
+                        saw(viewer, c);
+                    }
                 } else if (!newSeer) {
                     continue;
                 }
@@ -1626,7 +1632,9 @@ public final class ForgeGameSession {
         }
         int n = resp.getChosenCount();
         SelectionConstraints c = req.getConstraints();
-        if (req.getType() != DecisionType.DECISION_TYPE_MANA_PAYMENT && (n < c.getMin() || n > c.getMax())) {
+        // a payment step may stop (min 0: no answer is "done"); a single pick from the pool must name one
+        boolean mayStop = req.getType() == DecisionType.DECISION_TYPE_MANA_PAYMENT && c.getMin() == 0;
+        if (!mayStop && (n < c.getMin() || n > c.getMax())) {
             return false;
         }
         for (DecisionStep s : resp.getStepsList()) {

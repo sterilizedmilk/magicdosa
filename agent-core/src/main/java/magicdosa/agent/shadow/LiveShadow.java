@@ -143,8 +143,11 @@ public final class LiveShadow implements ShadowGame.Live {
                 return withoutShadowLocked(r, "not the shadow's seat");
             }
             if (shadow == null) {
-                if (r.getType() == DecisionType.DECISION_TYPE_PLAY_OR_DRAW || r.getType() == DecisionType.DECISION_TYPE_SIDEBOARD
-                        || !hasGameStartSnapshot()) {
+                // the shadow starts with the game itself (the first mulligan, or a turn under way): requests before it
+                // (sideboarding, play or draw, the companion) come before the game-start snapshot
+                boolean gameStarted = r.getType() == DecisionType.DECISION_TYPE_MULLIGAN
+                    || r.getObservation().getGame().getTurn() > 0;
+                if (!gameStarted || !hasGameStartSnapshot()) {
                     DecisionResponse resp = pregame(r);
                     if (resp == null) {
                         resp = withoutShadowLocked(r, "before the game start");
@@ -301,6 +304,9 @@ public final class LiveShadow implements ShadowGame.Live {
                 pick = i;
             } else if (r.getType() == DecisionType.DECISION_TYPE_SIDEBOARD && c.hasPass()) {
                 pick = i;
+            } else if (r.getType() == DecisionType.DECISION_TYPE_CHOOSE_CARDS && pick < 0 && !c.hasPass()
+                    && r.getContext().getEnginePrompt().toLowerCase(java.util.Locale.ROOT).contains("companion")) {
+                pick = i; // Forge AI always takes a legal companion (ChooseCompanionAi: one of them at random)
             }
         }
         if (pick < 0) {

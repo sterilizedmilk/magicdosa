@@ -59,9 +59,23 @@ public final class AllPairings {
         cmd.add(System.getProperty("java.class.path"));
         cmd.add(PairingWorker.class.getName());
         cmd.addAll(List.of(deckDir, a, b, String.valueOf(matches), logs.toString(), agentSpec, name + "-m", result.toString()));
+        // -Dmagicdosa.stopFile=<path>: once the file exists no new worker starts and running ones are ended (their
+        // agent-core JVMs end with them: they run until their stdin closes)
+        String stop = System.getProperty("magicdosa.stopFile");
+        if (stop != null && Files.exists(Path.of(stop))) {
+            throw new IllegalStateException("stopped before " + name + " (" + stop + " exists)");
+        }
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true)
             .redirectOutput(logRoot.resolve(name + ".worker.txt").toFile()).start();
-        int code = p.waitFor();
+        while (!p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+            if (stop != null && Files.exists(Path.of(stop))) {
+                p.descendants().forEach(ProcessHandle::destroyForcibly);
+                p.destroyForcibly();
+                p.waitFor();
+                throw new IllegalStateException("stopped during " + name + " (" + stop + " exists)");
+            }
+        }
+        int code = p.exitValue();
         if (code != 0 || !Files.exists(result)) {
             throw new IllegalStateException("worker for " + name + " failed (exit " + code + "), see " + name + ".worker.txt");
         }

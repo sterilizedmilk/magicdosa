@@ -886,7 +886,7 @@ public final class ShadowGame {
             Card c = session.cardOf(extra.get(i));
             String oracle = c == null ? null : keys.oracleId(c);
             if (oracle != null) {
-                changed |= identity(missing.get(i), oracle, false);
+                changed |= guessedIdentity(missing.get(i), oracle);
             }
         }
         return changed;
@@ -934,7 +934,7 @@ public final class ShadowGame {
             for (long e : extra) {
                 shownIds.remove(e);
                 for (String o : ineligible) {
-                    if (identity(e, o, false)) {
+                    if (guessedIdentity(e, o)) {
                         changed = true;
                         break;
                     }
@@ -989,7 +989,7 @@ public final class ShadowGame {
                 shownIds.remove(e);
                 boolean swapped;
                 try {
-                    swapped = identity(e, o, false);
+                    swapped = guessedIdentity(e, o);
                 } finally {
                     shownIds.removeAll(added);
                 }
@@ -1020,6 +1020,19 @@ public final class ShadowGame {
             }
         }
         return out;
+    }
+
+    /**
+     * A guessed identity (a search or a look that names which objects qualify, not which identity each has): taken
+     * like a shown one, but not locked, so a later real reveal can still move it.
+     */
+    private boolean guessedIdentity(long id, String oracle) {
+        boolean wasShown = shownIds.contains(id);
+        boolean r = identity(id, oracle, false);
+        if (!wasShown) {
+            shownIds.remove(id);
+        }
+        return r;
     }
 
     /** Verification ②: every identity the viewer's observation shows is taken; true when a card was swapped. */

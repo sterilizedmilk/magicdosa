@@ -147,9 +147,21 @@ public final class ShadowCheck {
                 if (belief) {
                     cmd.add("--belief");
                 }
+                // -Dmagicdosa.stopFile=<path>: once the file exists no new worker starts and running ones are ended
+                String stop = System.getProperty("magicdosa.stopFile");
+                if (stop != null && Files.exists(java.nio.file.Path.of(stop))) {
+                    throw new IllegalStateException("stopped before " + folder);
+                }
                 Process p = new ProcessBuilder(cmd).redirectErrorStream(true)
                     .redirectOutput(folder.resolve("shadow-check.worker.txt").toFile()).start();
-                int code = p.waitFor();
+                while (!p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    if (stop != null && Files.exists(java.nio.file.Path.of(stop))) {
+                        p.destroyForcibly();
+                        p.waitFor();
+                        throw new IllegalStateException("stopped during " + folder);
+                    }
+                }
+                int code = p.exitValue();
                 if (code != 0 || !Files.exists(out)) {
                     throw new IllegalStateException("shadow worker for " + folder + " failed (exit " + code + ")");
                 }
