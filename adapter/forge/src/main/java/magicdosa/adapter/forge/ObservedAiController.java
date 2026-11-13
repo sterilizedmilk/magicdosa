@@ -1531,6 +1531,42 @@ public class ObservedAiController extends PlayerControllerAi {
         return super.chooseNumber(sa, title, values, relatedPlayer);
     }
 
+    /**
+     * A look at cards that is not a choice: Forge shows the digger every card it dug (Monumental Henge's "look at the
+     * top five") while it chooses among the qualifying ones. The chooser saw them all.
+     */
+    @Override
+    public void tempShowCards(Iterable<Card> cards) {
+        super.tempShowCards(cards);
+        List<Card> shown = new ArrayList<>();
+        cards.forEach(shown::add);
+        session.showTo(player, shown);
+    }
+
+    /**
+     * A dig with no qualifying card shows nothing and only notifies: the digger still looked at the cards, which are
+     * the top of its library until the effect moves them.
+     */
+    @Override
+    public void notifyOfValue(SpellAbility sa, forge.game.GameObject target, String value) {
+        super.notifyOfValue(sa, target, value);
+        if (sa == null || target != null || sa.getApi() != forge.game.ability.ApiType.Dig || sa.hasParam("Defined")
+                || sa.usesTargeting() || sa.hasParam("Reveal") || sa.getActivatingPlayer() != player) {
+            return;
+        }
+        ZoneType zone = sa.hasParam("SourceZone") ? ZoneType.smartValueOf(sa.getParam("SourceZone")) : ZoneType.Library;
+        if (zone != ZoneType.Library) {
+            return;
+        }
+        List<Card> lib = new ArrayList<>();
+        player.getCardsIn(ZoneType.Library).forEach(lib::add);
+        if (sa.hasParam("FromBottom")) {
+            java.util.Collections.reverse(lib);
+        }
+        int n = forge.game.ability.AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParamOrDefault("DigNum", "1"), sa);
+        session.showTo(player, lib.subList(0, Math.min(n, lib.size())));
+    }
+
     @Override
     public void reveal(CardCollectionView cards, ZoneType zone, Player owner, String messagePrefix, boolean addMsgSuffix) {
         super.reveal(cards, zone, owner, messagePrefix, addMsgSuffix);
