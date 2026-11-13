@@ -211,6 +211,8 @@ public final class ShadowGame {
     private final List<Event> opponentRecord = new ArrayList<>();
     private int opponentIdx;
     private final Map<Integer, Integer> shuffles = new java.util.HashMap<>();
+    /** Key offset in {@link #shuffles}: SHUFFLE_USED_KEY + seat holds the index of the last real shuffle used (②). */
+    private static final int SHUFFLE_USED_KEY = 1000;
     private final Map<Integer, List<Long>> realShuffles = new java.util.HashMap<>();
     private final Set<Integer> opponentUsed = new java.util.HashSet<>();
 
@@ -1626,13 +1628,19 @@ public final class ShadowGame {
                 if (beliefSamples && !realSeqs.isEmpty()) {
                     // ②: the real shuffle of this library nearest to this point (the k-th one is off when the shadow
                     // shuffled a different number of times, e.g. in mulligans)
-                    long near = realSeqs.get(0);
-                    for (long r : realSeqs) {
-                        if (Math.abs(r - e.getSeq()) < Math.abs(near - e.getSeq())) {
-                            near = r;
+                    // Each real shuffle is used once: two shadow shuffles close together (two fetch lands) are both
+                    // nearest to the first real one otherwise, and the cards taken after the second never go on top.
+                    // The index of the last one used is kept beside the counts (saved with the turn-start state).
+                    int usedKey = SHUFFLE_USED_KEY + seat;
+                    int from = shuffles.getOrDefault(usedKey, -1) + 1;
+                    int near = from < realSeqs.size() ? from : 0;
+                    for (int i = near; i < realSeqs.size(); i++) {
+                        if (Math.abs(realSeqs.get(i) - e.getSeq()) < Math.abs(realSeqs.get(near) - e.getSeq())) {
+                            near = i;
                         }
                     }
-                    departuresOnTop(seat, near);
+                    shuffles.put(usedKey, near);
+                    departuresOnTop(seat, realSeqs.get(near));
                 } else if (k < realSeqs.size()) {
                     reorderLibrary(seat, realSeqs.get(k));
                 } else {
