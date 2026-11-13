@@ -985,6 +985,9 @@ public class AgentPlayerController extends ObservedAiController {
         if (checkingCosts) {
             return PlaySpellAbility.payManaCost(this, toPay, costPartMana, sa, player, prompt, matrix, effect);
         }
+        if (effect) {
+            ObservedAiController.forgetCastPayment(sa);
+        }
         planCostOrder(toPay, costPartMana, sa, effect);
         realCostAdjust = true; // until applyManaToCost starts: Forge adjusts the cost of this payment in between
         try {

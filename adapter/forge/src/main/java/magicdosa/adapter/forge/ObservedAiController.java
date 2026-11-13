@@ -190,6 +190,27 @@ public class ObservedAiController extends PlayerControllerAi {
         return weighing(super::chooseSpellAbilityToPlay);
     }
 
+    /**
+     * A cost paid while {@code sa} resolves (605.3a "unless its controller pays", ward): the mana abilities that paid
+     * for casting {@code sa} are still listed on it (Forge clears the list before a payment, not after), and when this
+     * payment is not made Forge's refund would undo them too, untapping the caster's lands (upstream candidate 10).
+     * The list starts empty, for this payment's own sources.
+     */
+    static void forgetCastPayment(SpellAbility sa) {
+        if (sa != null) {
+            sa.getPayingManaAbilities().clear();
+        }
+    }
+
+    @Override
+    public boolean payManaCost(forge.card.mana.ManaCost toPay, forge.game.cost.CostPartMana costPartMana, SpellAbility sa,
+                               String prompt, forge.game.mana.ManaConversionMatrix matrix, boolean effect) {
+        if (effect) {
+            forgetCastPayment(sa);
+        }
+        return super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
+    }
+
     @Override
     public List<SpellAbility> chooseSpellAbilityToPlay() {
         List<SpellAbility> chosen = weighing(super::chooseSpellAbilityToPlay);
