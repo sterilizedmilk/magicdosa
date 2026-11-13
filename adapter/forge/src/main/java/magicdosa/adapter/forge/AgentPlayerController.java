@@ -1084,6 +1084,10 @@ public class AgentPlayerController extends ObservedAiController {
                     SpellAbility source = sources.get(i - groups.size() - (life ? 1 : 0));
                     if (PlaySpellAbility.playSpellAbility(this, player, source)) {
                         session.manaAbilityActivated(player, source);
+                        // a source activated to pay: one of the payment's mana abilities, as Forge's own payment
+                        // input records it (InputPayMana: payManaFromAbility), so that a payment that is not made
+                        // undoes it (untapped, its mana gone) instead of leaving the mana in the pool
+                        ability.getPayingManaAbilities().add(source);
                     }
                 } else {
                     completed = true;

@@ -905,6 +905,7 @@ public final class ForgeGameSession {
             }
         }
         facts.prune();
+        tapBaseline();
         // reveals: objects whose identity the viewer sees now and did not see before
         for (int viewer : agentSeats) {
             Player v = player(viewer);
@@ -1004,6 +1005,36 @@ public final class ForgeGameSession {
             var designations = observations.designations(p);
             if (facts.designationsChanged(s, designations)) {
                 emitAll(false, b -> b.setDesignations(DesignationsChanged.newBuilder().setSeat(s).addAllDesignations(designations)));
+            }
+        }
+    }
+
+    /** Each battlefield object's tapped state as last reported (TapChanged), by entity ID. */
+    private final Map<Long, Boolean> reportedTapped = new HashMap<>();
+
+    /**
+     * Permanents whose tapped state changed without Forge's tap event: undoing a mana ability when a payment is not
+     * made untaps its source (CostTap.refund sets the state directly) and Forge reports only a battlefield update.
+     */
+    private void tapsWithoutEvent() {
+        for (Player p : game.getRegisteredPlayers()) {
+            for (Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                long id = ids.idOf(c);
+                Boolean was = reportedTapped.get(id);
+                if (was != null && was != c.isTapped()) {
+                    reportedTapped.put(id, c.isTapped());
+                    boolean tapped = c.isTapped();
+                    emitAll(false, b -> b.setTap(TapChanged.newBuilder().setId(id).setTapped(tapped)));
+                }
+            }
+        }
+    }
+
+    /** The tapped state of permanents not reported yet (entered the battlefield) as they are now. */
+    private void tapBaseline() {
+        for (Player p : game.getRegisteredPlayers()) {
+            for (Card c : p.getCardsIn(ZoneType.Battlefield)) {
+                reportedTapped.putIfAbsent(ids.idOf(c), c.isTapped());
             }
         }
     }
@@ -1344,7 +1375,11 @@ public final class ForgeGameSession {
             playerCounters(game.getPlayer(e.receiver()));
         } else if (event instanceof GameEventCardTapped e) {
             Card c = game.findByView(e.card());
+            reportedTapped.put(ids.idOf(c), e.tapped());
             emitAll(false, b -> b.setTap(TapChanged.newBuilder().setId(ids.idOf(c)).setTapped(e.tapped())));
+        } else if (event instanceof forge.game.event.GameEventZone e && e.zoneType() == ZoneType.Battlefield
+                && e.mode() == EventValueChangeType.ComplexUpdate) {
+            tapsWithoutEvent();
         } else if (event instanceof GameEventManaPool e) {
             if (e.mode() == EventValueChangeType.Cleared) {
                 poolsCleared = true;
