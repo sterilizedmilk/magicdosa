@@ -1286,7 +1286,26 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected Map<Card, Integer> answerAssignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining,
                                                           int damageDealt, GameEntity defender, boolean overrideOrder) {
-        ResolutionChoice r = choice("assignCombatDamage");
+        // Forge asks once per creature that deals combat damage, in its combat's order, which the shadow game need not
+        // share (two blockers): the recorded answer is the one whose recipients this creature can damage
+        java.util.Set<Long> mayHit = new java.util.HashSet<>();
+        for (Card b : blockers) {
+            mayHit.add(session.ids().idOf(b));
+        }
+        ResolutionChoice r = null;
+        if (answering <= 1) {
+            Event e = source.takeChoice(seat, "assignCombatDamage", rc -> rc.getChosenList().stream()
+                .allMatch(o -> o.hasPlayerSeat() || defender instanceof Card d && session.ids().idOf(d) == o.getEntityId()
+                    || mayHit.contains(o.getEntityId())));
+            if (e == null) {
+                e = source.takeChoice(seat, "assignCombatDamage");
+            }
+            if (e != null) {
+                r = e.getResolutionChoice();
+            } else {
+                source.mismatch(seat, "assignCombatDamage asked; next recorded: " + describe(source.peek(seat)));
+            }
+        }
         if (r == null) {
             return super.answerAssignCombatDamage(attacker, blockers, remaining, damageDealt, defender, overrideOrder);
         }

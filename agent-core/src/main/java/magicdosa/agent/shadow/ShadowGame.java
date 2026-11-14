@@ -2129,13 +2129,19 @@ public final class ShadowGame {
 
         @Override
         public Event takeChoice(int seat, String method) {
+            return takeChoice(seat, method, r -> true);
+        }
+
+        @Override
+        public Event takeChoice(int seat, String method, java.util.function.Predicate<magicdosa.protocol.v1.ResolutionChoice> fits) {
             peek(seat);
             for (int i = opponentIdx; i < opponentRecord.size(); i++) {
                 Event e = opponentRecord.get(i);
                 if (e.getBodyCase() != Event.BodyCase.RESOLUTION_CHOICE) {
                     return null; // the seat's next action ends the window
                 }
-                if (!opponentUsed.contains(i) && e.getResolutionChoice().getEnginePrompt().equals(method)) {
+                if (!opponentUsed.contains(i) && e.getResolutionChoice().getEnginePrompt().equals(method)
+                        && fits.test(e.getResolutionChoice())) {
                     opponentUsed.add(i);
                     if (beliefSamples) {
                         // a chosen hidden card (discard, search) is the card its later move shows

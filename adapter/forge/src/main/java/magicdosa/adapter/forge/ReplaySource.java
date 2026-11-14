@@ -24,6 +24,14 @@ public interface ReplaySource {
     Event takeChoice(int seat, String method);
 
     /**
+     * As {@link #takeChoice(int, String)}, the first such choice that {@code fits}: Forge may ask the same thing in
+     * another order (the combat damage of each blocker).
+     */
+    default Event takeChoice(int seat, String method, java.util.function.Predicate<magicdosa.protocol.v1.ResolutionChoice> fits) {
+        return takeChoice(seat, method);
+    }
+
+    /**
      * The seat's library as it really was right after the event {@code seq} (top first, entity IDs), when the source
      * knows hidden cards (verification 1: from the privileged records); empty otherwise.
      */
