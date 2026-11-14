@@ -244,7 +244,9 @@ public class ObservedAiController extends PlayerControllerAi {
                 takenBack = true;
                 session.stats().note("Forge AI action abandoned after paying, taken back: " + sa.getHostCard().getName()
                     + (clean ? "" : " (restore reported problems)"));
-                return r;
+                // Nothing was played: PhaseHandler must not make this player the first to have priority again (it does
+                // when this returns true), or the opponent, who had already passed, would get priority once more.
+                return false;
             }
             session.playedWithoutStack(player, sa);
             return r;
