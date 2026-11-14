@@ -500,12 +500,47 @@ public class ReplayAiController extends ObservedAiController {
             payment = recordedPayment;
             recordedPayment = List.of(); // taken first: making the mana pays the mana abilities' own costs here too
             mergedUses(payment).forEach(this::makeMana);
+            toPay = phyrexianLife(toPay, payment, sa);
         }
         boolean paid = super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
         if (paid && payment != null) {
             settlePayment(sa, payment);
         }
         return paid;
+    }
+
+    /**
+     * Phyrexian shards the real game paid with life: as many as the cost has mana symbols beyond the recorded units
+     * (Dismember paid with {B}, {G} and 2 life). They are paid with life here, before Forge AI pays the rest from the
+     * pool: with the recorded mana already made, Forge AI finds no untapped source and gives up on a phyrexian shard
+     * left over (ComputerUtilMana only pays life while it still has sources, unless the whole cost is phyrexian).
+     */
+    private forge.card.mana.ManaCost phyrexianLife(forge.card.mana.ManaCost toPay,
+                                                   List<magicdosa.protocol.v1.ManaPayment> payment, SpellAbility sa) {
+        if (!toPay.hasPhyrexian() || toPay.countX() > 0) {
+            return toPay;
+        }
+        int units = 0;
+        for (magicdosa.protocol.v1.ManaPayment piece : payment) {
+            if (piece.hasAbility()) {
+                for (magicdosa.protocol.v1.ManaUnit u : piece.getAbility().getProducedList()) {
+                    units += Math.max(1, u.getAmount());
+                }
+            } else {
+                units++;
+            }
+        }
+        int life = Math.min(toPay.getPhyrexianCount(), toPay.getCMC() - units);
+        if (life <= 0 || !player.canPayLife(2 * life, false, sa)) {
+            return toPay;
+        }
+        forge.game.mana.ManaCostBeingPaid rest = new forge.game.mana.ManaCostBeingPaid(toPay);
+        for (int i = 0; i < life; i++) {
+            rest.payPhyrexian();
+        }
+        player.payLife(2 * life, sa, false);
+        sa.setSpendPhyrexianMana(true);
+        return rest.toManaCost();
     }
 
     /**
