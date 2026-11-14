@@ -33,7 +33,12 @@ public final class PairingWorker {
             RandomGames.initForge();
             CardKeys keys = CardKeys.load();
             Set<String> before = new TreeSet<>(keys.unmapped());
+            long forgeReady = ManagementFactory.getRuntimeMXBean().getUptime(); // measurement only
             AgentConnection agent = AgentConnection.open(args[5]);
+            if (Boolean.getBoolean("magicdosa.timing")) {
+                System.out.println("worker timing: JVM start to Forge ready " + forgeReady + " ms, to agent-core connected "
+                    + ManagementFactory.getRuntimeMXBean().getUptime() + " ms");
+            }
             RandomGames.Summary s = RandomGames.run(args[0], args[1], args[2], Integer.parseInt(args[3]),
                 Path.of(args[4]), agent, keys, args[6]);
             agent.close();
