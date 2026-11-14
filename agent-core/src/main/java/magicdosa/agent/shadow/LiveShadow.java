@@ -410,6 +410,9 @@ public final class LiveShadow implements ShadowGame.Live {
             out.add("shadow.end=" + r.end.replace('\n', ' '));
             out.add("shadow.error=" + (r.error == null ? "" : r.error.replace('\n', ' ')));
             r.samples.forEach(x -> out.add("shadow.sample=" + x.replace('\n', ' ')));
+            r.recovery1Failed.forEach((k, n) -> out.add("shadow.recovery1Failed=" + n + " " + k));
+            r.recovery2Failed.forEach((k, n) -> out.add("shadow.recovery2Failed=" + n + " " + k));
+            r.skippedBy.forEach((k, n) -> out.add("shadow.skippedBy=" + n + " " + k));
         } else {
             out.add("shadow.error=" + (shadow == null ? "not started" : "failed"));
         }

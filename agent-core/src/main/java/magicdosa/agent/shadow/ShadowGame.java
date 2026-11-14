@@ -106,6 +106,12 @@ public final class ShadowGame {
         public int events, eventsMatched;
         public int rebuilds;
         public final List<String> gaps = new ArrayList<>();
+        /**
+         * Measurement (planning item 17): why a recovery did not hold, by kind of difference (paths without IDs and
+         * values), and the search-skipped decisions by the cause of their skip.
+         */
+        public final Map<String, Integer> recovery1Failed = new TreeMap<>(), recovery2Failed = new TreeMap<>(),
+            skippedBy = new TreeMap<>();
         public final List<String> replayMismatches = new ArrayList<>();
         /** The first differences seen (a few per game), with the decision they came from. */
         public final List<String> samples = new ArrayList<>();
@@ -132,6 +138,9 @@ public final class ShadowGame {
             r.mementoNanos = mementoNanos;
             r.restoreNanos = restoreNanos;
             r.mismatchesByLevel.putAll(mismatchesByLevel);
+            r.recovery1Failed.putAll(recovery1Failed);
+            r.recovery2Failed.putAll(recovery2Failed);
+            r.skippedBy.putAll(skippedBy);
             r.criticalMismatches = criticalMismatches;
             r.minorOnlyMismatches = minorOnlyMismatches;
             r.snapshots = snapshots;
@@ -436,6 +445,8 @@ public final class ShadowGame {
             return false;
         }
         if (u.kind == Unwind.Kind.NEXT_TURN) {
+            String why = u.why.replaceAll("\\{.*", "").replaceAll("\\d+", "N");
+            skipCause = "to the next turn start: " + (why.length() > 90 ? why.substring(0, 90) : why);
             GameRecord.Snapshot next = snapshotAfter(u.turn);
             while (next == null && live != null && live.pending() != null) {
                 // live: the real game has not reached a later turn start yet; its requests until then are
@@ -1120,8 +1131,30 @@ public final class ShadowGame {
             long id = rec.decisions.get(decisionIdx++).record().getRequest().getDecisionId();
             firstTry.putIfAbsent(id, false);
             lastTry.put(id, false);
-            result.searchSkipped++;
+            skipped();
         }
+    }
+
+    /** The builder's gaps at the last rebuild, as kinds (measurement only). */
+    private java.util.Set<String> lastRebuildGaps = java.util.Set.of();
+
+    private String rebuildGaps() {
+        return lastRebuildGaps.isEmpty() ? " (builder gaps: none)" : " (builder gaps: " + String.join("; ", lastRebuildGaps) + ")";
+    }
+
+    /** The cause the next search-skipped decisions are counted under (measurement only). */
+    private String skipCause = "unknown";
+
+    private void skipped() {
+        result.searchSkipped++;
+        result.skippedBy.merge(skipCause, 1, Integer::sum);
+    }
+
+    /** A difference as a kind: its level and path, without the decision, IDs, indices and values. */
+    static String kind(String diff) {
+        return diff.replaceAll("^decision \\d+ (\\S+) turn \\d+ (\\S+): ", "$1 $2 ")
+            .replaceAll("^turn \\d+ start: ", "TURN-START ").replaceAll("#\\d+", "#").replaceAll("\\[\\d+\\]", "[]")
+            .replaceAll(": real=.*", "").replaceAll(" \\(seq \\d+\\)", "");
     }
 
     /** The first real turn-start snapshot after {@code turn}, or null. */
@@ -1394,6 +1427,8 @@ public final class ShadowGame {
         });
         result.rebuilds++;
         built.gaps().forEach(g -> result.gaps.add("turn " + s.getObservation().getGame().getTurn() + ": " + g));
+        lastRebuildGaps = new java.util.TreeSet<>();
+        built.gaps().forEach(g -> lastRebuildGaps.add(g.replaceAll("\\d+", "#")));
         game = built.game();
         // Forge AI decides under a wall-clock limit; under load that changes its choices. Like the runner's
         // reproducible runs, the shadow gives it a long limit (a safeguard, never a decision budget)
@@ -1789,6 +1824,10 @@ public final class ShadowGame {
                         // rebuilt for this turn and still different: what the builder cannot express (a gap)
                         stage = 3;
                         result.recoveries3++;
+                        String k = "rebuilt turn start differs: " + kind("turn " + turn + " start: " + diffs.stream()
+                            .filter(Fingerprint.Diff::critical).findFirst().orElse(diffs.get(0)));
+                        result.recovery2Failed.merge(k, 1, Integer::sum);
+                        skipCause = "recovery 2 did not hold: " + k + rebuildGaps();
                         sample(result.samples, "search skipped for turn " + turn + ": the rebuilt turn start differs");
                     }
                 }
@@ -1883,7 +1922,7 @@ public final class ShadowGame {
             }
             lastTry.put(id, match);
             if (stage == 3) {
-                result.searchSkipped++; // decided by the network alone: search skipped, cause recorded at the turn
+                skipped(); // decided by the network alone: search skipped, cause recorded at the turn
             } else if (match) {
                 // tracking
             } else {
@@ -1909,7 +1948,7 @@ public final class ShadowGame {
                 }
                 if (critical && !forcedRegeneration) {
                     escalate(real, where + ": " + diffs.get(0));
-                    result.searchSkipped++;
+                    skipped();
                 }
             }
             DecisionResponse resp = recorded;
@@ -2034,10 +2073,13 @@ public final class ShadowGame {
         } else if (stage == 1) {
             stage = 2;
             result.recoveries2++;
+            result.recovery1Failed.merge(kind(cause), 1, Integer::sum);
             throw new Unwind("recovery 2 at " + where, Unwind.Kind.RESTORE);
         }
         stage = 3;
         result.recoveries3++;
+        result.recovery2Failed.merge(kind(cause), 1, Integer::sum);
+        skipCause = "recovery 2 did not hold: " + kind(cause) + rebuildGaps();
         sample(result.samples, "search skipped for the rest of turn " + real.getObservation().getGame().getTurn() + ": " + cause);
     }
 

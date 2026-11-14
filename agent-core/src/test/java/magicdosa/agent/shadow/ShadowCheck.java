@@ -270,6 +270,22 @@ public final class ShadowCheck {
                 s.println("run errors: " + errors + "; time " + millis + " ms (sum over streams)");
                 s.println("builder gaps by kind:");
                 gapKinds.forEach((k, n) -> s.println("  " + n + "  " + k));
+                // measurement (planning item 17): why recoveries did not hold, and the skipped decisions by cause
+                Map<String, Long> r1 = new TreeMap<>(), r2 = new TreeMap<>(), sk = new TreeMap<>();
+                for (ShadowGame.Result r : results) {
+                    r.recovery1Failed.forEach((k, n) -> r1.merge(k, (long) n, Long::sum));
+                    r.recovery2Failed.forEach((k, n) -> r2.merge(k, (long) n, Long::sum));
+                    r.skippedBy.forEach((k, n) -> sk.merge(k, (long) n, Long::sum));
+                }
+                s.println("recovery 1 did not hold (then recovery 2), by kind of difference:");
+                r1.entrySet().stream().sorted((x, y) -> Long.compare(y.getValue(), x.getValue()))
+                    .forEach(e -> s.println("  " + e.getValue() + "  " + e.getKey()));
+                s.println("recovery 2 did not hold (then search skipped), by kind of difference:");
+                r2.entrySet().stream().sorted((x, y) -> Long.compare(y.getValue(), x.getValue()))
+                    .forEach(e -> s.println("  " + e.getValue() + "  " + e.getKey()));
+                s.println("search-skipped decisions by cause:");
+                sk.entrySet().stream().sorted((x, y) -> Long.compare(y.getValue(), x.getValue()))
+                    .forEach(e -> s.println("  " + e.getValue() + "  " + e.getKey()));
                 boolean pass = errors == 0 && matched == decisions && snapMatched == snapshots && decisions > 0;
                 s.println("RESULT " + (pass ? "PASS" : "FAIL"));
                 s.println();
