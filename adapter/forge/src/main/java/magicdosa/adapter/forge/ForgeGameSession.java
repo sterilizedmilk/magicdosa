@@ -193,6 +193,8 @@ public final class ForgeGameSession {
      * 0 neither). Forge's Dig puts the cards it does not take on the bottom this way: the same object, no new ID.
      */
     private final List<Map.Entry<Card, Integer>> withinLibrary = new ArrayList<>();
+    /** True while the event being translated is a library zone event of such a move (the group is not over yet). */
+    private boolean holdWithinLibrary;
     /** During an action: each moved card's ID from before the action began (Forge card ID -> entity ID). */
     private final Map<Integer, Long> idsAtActionStart = new HashMap<>();
     private long decisions;
@@ -642,7 +644,7 @@ public final class ForgeGameSession {
      * an order it did not choose are a group. A seat that did not see it no longer knows where it is.
      */
     private void movedWithinLibraries() {
-        if (withinLibrary.isEmpty()) {
+        if (withinLibrary.isEmpty() || holdWithinLibrary) {
             return;
         }
         List<Map.Entry<Card, Integer>> moved = new ArrayList<>(withinLibrary);
@@ -1376,8 +1378,12 @@ public final class ForgeGameSession {
                 int idx = lib.indexOf(c);
                 withinLibrary.add(Map.entry(c, idx == lib.size() - 1 ? -1 : idx == 0 ? 1 : 0));
             }
+            holdWithinLibrary = false; // a sync from here on (a decision asked now) ends the group
             return; // collected until the next sync: the cards an effect moves together are one group
         }
+        // each of those moves first fires the library's own zone events (removed, added): they do not end the group
+        holdWithinLibrary = event instanceof forge.game.event.GameEventZone z && z.zoneType() == ZoneType.Library
+            && !withinLibrary.isEmpty();
         boolean action = event instanceof GameEventSpellAbilityCast || event instanceof GameEventLandPlayed
             || event instanceof GameEventAttackersDeclared || event instanceof GameEventBlockersDeclared;
         if (action) {
