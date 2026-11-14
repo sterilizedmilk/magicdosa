@@ -105,7 +105,8 @@ final class ObservationBuilder {
             if (seat == viewerSeat) {
                 mp.addAllCurrentDeck(counts(session.player(seat).getRegisteredPlayer().getDeck().getMain().toFlatList()));
             } else {
-                session.seenInEarlierGames(viewerSeat).forEach((oracle, n) ->
+                // by oracle_id: the map's own order is a hash order that changes when a session checkpoint is restored
+                new TreeMap<>(session.seenInEarlierGames(viewerSeat)).forEach((oracle, n) ->
                     mp.addSeenInEarlierGames(CardCount.newBuilder().setOracleId(oracle).setCount(n)));
             }
             b.addPlayers(mp);
