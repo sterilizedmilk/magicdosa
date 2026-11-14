@@ -193,8 +193,6 @@ public final class ForgeGameSession {
      * 0 neither). Forge's Dig puts the cards it does not take on the bottom this way: the same object, no new ID.
      */
     private final List<Map.Entry<Card, Integer>> withinLibrary = new ArrayList<>();
-    /** True while the event being translated is a library zone event of such a move (the group is not over yet). */
-    private boolean holdWithinLibrary;
     /** During an action: each moved card's ID from before the action began (Forge card ID -> entity ID). */
     private final Map<Integer, Long> idsAtActionStart = new HashMap<>();
     private long decisions;
@@ -482,8 +480,14 @@ public final class ForgeGameSession {
         return 1;
     }
 
+    /** The seat's observation now; library moves collected so far are taken in first. */
+    private Observation observation(int seat) {
+        movedWithinLibraries();
+        return observations.build(seat);
+    }
+
     public DecisionRequest reask(DecisionRequest r) {
-        return r.toBuilder().setObservation(observations.build(r.getSeat())).build();
+        return r.toBuilder().setObservation(observation(r.getSeat())).build();
     }
 
     // ---- accessors ----
@@ -644,7 +648,7 @@ public final class ForgeGameSession {
      * an order it did not choose are a group. A seat that did not see it no longer knows where it is.
      */
     private void movedWithinLibraries() {
-        if (withinLibrary.isEmpty() || holdWithinLibrary) {
+        if (withinLibrary.isEmpty()) {
             return;
         }
         List<Map.Entry<Card, Integer>> moved = new ArrayList<>(withinLibrary);
@@ -656,6 +660,9 @@ public final class ForgeGameSession {
             List<Card> lost = new ArrayList<>();
             for (Map.Entry<Card, Integer> m : moved) {
                 Card c = m.getKey();
+                if (c.getZone() == null || !c.getZone().is(ZoneType.Library)) {
+                    continue; // left the library since
+                }
                 boolean seen = visibleIds.get(viewer).contains(ids.idOf(c)) || visible(c, v);
                 (!seen || m.getValue() == 0 ? lost : m.getValue() > 0 ? top : bottom).add(c);
             }
@@ -888,7 +895,6 @@ public final class ForgeGameSession {
 
     /** Issues IDs for zone changes since the last call and streams them, with reveals (design: 사건 ② ③). */
     void syncZones() {
-        movedWithinLibraries();
         List<EntityIds.Move> moves = ids.sync(game);
         movedInLastSync.clear();
         for (EntityIds.Move m : moves) {
@@ -1116,6 +1122,7 @@ public final class ForgeGameSession {
     private final Map<Card, LibraryPosition> arrangedPositions = new java.util.IdentityHashMap<>();
 
     private void libraryArranged(Player owner, int toTop, int toBottom, int toGraveyard) {
+        movedWithinLibraries();
         int s = seat(owner);
         emit(false, (viewer, b) -> {
             LibraryArranged.Builder a = LibraryArranged.newBuilder().setSeat(s).setLookedAt(toTop + toBottom + toGraveyard)
@@ -1338,7 +1345,7 @@ public final class ForgeGameSession {
         snapshotTurn = game.getPhaseHandler().getTurn();
         for (int viewer : agentSeats) {
             TurnStartSnapshot s = TurnStartSnapshot.newBuilder().setGameId(gameId).setSeat(viewer)
-                .setSeq(seq.get(viewer)).setObservation(observations.build(viewer)).build();
+                .setSeq(seq.get(viewer)).setObservation(observation(viewer)).build();
             send(AdapterMessage.newBuilder().setSnapshot(s).build());
             log.write(LogRecord.newBuilder().setSnapshot(s).build());
             // hidden state at the turn start too: the shadow game is rebuilt from the snapshot (phase 2)
@@ -1378,12 +1385,11 @@ public final class ForgeGameSession {
                 int idx = lib.indexOf(c);
                 withinLibrary.add(Map.entry(c, idx == lib.size() - 1 ? -1 : idx == 0 ? 1 : 0));
             }
-            holdWithinLibrary = false; // a sync from here on (a decision asked now) ends the group
-            return; // collected until the next sync: the cards an effect moves together are one group
+            return; // collected until the effect has resolved: the cards it moves together are one group
         }
-        // each of those moves first fires the library's own zone events (removed, added): they do not end the group
-        holdWithinLibrary = event instanceof forge.game.event.GameEventZone z && z.zoneType() == ZoneType.Library
-            && !withinLibrary.isEmpty();
+        if (event instanceof forge.game.event.GameEventSpellResolved) {
+            movedWithinLibraries(); // the moves of one effect are one group
+        }
         boolean action = event instanceof GameEventSpellAbilityCast || event instanceof GameEventLandPlayed
             || event instanceof GameEventAttackersDeclared || event instanceof GameEventBlockersDeclared;
         if (action) {
@@ -1769,7 +1775,7 @@ public final class ForgeGameSession {
         DecisionRequest.Builder requestBuilder = DecisionRequest.newBuilder()
             .setProtocolVersion(Versions.PROTOCOL).setGameId(gameId).setDecisionId(decisionId).setSeat(seat)
             .setAppliedSeq(seq.get(seat)).setSeed(seeds.nextLong()).setType(type)
-            .setObservation(observations.build(seat)).addAllCandidates(candidates).setConstraints(constraints)
+            .setObservation(observation(seat)).addAllCandidates(candidates).setConstraints(constraints)
             .setContext(context == null ? DecisionContext.getDefaultInstance() : context)
             .addAllRejections(rejections);
         if (acting != decider) {
