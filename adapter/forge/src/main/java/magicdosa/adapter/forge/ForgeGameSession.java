@@ -770,8 +770,8 @@ public final class ForgeGameSession {
                     if (first) {
                         saw(viewer, c);
                     }
-                } else if (!newSeer) {
-                    continue;
+                } else if (!newSeer && !c.getZone().is(ZoneType.Library)) {
+                    continue; // a library card looked at again is told again: which objects a dig took is public
                 }
                 // the chooser learns the card; other streams learn that it was seen (Q10), named only where seen
                 CardRevealed.Builder r = CardRevealed.newBuilder().setId(id)

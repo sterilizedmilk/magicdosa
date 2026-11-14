@@ -259,6 +259,11 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
   of seats that saw it. `LogCheck` fails a stream that names a card its seat did not see, and checks every stated
   library position against the real order recorded with the request. `harness.RevealCheck` (self-play) requires the
   fact "the opponent saw this card of yours" to appear.
+  Looks at library cards (Q10 changed 2026-11-14, user decision: every look, not once per object): each time a seat
+  looks at cards in a library (a dig, Narset's top four), every stream gets a LOOKED_AT reveal naming the objects, also
+  for objects that seat looked at before; the identity still goes only to streams of seats that saw the card. Which
+  objects a dig took is public, and a look repeated at a card seen before shows where it is now. Outside libraries a
+  look is still told once per object.
 - Tokens (Q3): every token the four decks make maps to a Scryfall token oracle_id (the table builder now also knows
   Empower's Jace token). A token that does not gets `token_fallback` (the ability that made it + its place in that
   ability's token list) and is listed by RandomGames instead of counting as unmapped.
