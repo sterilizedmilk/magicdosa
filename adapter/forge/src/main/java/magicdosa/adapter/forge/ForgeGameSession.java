@@ -188,6 +188,11 @@ public final class ForgeGameSession {
     private final Map<Integer, Integer> mulligans = new HashMap<>();
     private final List<PrivilegedRecord> privileged = new ArrayList<>();
     private final Set<Integer> movedInLastSync = new HashSet<>();
+    /**
+     * Cards moved inside their own library since the last sync, in order, with the end each went to (1 top, -1 bottom,
+     * 0 neither). Forge's Dig puts the cards it does not take on the bottom this way: the same object, no new ID.
+     */
+    private final List<Map.Entry<Card, Integer>> withinLibrary = new ArrayList<>();
     /** During an action: each moved card's ID from before the action began (Forge card ID -> entity ID). */
     private final Map<Integer, Long> idsAtActionStart = new HashMap<>();
     private long decisions;
@@ -630,6 +635,32 @@ public final class ForgeGameSession {
         return s != null && id != 0 && s.contains(id);
     }
 
+    /**
+     * E3: cards moved inside their library. Where they went is decided by the effect, not by where they happen to land:
+     * Monumental Henge puts the rest of the top five on the bottom in a random order, and with a short library the
+     * random order can leave a card on top. A seat that saw a card knows the end it went to; several put on the bottom in
+     * an order it did not choose are a group. A seat that did not see it no longer knows where it is.
+     */
+    private void movedWithinLibraries() {
+        if (withinLibrary.isEmpty()) {
+            return;
+        }
+        List<Map.Entry<Card, Integer>> moved = new ArrayList<>(withinLibrary);
+        withinLibrary.clear();
+        for (int viewer : agentSeats) {
+            Player v = player(viewer);
+            List<Card> top = new ArrayList<>();
+            List<Card> bottom = new ArrayList<>();
+            List<Card> lost = new ArrayList<>();
+            for (Map.Entry<Card, Integer> m : moved) {
+                Card c = m.getKey();
+                boolean seen = visibleIds.get(viewer).contains(ids.idOf(c)) || visible(c, v);
+                (!seen || m.getValue() == 0 ? lost : m.getValue() > 0 ? top : bottom).add(c);
+            }
+            facts.movedWithinLibrary(viewer, top, bottom, lost);
+        }
+    }
+
     boolean visible(Card c, Player viewer) {
         return c.getView().canBeShownTo(viewer.getView());
     }
@@ -855,6 +886,7 @@ public final class ForgeGameSession {
 
     /** Issues IDs for zone changes since the last call and streams them, with reveals (design: 사건 ② ③). */
     void syncZones() {
+        movedWithinLibraries();
         List<EntityIds.Move> moves = ids.sync(game);
         movedInLastSync.clear();
         for (EntityIds.Move m : moves) {
@@ -1334,6 +1366,17 @@ public final class ForgeGameSession {
         }
         if (snapshotTurn < 0) {
             return; // nothing is streamed before the first snapshot
+        }
+        if (event instanceof forge.game.event.GameEventCardChangeZone e && e.from() != null && e.from().equals(e.to())
+                && e.to().zoneType() == ZoneType.Library) {
+            Card c = game.findByView(e.card());
+            if (c != null && c.getZone() != null && c.getZone().is(ZoneType.Library)) {
+                List<Card> lib = new ArrayList<>();
+                c.getZone().getCards().forEach(lib::add);
+                int idx = lib.indexOf(c);
+                withinLibrary.add(Map.entry(c, idx == lib.size() - 1 ? -1 : idx == 0 ? 1 : 0));
+            }
+            return; // collected until the next sync: the cards an effect moves together are one group
         }
         boolean action = event instanceof GameEventSpellAbilityCast || event instanceof GameEventLandPlayed
             || event instanceof GameEventAttackersDeclared || event instanceof GameEventBlockersDeclared;

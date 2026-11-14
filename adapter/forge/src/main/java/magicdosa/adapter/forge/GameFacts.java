@@ -200,6 +200,9 @@ final class GameFacts {
     void arranged(int seat, List<Card> top, List<Card> bottom) {
         top.forEach(c -> known(seat).put(c, new Known(Anchor.TOP, 0, 0)));
         bottom.forEach(c -> known(seat).put(c, new Known(Anchor.BOTTOM, 0, 0)));
+        // Forge moves them inside the library afterwards (movedWithinLibrary): in the order the seat chose
+        orderedBy(seat, top);
+        orderedBy(seat, bottom);
     }
 
     /** The seat chose the order in which these cards go into a library. */
@@ -233,6 +236,31 @@ final class GameFacts {
         }
         if (orderedBySeat.containsKey(seat)) {
             orderedBySeat.get(seat).removeAll(cards);
+        }
+    }
+
+    /**
+     * Cards moved inside their library: {@code top} to the top, {@code bottom} to the bottom (in the order moved), and
+     * {@code lost} somewhere the seat does not know. Several moved to one end in an order the seat did not choose: on
+     * the bottom a group, on top unknown.
+     */
+    void movedWithinLibrary(int seat, List<Card> top, List<Card> bottom, List<Card> lost) {
+        Set<Card> ordered = orderedBySeat.getOrDefault(seat, Set.of());
+        lost.forEach(c -> known(seat).remove(c));
+        if (top.size() == 1 || ordered.containsAll(top)) {
+            top.forEach(c -> known(seat).put(c, new Known(Anchor.TOP, 0, 0)));
+        } else {
+            top.forEach(c -> known(seat).remove(c));
+        }
+        if (bottom.size() == 1 || ordered.containsAll(bottom)) {
+            bottom.forEach(c -> known(seat).put(c, new Known(Anchor.BOTTOM, 0, 0)));
+        } else if (!bottom.isEmpty()) {
+            int g = groups.merge(seat, 1, Integer::sum);
+            bottom.forEach(c -> known(seat).put(c, new Known(Anchor.GROUP, g, bottom.size())));
+        }
+        if (orderedBySeat.containsKey(seat)) {
+            orderedBySeat.get(seat).removeAll(top);
+            orderedBySeat.get(seat).removeAll(bottom);
         }
     }
 

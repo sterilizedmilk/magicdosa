@@ -68,6 +68,11 @@ same: a model trained on shards of one version is not fed observations of anothe
     modes; a cast on the human play path showed the modes Forge AI weighed earlier.
   - Match context (124f1b7): the starting player falls back to the session's first player while Forge has none
     (the start features of the game's first observation).
+  - Library positions, moves inside a library (2026-11-14, after the final 16x60, no model trained on 4 yet): cards
+    an effect moves within their library (a dig's rest to the bottom in a random order) take the place the effect
+    gives them: several put on the bottom in an order the seat did not choose are a bottom group. Before, the anchor
+    rule could still give a card known on top an exact place when the random order happened to leave it there.
+    Opponent's seen cards (`seen_in_earlier_games`) are listed by `oracle_id`.
   Not reasons: 9ee8f21 (the dug cards reach only the digger's own stream as reveals; the encoder reads the
   observation), 269964d and 5275d58 (decision context fields the encoder does not read), and the shadow-only
   changes.
