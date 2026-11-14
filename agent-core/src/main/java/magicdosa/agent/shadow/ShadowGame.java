@@ -1231,6 +1231,28 @@ public final class ShadowGame {
     }
 
     /** A new shadow game from a real turn-start snapshot and the hidden state recorded with it. */
+    /**
+     * A rebuilt game: the cards plotted before the snapshot are plotted again (the snapshot's game state has no such
+     * flag; Forge lets a plotted card be cast from exile only on a later turn than the one it was exiled on). The
+     * record shows the plot: the activation of a card's plot keyword, then its move into exile.
+     */
+    private void plotted(long snapshotSeq) {
+        java.util.Set<Long> plotting = new java.util.HashSet<>();
+        for (Event e : rec.events.headMap(snapshotSeq, true).values()) {
+            if (e.getBodyCase() == Event.BodyCase.ACTIVATE_ABILITY && e.getActivateAbility().getAbility().hasKeyword()
+                    && e.getActivateAbility().getAbility().getKeyword().getName().equals("plot")) {
+                plotting.add(e.getActivateAbility().getSourceId());
+            } else if (e.getBodyCase() == Event.BodyCase.ZONE_MOVE && plotting.remove(e.getZoneMove().getPrevId())
+                    && e.getZoneMove().getTo() == magicdosa.protocol.v1.Zone.ZONE_EXILE) {
+                Card c = session.cardOf(e.getZoneMove().getId());
+                if (c != null && c.isInZone(forge.game.zone.ZoneType.Exile)) {
+                    c.setPlotted(true);
+                    c.setTurnInZone(e.getTurn());
+                }
+            }
+        }
+    }
+
     private void rebuild(GameRecord.Snapshot snap) {
         TurnStartSnapshot s = snap.snapshot();
         PrivilegedRecord hidden = rec.privilegedAt(s.getSeq());
@@ -1335,6 +1357,7 @@ public final class ShadowGame {
             }
         }
         session.resume(s, built.ids(), built.effectIds(), built.nextId(), seenIds(s));
+        plotted(s.getSeq());
         pregame = s.getObservation().getGame().getTurn() == 0;
         rebuiltTurn = s.getObservation().getGame().getTurn();
         recorder = new GameMemento.Recorder();
