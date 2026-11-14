@@ -806,6 +806,45 @@ public final class ShadowGame {
         return out.toString();
     }
 
+    /**
+     * A mana payment asked before its pool was put in the real order: its pool candidates were listed in the pool's
+     * old order (a reask rebuilds the observation only). They take the pool's order now, as a request asked now lists
+     * them; other candidates keep their places.
+     */
+    private static DecisionRequest poolCandidatesInPoolOrder(DecisionRequest r) {
+        if (r.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_MANA_PAYMENT) {
+            return r;
+        }
+        List<String> pool = new ArrayList<>();
+        for (var ps : r.getObservation().getPlayersList()) {
+            if (ps.getSeat() == r.getSeat()) {
+                ps.getManaPoolList().forEach(m -> pool.add(m.getColor() + "/" + m.getSourceId()));
+            }
+        }
+        List<Integer> slots = new ArrayList<>();
+        List<magicdosa.protocol.v1.Candidate> fromPool = new ArrayList<>();
+        for (int i = 0; i < r.getCandidatesCount(); i++) {
+            if (r.getCandidates(i).hasPoolMana()) {
+                slots.add(i);
+                fromPool.add(r.getCandidates(i));
+            }
+        }
+        java.util.function.ToIntFunction<magicdosa.protocol.v1.Candidate> at = c -> {
+            int k = pool.indexOf(c.getPoolMana().getColor() + "/" + c.getPoolMana().getSourceId());
+            return k < 0 ? Integer.MAX_VALUE : k;
+        };
+        List<magicdosa.protocol.v1.Candidate> sorted = new ArrayList<>(fromPool);
+        sorted.sort(java.util.Comparator.comparingInt(at));
+        if (sorted.equals(fromPool)) {
+            return r;
+        }
+        DecisionRequest.Builder b = r.toBuilder();
+        for (int i = 0; i < slots.size(); i++) {
+            b.setCandidates(slots.get(i), sorted.get(i));
+        }
+        return b.build();
+    }
+
     private static DecisionRequest sortedCandidates(DecisionRequest r) {
         List<magicdosa.protocol.v1.Candidate> c = new ArrayList<>(r.getCandidatesList());
         c.sort(java.util.Comparator.comparing(com.google.protobuf.TextFormat::shortDebugString));
@@ -1793,7 +1832,7 @@ public final class ShadowGame {
                 request = notQualifying(real, request);
             }
             DecisionRequest a = Fingerprint.normalise(real);
-            DecisionRequest b = Fingerprint.normalise(request);
+            DecisionRequest b = Fingerprint.normalise(reordered ? poolCandidatesInPoolOrder(request) : request);
             if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
                 // verification ②: cards chosen from a hidden zone (a library search) come in that zone's order,
                 // which is hidden: the candidates are compared as a set (answers are matched by candidate anyway)
