@@ -277,6 +277,7 @@ public final class LiveShadow implements ShadowGame.Live {
         answer = response;
         answered = true;
         lock.notifyAll();
+        long idle = magicdosa.agent.Timing.start(); // measurement only: the shadow waits for the real game
         while (pending == null && !over && !stopped) {
             try {
                 lock.wait();
@@ -285,6 +286,7 @@ public final class LiveShadow implements ShadowGame.Live {
                 throw ShadowGame.stopped("interrupted");
             }
         }
+        magicdosa.agent.Timing.add("shadow.idle", idle);
         if (stopped) {
             throw ShadowGame.stopped("stopped");
         }
@@ -341,12 +343,14 @@ public final class LiveShadow implements ShadowGame.Live {
         shadow = new ShadowGame(rec, keys, this);
         thread = new Thread(() -> {
             ShadowGame.Result r;
+            long t0 = magicdosa.agent.Timing.start(); // measurement only: the shadow thread from start to end
             try {
                 r = shadow.runLive();
             } catch (Throwable t) {
                 r = null;
                 System.err.println("agent-core: shadow of " + hello.getGameId() + " failed: " + t);
             }
+            magicdosa.agent.Timing.add("shadow.thread", t0);
             synchronized (lock) {
                 result = r;
                 shadowDone = true;

@@ -122,6 +122,7 @@ public final class GameSession {
         lastDecisionId = r.getDecisionId();
         decisions++;
         DecisionResponse response;
+        long t0 = magicdosa.agent.Timing.start(); // measurement only
         if (shadow != null) {
             try {
                 response = shadow.decide(r);
@@ -132,6 +133,7 @@ public final class GameSession {
         } else {
             response = policy.decide(r);
         }
+        magicdosa.agent.Timing.add("agentcore.decide", t0);
         if (agent.shards() != null) {
             decided.add(new magicdosa.agent.encoder.ShardWriter.Decided(r, response));
         }

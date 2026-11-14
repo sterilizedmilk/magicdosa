@@ -149,6 +149,7 @@ public final class Agent {
             + events.get() + " decisions=" + decisions.get() + " protocolErrors=" + protocolErrors().size()
             + (shards == null ? "" : " shards=" + shardsWritten.get() + " shardErrors=" + shardErrors.get()
                 + " oov=" + shards.vocabulary().oovCount() + " " + shards.vocabulary().oovValues().keySet())
-            + (shadowKeys == null ? "" : " " + magicdosa.agent.shadow.LiveShadow.totals());
+            + (shadowKeys == null ? "" : " " + magicdosa.agent.shadow.LiveShadow.totals())
+            + (magicdosa.agent.Timing.ON ? " " + magicdosa.agent.Timing.line() : "");
     }
 }

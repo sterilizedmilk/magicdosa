@@ -1209,6 +1209,7 @@ public final class ShadowGame {
             new java.util.HashSet<>(opponentUsed), new java.util.HashMap<>(shuffles), lastShadowSeq, shadowEvents.size());
         result.mementos++;
         result.mementoNanos += System.nanoTime() - t0;
+        magicdosa.agent.Timing.add("shadow.mementoCapture", t0);
         return tp;
     }
 
@@ -1267,6 +1268,9 @@ public final class ShadowGame {
             shadowEvents.remove(shadowEvents.size() - 1);
         }
         result.restoreNanos += System.nanoTime() - t0;
+        magicdosa.agent.Timing.add("shadow.recovery1.restore", t0);
+        reapplyKind = "shadow.recovery1.reapply";
+        reapplyStart = magicdosa.agent.Timing.start();
     }
 
     /** A new shadow game from a real turn-start snapshot and the hidden state recorded with it. */
@@ -1293,6 +1297,28 @@ public final class ShadowGame {
     }
 
     private void rebuild(GameRecord.Snapshot snap) {
+        long t0 = magicdosa.agent.Timing.start();
+        try {
+            rebuildTimed(snap);
+        } finally {
+            magicdosa.agent.Timing.add("shadow.recovery2.rebuild", t0);
+            reapplyKind = "shadow.recovery2.reapply";
+            reapplyStart = magicdosa.agent.Timing.start();
+        }
+    }
+
+    /** Measurement only: the recovery under way, timed until the shadow next compares with the real game. */
+    private String reapplyKind;
+    private long reapplyStart;
+
+    private void compared() {
+        if (reapplyKind != null) {
+            magicdosa.agent.Timing.add(reapplyKind, reapplyStart);
+            reapplyKind = null;
+        }
+    }
+
+    private void rebuildTimed(GameRecord.Snapshot snap) {
         TurnStartSnapshot s = snap.snapshot();
         PrivilegedRecord hidden = rec.privilegedAt(s.getSeq());
         if (beliefSamples) {
@@ -1719,6 +1745,8 @@ public final class ShadowGame {
             if (real == null) {
                 sample(result.samples, "turn " + turn + ": the real game has no snapshot for it");
             } else {
+                compared();
+                long tf = magicdosa.agent.Timing.start();
                 var a = Fingerprint.normalise(real.snapshot());
                 var b = Fingerprint.normalise(s);
                 if (beliefSamples) {
@@ -1727,7 +1755,9 @@ public final class ShadowGame {
                         knownPositions(game.getRegisteredPlayers().indexOf(p), real.snapshot().getObservation());
                     }
                 }
-                if (Fingerprint.hash(a).equals(Fingerprint.hash(b))) {
+                boolean same = Fingerprint.hash(a).equals(Fingerprint.hash(b));
+                magicdosa.agent.Timing.add("shadow.fingerprint", tf);
+                if (same) {
                     result.snapshotsMatched++;
                     // verification ①: hidden library order from the record at the turn start too (the other seat
                     // may draw before any decision of ours in its turn)
@@ -1831,6 +1861,8 @@ public final class ShadowGame {
             if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
                 request = notQualifying(real, request);
             }
+            compared();
+            long tf = magicdosa.agent.Timing.start();
             DecisionRequest a = Fingerprint.normalise(real);
             DecisionRequest b = Fingerprint.normalise(reordered ? poolCandidatesInPoolOrder(request) : request);
             if (beliefSamples && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS) {
@@ -1844,6 +1876,7 @@ public final class ShadowGame {
                 }
             }
             boolean match = Fingerprint.hash(a).equals(Fingerprint.hash(b));
+            magicdosa.agent.Timing.add("shadow.fingerprint", tf);
             boolean first = !firstTry.containsKey(id);
             if (first) {
                 firstTry.put(id, match);

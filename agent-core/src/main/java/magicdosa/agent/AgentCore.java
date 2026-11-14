@@ -75,6 +75,7 @@ public final class AgentCore {
         AgentCoreServer server = AgentCoreServer.start(port, agent);
         System.out.println("agent-core: protocol " + Versions.PROTOCOL + ", encoder " + ENCODER_VERSION + ", model "
             + policy.modelVersion());
+        Timing.started(); // measurement only
         System.out.println("agent-core listening on port " + server.port());
         System.out.flush();
         if (untilStdinCloses) {

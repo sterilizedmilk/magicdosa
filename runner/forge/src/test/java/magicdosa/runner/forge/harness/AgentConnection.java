@@ -65,7 +65,7 @@ final class AgentConnection implements AutoCloseable {
             cmd.addAll(List.of("--policy", policy));
         }
         for (String k : System.getProperties().stringPropertyNames()) {
-            if (k.startsWith("magicdosa.shadow")) {
+            if (k.startsWith("magicdosa.shadow") || k.equals("magicdosa.timing")) {
                 cmd.add(cmd.indexOf("-cp"), "-D" + k + "=" + System.getProperty(k)); // shadowStats, shadowDump, ...
             }
         }
