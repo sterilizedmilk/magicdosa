@@ -540,6 +540,94 @@ public final class ShadowGame {
     private void departuresOnTop(int seat, long fromSeq) {
         List<Long> leaving = departures(seat, fromSeq);
         placeOnTop(seat, leaving);
+        if (seat != viewer) {
+            noQualifyingDigs(seat, fromSeq);
+        }
+    }
+
+    /**
+     * Verification ②: a dig of the other seat that offered it no choice (Monumental Henge looking at five with no
+     * historic card among them: no choice follows the looks in the record) had no qualifying card among the cards it
+     * looked at. Sampled identities that would qualify are traded for hidden cards of the same owner that do not, so
+     * that the shadow's dig offers no choice either. Done before the dig resolves (at a decision or turn start), never
+     * inside it.
+     */
+    private void noQualifyingDigs(int seat, long fromSeq) {
+        List<Event> after = new ArrayList<>(rec.events.tailMap(fromSeq, false).values());
+        for (int i = 0; i < after.size(); i++) {
+            Event e = after.get(i);
+            if (e.getBodyCase() != Event.BodyCase.ACTIVATE_ABILITY || e.getActivateAbility().getSeat() != seat) {
+                continue;
+            }
+            var act = e.getActivateAbility();
+            Card host = session.cardOf(act.getSourceId());
+            if (host == null) {
+                continue;
+            }
+            forge.game.spellability.SpellAbility dig = null;
+            for (forge.game.spellability.SpellAbility sa : host.getSpellAbilities()) {
+                if (sa.getApi() == forge.game.ability.ApiType.Dig && sa.hasParam("ChangeValid")
+                        && act.getAbility().equals(keys.abilityKey(sa))) {
+                    dig = sa;
+                }
+            }
+            if (dig == null) {
+                continue;
+            }
+            // its looks (the run of looked-at reveals of that library after it), and whether a choice of it follows
+            List<Long> looked = new ArrayList<>();
+            boolean chose = false;
+            boolean looking = false;
+            for (int k = i + 1; k < after.size(); k++) {
+                Event f = after.get(k);
+                if (f.getBodyCase() == Event.BodyCase.CARD_REVEALED
+                        && f.getCardRevealed().getReason() == magicdosa.protocol.v1.RevealReason.REVEAL_REASON_LOOKED_AT
+                        && inLibraryOf(seat, f.getCardRevealed().getId())) {
+                    looking = true;
+                    looked.add(f.getCardRevealed().getId());
+                    continue;
+                }
+                if (f.getBodyCase() == Event.BodyCase.RESOLUTION_CHOICE
+                        && f.getResolutionChoice().getResolvingId() == act.getAbilityId()) {
+                    chose = true;
+                    break;
+                }
+                if (looking) {
+                    // the looks are over: a choice of this dig would come next
+                    if (f.getBodyCase() != Event.BodyCase.RESOLUTION_CHOICE) {
+                        break;
+                    }
+                }
+            }
+            if (looked.isEmpty() || chose) {
+                continue;
+            }
+            Player owner = game.getRegisteredPlayers().get(seat);
+            String[] valid = dig.getParam("ChangeValid").split(",");
+            Set<Long> locked = new java.util.HashSet<>(shownIds);
+            locked.addAll(looked);
+            for (long id : looked) {
+                Card c = session.cardOf(id);
+                if (c == null || shownIds.contains(id) || !c.isValid(valid, owner, host, dig)) {
+                    continue;
+                }
+                // a hidden card of the owner that does not qualify, by its oracle identity
+                List<Card> hidden = new ArrayList<>();
+                owner.getCardsIn(ZoneType.Library).forEach(hidden::add);
+                owner.getCardsIn(ZoneType.Hand).forEach(hidden::add);
+                Set<String> tried = new java.util.HashSet<>();
+                for (Card other : hidden) {
+                    String oracle = keys.oracleId(other);
+                    if (locked.contains(session.idOf(other)) || other.isValid(valid, owner, host, dig) || !tried.add(oracle)) {
+                        continue;
+                    }
+                    if (session.swapIdentity(id, oracle, locked) > 0) {
+                        result.identitySwaps++;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /**
