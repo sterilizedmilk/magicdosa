@@ -2064,6 +2064,13 @@ public final class ShadowGame {
     private final List<magicdosa.protocol.v1.CardRevealed> pendingReveals = new ArrayList<>();
 
     private void applyPendingReveals(boolean sync) {
+        if (!sync && game.getStack().isResolving()) {
+            // not on the shadow's own events inside an effect: a card the effect has just moved (Consult the Star
+            // Charts' card put into hand) may be swapped with one the effect still holds (its other dug cards), which
+            // the effect then moves on. The reveals wait for the next event after the resolution, or for a decision
+            // the effect asks (a search's choice needs them then).
+            return;
+        }
         for (var it = pendingReveals.iterator(); it.hasNext(); ) {
             var r = it.next();
             if (session.cardOf(r.getId()) == null) {
