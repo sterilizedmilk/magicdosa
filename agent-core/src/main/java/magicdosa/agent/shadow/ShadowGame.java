@@ -578,6 +578,7 @@ public final class ShadowGame {
             List<Long> looked = new ArrayList<>();
             boolean chose = false;
             boolean looking = false;
+            boolean over = false; // the record goes on past the looks (live, it may not have yet)
             for (int k = i + 1; k < after.size(); k++) {
                 Event f = after.get(k);
                 if (f.getBodyCase() == Event.BodyCase.CARD_REVEALED
@@ -595,11 +596,12 @@ public final class ShadowGame {
                 if (looking) {
                     // the looks are over: a choice of this dig would come next
                     if (f.getBodyCase() != Event.BodyCase.RESOLUTION_CHOICE) {
+                        over = true;
                         break;
                     }
                 }
             }
-            if (looked.isEmpty() || chose) {
+            if (looked.isEmpty() || chose || !over) {
                 continue;
             }
             Player owner = game.getRegisteredPlayers().get(seat);
