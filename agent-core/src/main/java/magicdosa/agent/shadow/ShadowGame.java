@@ -734,6 +734,33 @@ public final class ShadowGame {
                 placed.add(c);
             }
         }
+        // cards known only as part of a bottom group (a dig's rest put on the bottom in a random order) are in the bottom
+        // slots, the newest group lowest; a card known from the bottom above them counts them (its place depends on it)
+        TreeMap<Integer, List<Card>> groups = new TreeMap<>(java.util.Comparator.reverseOrder());
+        for (var g : o.getObjectsList()) {
+            if (g.getZone() != magicdosa.protocol.v1.Zone.ZONE_LIBRARY || g.getOwnerSeat() != seat
+                    || !g.hasLibraryPosition() || !g.getLibraryPosition().hasBottomGroup()) {
+                continue;
+            }
+            Card c = session.cardOf(g.getId());
+            if (c != null && lib.contains(c) && !placed.contains(c)) {
+                groups.computeIfAbsent(g.getLibraryPosition().getBottomGroup().getGroup(), k -> new ArrayList<>()).add(c);
+            }
+        }
+        int free = n - 1;
+        for (List<Card> members : groups.values()) {
+            members.sort(java.util.Comparator.comparingInt(lib::indexOf)); // their order among themselves is not known
+            for (int i = members.size() - 1; i >= 0; i--) {
+                while (free >= 0 && slots[free] != null) {
+                    free--;
+                }
+                if (free < 0) {
+                    break;
+                }
+                slots[free] = members.get(i);
+                placed.add(members.get(i));
+            }
+        }
         if (placed.isEmpty()) {
             return false;
         }
