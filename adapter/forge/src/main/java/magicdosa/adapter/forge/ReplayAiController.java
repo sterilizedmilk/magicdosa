@@ -170,6 +170,14 @@ public class ReplayAiController extends ObservedAiController {
                     return out;
                 }
                 default -> {
+                    if (e.getBodyCase() == Event.BodyCase.RESOLUTION_CHOICE
+                            && e.getResolutionChoice().getEnginePrompt().equals("chooseOptionalCosts")) {
+                        // the optional costs of the cast before (recorded after it): a cast played the human way
+                        // through the ability that already is its alternative cost (Force of Negation exiling a card)
+                        // is not asked for them again
+                        source.consume(seat);
+                        continue;
+                    }
                     source.mismatch(seat, "priority asked; next recorded: " + describe(e) + " (skipped)");
                     source.consume(seat);
                 }
