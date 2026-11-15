@@ -1000,6 +1000,10 @@ public final class ShadowGame {
     }
 
     private boolean identity(long id, String oracle, boolean sync) {
+        return identity(id, oracle, sync, false);
+    }
+
+    private boolean identity(long id, String oracle, boolean sync, boolean sameZoneOnly) {
         if (oracle.isEmpty()) {
             return false;
         }
@@ -1007,7 +1011,7 @@ public final class ShadowGame {
         Card owner = session.cardOf(id);
         boolean sampledSixty = startSnapshot.snapshot().getObservation().getMatch().getGameNumber() > 1
             && owner != null && game.getRegisteredPlayers().indexOf(owner.getOwner()) != viewer;
-        int r = session.swapIdentity(id, oracle, shownIds, sync, sampledSixty);
+        int r = session.swapIdentity(id, oracle, shownIds, sync, sampledSixty, sameZoneOnly);
         if (r == 2) {
             result.sixtyChanges++;
         }
@@ -2166,8 +2170,20 @@ public final class ShadowGame {
             if (session.cardOf(r.getId()) == null) {
                 continue;
             }
-            it.remove();
-            identity(r.getId(), r.getOracleId(), sync);
+            if (game.getStack().isResolving()) {
+                // inside an effect only within the card's own zone: the effect may hold the card (a discard's chosen
+                // card, seen live: Geier Reach Sanitarium discarding a card swapped away into the library); a trade
+                // with another zone waits until the effect is over (the moved card's own reveal then trades it)
+                identity(r.getId(), r.getOracleId(), sync, true);
+                Card now = session.cardOf(r.getId());
+                if (now != null && !r.getOracleId().isEmpty() && !r.getOracleId().equals(keys.oracleId(now))) {
+                    continue;
+                }
+                it.remove();
+            } else {
+                it.remove();
+                identity(r.getId(), r.getOracleId(), sync);
+            }
             Card c = session.cardOf(r.getId());
             // the other seat's card the real game showed the viewer (an opening-hand reveal the shadow did not make);
             // the viewer's own cards it sees anyway (marking them ahead would only drop the shadow's own reveal)

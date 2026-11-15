@@ -412,6 +412,15 @@ public final class ForgeGameSession {
      * takes the place (a sampled 60 that left it out: design 공개된 카드가 샘플 구성에 없으면 구성을 다시 샘플링).
      */
     public int swapIdentity(long id, String oracle, Set<Long> locked, boolean sync, boolean fromSideboard) {
+        return swapIdentity(id, oracle, locked, sync, fromSideboard, false);
+    }
+
+    /**
+     * As above; {@code sameZoneOnly}: only with a card of the same zone (none found: 0, nothing changes). While an effect
+     * asks a choice, Forge has listed the cards it may choose: a card brought in from another zone is not among them.
+     */
+    public int swapIdentity(long id, String oracle, Set<Long> locked, boolean sync, boolean fromSideboard,
+                            boolean sameZoneOnly) {
         if (sync) {
             syncZones(); // IDs as the shadow game stands now
         }
@@ -425,6 +434,12 @@ public final class ForgeGameSession {
         // brought over from another zone would be moved by it from there
         List<ZoneType> zones = a.isInZone(ZoneType.Hand) ? List.of(ZoneType.Hand, ZoneType.Library)
             : List.of(ZoneType.Library, ZoneType.Hand);
+        if (sameZoneOnly) {
+            if (a.getZone() == null || !(a.isInZone(ZoneType.Hand) || a.isInZone(ZoneType.Library))) {
+                return 0;
+            }
+            zones = List.of(a.getZone().getZoneType());
+        }
         for (ZoneType z : zones) {
             for (Card c : owner.getCardsIn(z)) {
                 if (c != a && oracle.equals(keys.oracleId(c)) && !locked.contains(ids.idOf(c)) && !knownToAgents(c)) {
@@ -435,6 +450,9 @@ public final class ForgeGameSession {
             if (b != null) {
                 break;
             }
+        }
+        if (b == null && sameZoneOnly) {
+            return 0;
         }
         if (b == null && fromSideboard) {
             for (Card c : owner.getCardsIn(ZoneType.Sideboard)) {
