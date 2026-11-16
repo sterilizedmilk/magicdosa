@@ -67,6 +67,10 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
+        <configuration>
+          <!-- shadow scenario tests run Forge, which reads res/ from forge-gui -->
+          <workingDirectory>${forge.home}/forge-gui</workingDirectory>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>

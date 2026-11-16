@@ -363,6 +363,11 @@ public final class ShadowGame {
                     si = i;
                 }
             }
+            if (si < 0 && !rec.snapshots.isEmpty() && live != null) {
+                // a live record that starts in a turn under way (a scenario built from a snapshot): the first one, by
+                // the rebuild path
+                si = 0;
+            }
             if (si < 0) {
                 result.end = "no turn-start snapshot";
                 return;

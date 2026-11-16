@@ -332,11 +332,26 @@ public final class LiveShadow implements ShadowGame.Live {
 
     private boolean hasGameStartSnapshot() {
         for (GameRecord.Snapshot s : rec.snapshots) {
-            if (s.snapshot().getObservation().getGame().getTurn() == 0) {
+            // turn 0: the game start; a first snapshot of a later turn: a game that starts in a turn under way (a
+            // scenario built from a snapshot)
+            if (s.snapshot().getObservation().getGame().getTurn() == 0 || s == rec.snapshots.get(0)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Tests: stops the shadow (the stream ends here) and returns its result once its thread is over. */
+    ShadowGame.Result stopAndResult() throws InterruptedException {
+        synchronized (lock) {
+            stopShadow("scenario over");
+        }
+        if (thread != null) {
+            thread.join(60_000);
+        }
+        synchronized (lock) {
+            return result;
+        }
     }
 
     private void start() {
