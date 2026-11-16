@@ -189,7 +189,7 @@ public class AgentPlayerController extends ObservedAiController {
                 considered.add(sa);
                 if (ManaPayments.payableNow(player, sa)) {
                     out.add(sa);
-                } else if (!sa.isManaAbility() && ComputerUtilCost.canPayCost(sa, player, false)) {
+                } else if (!sa.isManaAbility() && payableWithMoreMana(sa)) {
                     potential.add(potentialCast(sa));
                 }
             }
@@ -202,6 +202,25 @@ public class AgentPlayerController extends ObservedAiController {
         priorityAsks++;
         session.priorityCheck().check(player, priorityAsks, out, considered, session.stats());
         return out;
+    }
+
+    /**
+     * Whether more mana could pay for {@code sa} (a potential cast). Forge AI's cost check counts the X already on the
+     * ability, and Forge AI leaves the X it weighed a spell with there; only a seat whose answers come from Forge AI
+     * (the shadow) has one, so the check runs with no X (as the real game's ability has none) and puts it back.
+     */
+    private boolean payableWithMoreMana(SpellAbility sa) {
+        SpellAbility root = sa.getRootAbility();
+        Integer x = root.getXManaCostPaid();
+        if (x == null) {
+            return ComputerUtilCost.canPayCost(sa, player, false);
+        }
+        root.setXManaCostPaid(null);
+        try {
+            return ComputerUtilCost.canPayCost(sa, player, false);
+        } finally {
+            root.setXManaCostPaid(x);
+        }
     }
 
     private PotentialCast potentialCast(SpellAbility sa) {
