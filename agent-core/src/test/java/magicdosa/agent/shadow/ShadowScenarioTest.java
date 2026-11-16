@@ -57,4 +57,38 @@ class ShadowScenarioTest {
             clean(r);
         }
     }
+
+    private static boolean casts(Scenario s, int seat, String card) {
+        String oracle = Scenario.keys().oracleIdByName(card);
+        return s.events.stream().anyMatch(e -> e.hasCastSpell() && e.getCastSpell().getSeat() == seat
+            && e.getCastSpell().getSpell().getCard().getOracleId().equals(oracle));
+    }
+
+    /**
+     * 738b927, 0bd2dc8: seat 0's Forge AI weighs Kozilek's Command ({X}{C}{C}, a Charm) over several priorities and
+     * leaves an X on it; the potential-cast check must not count that X, and the X a cast announced must survive Forge
+     * AI's target and mode logic (before the fixes 2 of 65 decisions did not match).
+     */
+    @Test
+    void kozileksCommandKeepsItsAnnouncedX() throws Exception {
+        for (int v = 0; v < 3; v++) {
+            Scenario s = new Scenario("kozilek-" + v, 5, 0);
+            s.seat(0).deck("Forest", 26).deck("Eldrazi Temple", 4).deck("Kozilek's Command", 4).deck("Basking Broodscale", 4)
+                .deck("Ancient Stirrings", 4).deck("Malevolent Rumble", 4).deck("Sowing Mycospawn", 4).deck("Urza's Saga", 4)
+                .deck("Ugin's Labyrinth", 4).deck("Dismember", 2)
+                .library("Forest", "Basking Broodscale", "Forest", "Eldrazi Temple", "Forest", "Ancient Stirrings")
+                .hand(v == 2 ? new String[] {"Kozilek's Command", "Forest"} : new String[] {"Kozilek's Command", "Kozilek's Command"})
+                .battlefield(v == 1 ? new String[] {"Eldrazi Temple", "Eldrazi Temple", "Forest"}
+                    : new String[] {"Eldrazi Temple", "Forest", "Forest", "Forest"});
+            s.seat(1).deck("Mountain", 20).deck("Monastery Swiftspear", 4).deck("Lightning Bolt", 4).deck("Dragon's Rage Channeler", 4)
+                .deck("Slickshot Show-Off", 4).deck("Preordain", 4).deck("Lava Dart", 4).deck("Mishra's Bauble", 4)
+                .deck("Expressive Iteration", 4).deck("Cori-Steel Cutter", 4).deck("Steam Vents", 4)
+                .library("Mountain", "Lightning Bolt", "Mountain", "Preordain", "Mountain", "Lava Dart")
+                .hand("Preordain", "Lava Dart", "Mishra's Bauble")
+                .battlefield("Monastery Swiftspear", "Dragon's Rage Channeler", "Mountain", "Steam Vents");
+            ShadowGame.Result r = s.play(4);
+            assertTrue(casts(s, 0, "Kozilek's Command"), s.name + ": Kozilek's Command not cast");
+            clean(r);
+        }
+    }
 }
