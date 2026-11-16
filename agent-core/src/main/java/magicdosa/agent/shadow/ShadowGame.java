@@ -1527,6 +1527,7 @@ public final class ShadowGame {
             hidden = PrivilegedRecord.newBuilder().setSeq(s.getSeq()).setSeat(viewer).setPrivileged(sampled).build();
             shownIds.clear();
             pendingReveals.clear();
+            heldByEffect.clear();
         }
         if (hidden == null) {
             throw new Unwind("no hidden state recorded at the snapshot (seq " + s.getSeq() + ")", Unwind.Kind.END);
@@ -2156,6 +2157,12 @@ public final class ShadowGame {
 
     /** Reveals of the real game taken ahead whose card the shadow has not made yet (a card a mulligan draws later). */
     private final List<magicdosa.protocol.v1.CardRevealed> pendingReveals = new ArrayList<>();
+    /**
+     * Hidden cards the resolving effect holds: the other seat chose them in a recorded choice (a discard) before the
+     * live record showed what they are. Their reveal waits until the effect has moved them (a swap now would give the
+     * chosen ID to another object while the effect moves the one it holds); the moved card then takes the identity.
+     */
+    private final Set<Long> heldByEffect = new java.util.HashSet<>();
 
     private void applyPendingReveals(boolean sync) {
         if (!sync && game.getStack().isResolving()) {
@@ -2165,12 +2172,18 @@ public final class ShadowGame {
             // the effect asks (a search's choice needs them then).
             return;
         }
+        if (!game.getStack().isResolving()) {
+            heldByEffect.clear();
+        }
         for (var it = pendingReveals.iterator(); it.hasNext(); ) {
             var r = it.next();
             if (session.cardOf(r.getId()) == null) {
                 continue;
             }
             if (game.getStack().isResolving()) {
+                if (heldByEffect.contains(r.getId())) {
+                    continue;
+                }
                 // inside an effect only within the card's own zone: the effect may hold the card (a discard's chosen
                 // card, seen live: Geier Reach Sanitarium discarding a card swapped away into the library); a trade
                 // with another zone waits until the effect is over (the moved card's own reveal then trades it)
@@ -2420,6 +2433,11 @@ public final class ShadowGame {
                 if (!opponentUsed.contains(i) && e.getResolutionChoice().getEnginePrompt().equals(method)
                         && fits.test(e.getResolutionChoice())) {
                     opponentUsed.add(i);
+                    if (beliefSamples && game.getStack().isResolving()) {
+                        for (var c : e.getResolutionChoice().getChosenList()) {
+                            heldByEffect.add(c.getEntityId());
+                        }
+                    }
                     if (beliefSamples) {
                         // a chosen hidden card (discard, search) is the card its later move shows
                         for (var c : e.getResolutionChoice().getChosenList()) {
