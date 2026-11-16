@@ -243,6 +243,7 @@ public final class SnapshotBuilder {
         }
         restoreZoneOrder(game, o, hidden, ids);
         Map<Object, Long> effectIds = effects(game, o, ids, gaps, keys);
+        sagaChapters(game);
         game.getAction().checkStaticAbilities();
         // the game starts its turn from the cleanup step of the turn before, with nobody holding priority; before the
         // game's first turn nobody has a turn or priority (GameState always names an active player: cleared here)
@@ -473,6 +474,35 @@ public final class SnapshotBuilder {
             }
         }
         return null;
+    }
+
+    /**
+     * A Saga's chapters that resolved before the snapshot and gave the Saga itself abilities for good (Urza's Saga's I:
+     * it gains "{T}: Add {C}"): the snapshot shows the lore counters, not what those chapters did; they are resolved
+     * again (other chapters did their part elsewhere in the snapshot already).
+     */
+    private static void sagaChapters(Game game) {
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.isSaga()) {
+                continue;
+            }
+            int lore = c.getCounters(forge.game.card.CounterEnumType.LORE);
+            for (forge.game.keyword.KeywordInterface kw : c.getKeywords()) {
+                String k = kw.getOriginal();
+                if (!k.startsWith("Chapter:")) {
+                    continue;
+                }
+                String[] chapters = k.split(":")[2].split(",");
+                for (int i = 0; i < Math.min(lore, chapters.length); i++) {
+                    forge.game.spellability.SpellAbility sa = forge.game.ability.AbilityFactory.getAbility(c, chapters[i]);
+                    if (sa.getApi() == forge.game.ability.ApiType.Animate && "Self".equals(sa.getParam("Defined"))
+                            && "Permanent".equals(sa.getParam("Duration"))) {
+                        sa.setActivatingPlayer(c.getController());
+                        sa.getApi().getSpellEffect().resolve(sa);
+                    }
+                }
+            }
+        }
     }
 
     private static long maxId(Map<Card, Long> ids) {
