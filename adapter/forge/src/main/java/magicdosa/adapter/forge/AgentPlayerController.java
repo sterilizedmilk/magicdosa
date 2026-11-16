@@ -223,6 +223,21 @@ public class AgentPlayerController extends ObservedAiController {
         }
     }
 
+    /**
+     * Runs Forge AI's logic for a part of a cast in progress with the X the cast announced kept: Forge AI sets X on
+     * the ability while it weighs it (ComputerUtilCost.setMaxXValue), which would change the announced X of the shadow's
+     * cast (Kozilek's Command announced X=0 and was paid as X=5) where the real game's cast, answered by agent-core,
+     * keeps it.
+     */
+    private static <T> T keepingX(SpellAbility root, java.util.function.Supplier<T> forgeAi) {
+        Integer x = root.getXManaCostPaid();
+        try {
+            return forgeAi.get();
+        } finally {
+            root.setXManaCostPaid(x);
+        }
+    }
+
     private PotentialCast potentialCast(SpellAbility sa) {
         PotentialCast.Builder p = PotentialCast.newBuilder().setSourceId(session.ids().idOf(sa.getHostCard()));
         if (sa.isSpell()) {
@@ -1446,7 +1461,7 @@ public class AgentPlayerController extends ObservedAiController {
             }
         }
         // weighed now (CharmAi chooses while it weighs the spell)
-        forgeAi(() -> forge.ai.SpellApiToAi.Converter.get(forge.game.ability.ApiType.Charm).canPlayWithSubs(player, root));
+        keepingX(root, () -> forgeAi(() -> forge.ai.SpellApiToAi.Converter.get(forge.game.ability.ApiType.Charm).canPlayWithSubs(player, root)));
         List<AbilitySub> fresh = root.getChosenList() == null ? null : asOffered(possible, new ArrayList<>(root.getChosenList()));
         if (fits(fresh, possible, min, num)) {
             return fresh;
@@ -2349,7 +2364,7 @@ public class AgentPlayerController extends ObservedAiController {
                     return indicesOf(options, plan);
                 }
                 s.resetTargets();
-                forgeAi(() -> getAi().doTrigger(s, true));
+                keepingX(s.getRootAbility(), () -> forgeAi(() -> getAi().doTrigger(s, true)));
                 List<Object> picked = new ArrayList<>(s.getTargets());
                 s.resetTargets();
                 return indicesOf(options, picked);
