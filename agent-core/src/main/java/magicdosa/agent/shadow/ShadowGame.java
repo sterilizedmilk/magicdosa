@@ -1418,6 +1418,7 @@ public final class ShadowGame {
         tp.session().run();
         tp.controllers().forEach(StateCopy::restore);
         decisionIdx = tp.decisionIdx();
+        revealedThrough = -1;
         opponentIdx = tp.opponentIdx();
         opponentUsed.clear();
         opponentUsed.addAll(tp.opponentUsed());
@@ -1603,6 +1604,7 @@ public final class ShadowGame {
                 departuresOnTop(game.getRegisteredPlayers().indexOf(p), s.getSeq());
             }
             revealsAheadAfterRebuild = s.getSeq();
+            revealedThrough = s.getSeq();
         }
         // the record from here on
         long before = 0; // the last decision asked before the snapshot
@@ -1914,6 +1916,19 @@ public final class ShadowGame {
             } else {
                 compared();
                 long tf = magicdosa.agent.Timing.start();
+                if (beliefSamples) {
+                    // the turn's reveals, before comparing: live, the record had not reached some at our last decision,
+                    // or they waited for an effect to move the card it held (a card the other seat discarded in its
+                    // turn, with no decision of ours until this turn start); after a memento restore the state is the one
+                    // from before them. Taking an identity again changes nothing. The shadow's snapshot shows them then.
+                    int swaps = result.identitySwaps;
+                    GameRecord.Snapshot before = snapshotOfTurn(turn - 1);
+                    revealsBetween(before == null ? -1 : before.snapshot().getSeq(), real.snapshot().getSeq());
+                    if (result.identitySwaps != swaps) {
+                        s = s.toBuilder().setObservation(session.reask(magicdosa.protocol.v1.DecisionRequest.newBuilder()
+                            .setSeat(viewer).build()).getObservation()).build();
+                    }
+                }
                 var a = Fingerprint.normalise(real.snapshot());
                 var b = Fingerprint.normalise(s);
                 if (beliefSamples) {
@@ -2149,6 +2164,18 @@ public final class ShadowGame {
         long to = Long.MAX_VALUE;
         if (decisionIdx < rec.decisions.size()) {
             to = rec.decisions.get(decisionIdx).record().getRequest().getAppliedSeq();
+        }
+        // live, the record had only reached the decision itself the last time: the reveals after it come in now
+        revealsBetween(revealedThrough >= 0 ? Math.min(fromSeq, revealedThrough) : fromSeq, to);
+    }
+
+    /** The real events up to which the reveals were taken (live: the record may not have reached the next decision). */
+    private long revealedThrough = -1;
+
+    /** The reveals of the real events after {@code fromSeq} up to {@code to}, taken now. */
+    private void revealsBetween(long fromSeq, long to) {
+        if (!rec.events.isEmpty()) {
+            revealedThrough = Math.max(revealedThrough, Math.min(to, rec.events.lastKey()));
         }
         for (Event r : rec.events.subMap(fromSeq, false, to, true).values()) {
             if (r.getBodyCase() == Event.BodyCase.CARD_REVEALED) {
