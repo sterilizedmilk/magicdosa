@@ -263,6 +263,8 @@ public class ReplayAiController extends ObservedAiController {
     private SpellAbility aiPrepared;
     /** The recorded payment of the action Forge AI prepared. */
     private List<magicdosa.protocol.v1.ManaPayment> preparedPayment;
+    /** While Forge AI plays the action it prepared: its recorded payment, for the phyrexian shards paid with life. */
+    private List<magicdosa.protocol.v1.ManaPayment> preparedLife;
 
     private boolean sameAction(SpellAbility sa, Event e) {
         Card host = player.getGame().getCardState(sa.getHostCard());
@@ -306,7 +308,13 @@ public class ReplayAiController extends ObservedAiController {
                 mergedUses(preparedPayment).forEach(this::makeMana);
                 preparedPayment = null;
             }
-            boolean played = super.playChosenSpellAbility(sa); // as in the real game
+            preparedLife = payment;
+            boolean played;
+            try {
+                played = super.playChosenSpellAbility(sa); // as in the real game
+            } finally {
+                preparedLife = null;
+            }
             if (played && payment != null) {
                 settlePayment(sa, payment);
             }
@@ -509,6 +517,11 @@ public class ReplayAiController extends ObservedAiController {
             recordedPayment = List.of(); // taken first: making the mana pays the mana abilities' own costs here too
             mergedUses(payment).forEach(this::makeMana);
             toPay = phyrexianLife(toPay, payment, sa);
+        } else if (!scripted && preparedLife != null && !effect) {
+            // Forge AI paying the action it prepared, its recorded mana made: the same phyrexian shards are paid with
+            // life first (it would give up on them, the pool's mana being made already: Dismember paid {B}, {G}, 2 life)
+            toPay = phyrexianLife(toPay, preparedLife, sa);
+            preparedLife = null;
         }
         boolean paid = super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
         if (paid && payment != null) {
