@@ -1233,8 +1233,9 @@ public class AgentPlayerController extends ObservedAiController {
         }
         final List<Integer> offeredValues = values;
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "announceRequirements", candidates, ONE,
-            // the value being announced is not paid yet: the ability's X is one left from Forge AI weighing it earlier
-            context(ability).clearX().setEnginePrompt(announce).build(),
+            // the value being announced is not paid yet: the ability's X (and targets, 601.2c comes later) are ones left
+            // from Forge AI weighing it earlier
+            context(ability).clearX().clearTargets().setEnginePrompt(announce).build(),
             () -> indexOf(offeredValues, forgeAiAnnounce(ability, min, max, announce, offeredValues)));
         final List<Integer> offered = values;
         return chosen == null ? forgeAi(() -> super.answerAnnounceRequirements(ability, min, max, announce))
@@ -1375,7 +1376,7 @@ public class AgentPlayerController extends ObservedAiController {
             candidates.add(option(i, possible.get(i).getDescription()));
         }
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseModeForAbility", candidates,
-            between(min, Math.min(num, possible.size())), context(sa).setEnginePrompt("modes").build(),
+            between(min, Math.min(num, possible.size())), context(sa).clearTargets().setEnginePrompt("modes").build(), // modes come before targets (601.2b, c)
             () -> indicesOf(possible, asOffered(possible, forgeAiModes(sa, possible, min, num, allowRepeat))));
         if (chosen == null) {
             return forgeAi(() -> super.answerChooseModeForAbility(sa, possible, min, num, allowRepeat));
@@ -1477,8 +1478,9 @@ public class AgentPlayerController extends ObservedAiController {
         for (int i = 0; i < combos.size(); i++) {
             candidates.add(option(i, combos.get(i).isEmpty() ? "none" : combos.get(i).toString()));
         }
+        // optional costs come before targets (601.2b, c): targets on the ability are ones Forge AI set weighing it
         List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_OPTION, "chooseOptionalCosts", candidates, ONE,
-            context(choosen).setEnginePrompt("optional costs").build(),
+            context(choosen).clearTargets().setEnginePrompt("optional costs").build(),
             () -> sameElements(combos, forgeAi(() -> super.answerChooseOptionalCosts(choosen, optionalCostValues))));
         return chosen == null ? forgeAi(() -> super.answerChooseOptionalCosts(choosen, optionalCostValues)) : combos.get(chosen.get(0));
     }
