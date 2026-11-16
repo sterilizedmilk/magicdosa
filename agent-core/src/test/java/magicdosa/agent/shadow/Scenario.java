@@ -68,7 +68,16 @@ final class Scenario {
         final List<String> battlefield = new ArrayList<>();
         final List<String> tapped = new ArrayList<>();
         final List<String> graveyard = new ArrayList<>();
+        /** Counters on battlefield cards: card name -> (counter kind -> count), for every copy of that name. */
+        final Map<String, Map<String, Integer>> counters = new LinkedHashMap<>();
         int life = 20;
+
+        /** On the battlefield with {@code count} {@code kind} counters (e.g. "lore"). */
+        Seat battlefieldWith(String name, String kind, int count) {
+            battlefield.add(name);
+            counters.computeIfAbsent(name, k -> new LinkedHashMap<>()).put(kind, count);
+            return this;
+        }
 
         Seat deck(String name, int count) {
             deck.merge(name, count, Integer::sum);
@@ -177,7 +186,10 @@ final class Scenario {
                 o.addObjects(g);
             }
             for (String c : seat.battlefield) {
-                o.addObjects(object(nextId++, Zone.ZONE_BATTLEFIELD, s).setOracleId(oracle(k, c)).setFace(1));
+                GameObject.Builder g = object(nextId++, Zone.ZONE_BATTLEFIELD, s).setOracleId(oracle(k, c)).setFace(1);
+                seat.counters.getOrDefault(c, Map.of()).forEach((kind, n) ->
+                    g.addCounters(magicdosa.protocol.v1.Counter.newBuilder().setKind(kind).setCount(n)));
+                o.addObjects(g);
             }
             for (String c : seat.tapped) {
                 o.addObjects(object(nextId++, Zone.ZONE_BATTLEFIELD, s).setOracleId(oracle(k, c)).setFace(1).setTapped(true));
@@ -202,6 +214,27 @@ final class Scenario {
             throw new IllegalArgumentException("no card " + name);
         }
         return o;
+    }
+
+    /** The scenario's game as the rebuild path builds it (no session, nothing played), with the builder's gaps. */
+    SnapshotBuilder.Result build() throws Exception {
+        CardKeys k = keys();
+        write();
+        SnapshotBuilder.Result[] out = {null};
+        Throwable[] failure = {null};
+        Thread t = new Thread(() -> {
+            try {
+                out[0] = new SnapshotBuilder(k).build(snapshot, hidden, nextId, id -> id);
+            } catch (Throwable e) {
+                failure[0] = e;
+            }
+        }, "Game-scenario-build-" + name);
+        t.start();
+        t.join();
+        if (failure[0] != null) {
+            throw new IllegalStateException("scenario " + name + " not built", failure[0]);
+        }
+        return out[0];
     }
 
     /** Seat 0's requests go to the live shadow, the game's stream as well (as agent-core gets them). */

@@ -2,6 +2,10 @@ package magicdosa.agent.shadow;
 
 import org.junit.jupiter.api.Test;
 
+import magicdosa.adapter.forge.SnapshotBuilder;
+
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -90,5 +94,26 @@ class ShadowScenarioTest {
             assertTrue(casts(s, 0, "Kozilek's Command"), s.name + ": Kozilek's Command not cast");
             clean(r);
         }
+    }
+
+    /**
+     * f7bcbe3: a rebuilt Urza's Saga with lore counters has the abilities its chapters gave it for good (I: "{T}: Add
+     * {C}", II: the Construct ability); a recovery-2 rebuild without them left the mana ability out of the candidates.
+     */
+    @Test
+    void rebuiltSagaKeepsItsChapterAbilities() throws Exception {
+        Scenario s = new Scenario("saga", 5, 0);
+        s.seat(0).deck("Forest", 52).deck("Urza's Saga", 4).deck("Ancient Stirrings", 4)
+            .library("Forest", "Forest", "Forest").hand("Forest")
+            .battlefieldWith("Urza's Saga", "lore", 2).battlefield("Forest");
+        s.seat(1).deck("Mountain", 56).deck("Lightning Bolt", 4).library("Mountain", "Mountain").hand("Lightning Bolt");
+        SnapshotBuilder.Result built = s.build();
+        assertEquals(List.of(), built.gaps());
+        forge.game.card.Card saga = built.game().getCardsIn(forge.game.zone.ZoneType.Battlefield).stream()
+            .filter(c -> c.getName().equals("Urza's Saga")).findFirst().orElseThrow();
+        assertEquals(2, saga.getCounters(forge.game.card.CounterEnumType.LORE));
+        assertEquals(1, saga.getManaAbilities().size(), "Urza's Saga gains {T}: Add {C}");
+        assertTrue(saga.getSpellAbilities().stream().anyMatch(sa -> sa.getApi() == forge.game.ability.ApiType.Token),
+            "Urza's Saga gains the Construct ability");
     }
 }
