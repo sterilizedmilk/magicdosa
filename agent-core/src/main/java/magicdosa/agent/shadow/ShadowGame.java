@@ -232,7 +232,7 @@ public final class ShadowGame {
     /** Everything a recovery ① needs to go back to the start of the turn. */
     private record TurnPoint(int turn, GameMemento memento, Runnable gaps, Runnable session, List<StateCopy> controllers, int decisionIdx,
                              int opponentIdx, Set<Integer> opponentUsed, Map<Integer, Integer> shuffles, long lastShadowSeq,
-                             int shadowEvents) {}
+                             int shadowEvents, Set<Long> shownIds) {}
 
     private GameMemento.Recorder recorder = new GameMemento.Recorder();
     private TurnPoint candidate;
@@ -1365,7 +1365,8 @@ public final class ShadowGame {
         }
         TurnPoint tp = new TurnPoint(game.getPhaseHandler().getTurn(), m, MementoGaps.capture(game), session.checkpoint(), ctl,
             decisionIdx, opponentIdx,
-            new java.util.HashSet<>(opponentUsed), new java.util.HashMap<>(shuffles), lastShadowSeq, shadowEvents.size());
+            new java.util.HashSet<>(opponentUsed), new java.util.HashMap<>(shuffles), lastShadowSeq, shadowEvents.size(),
+            new java.util.HashSet<>(shownIds));
         result.mementos++;
         result.mementoNanos += System.nanoTime() - t0;
         magicdosa.agent.Timing.add("shadow.mementoCapture", t0);
@@ -1423,6 +1424,10 @@ public final class ShadowGame {
         shuffles.clear();
         shuffles.putAll(tp.shuffles());
         lastShadowSeq = tp.lastShadowSeq();
+        // ②: the identities shown up to the turn start; ones shown later in the turn are shown again as it replays (a
+        // lock kept from the undone part would keep the card that has that identity now from trading it)
+        shownIds.clear();
+        shownIds.addAll(tp.shownIds());
         while (shadowEvents.size() > tp.shadowEvents()) {
             shadowEvents.remove(shadowEvents.size() - 1);
         }
