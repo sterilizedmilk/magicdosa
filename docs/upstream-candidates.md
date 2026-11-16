@@ -137,3 +137,20 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Fix upstream:** clear `getPayingManaAbilities()` in `payCostDuringAbilityResolve` before paying (as
   `clearManaPaid()` does for the mana), or refund only the abilities this payment added.
 
+
+## 11. Forge AI leaves the X it weighed on the ability, and a Charm reuses it (2026-11-16)
+
+- **What:** while Forge AI weighs a spell or ability with X, `ComputerUtilCost.setMaxXValue` sets
+  `root.setXManaCostPaid(x)` on the card's own ability object, and nothing clears it if the spell is not cast. For a
+  Charm, a later call returns that value ("another mode already decided": `root.getXManaCostPaid() != null`), so an X
+  weighed in an earlier priority window, with more or less mana, comes back. Forge AI's target and mode logic run
+  during a cast (`doTrigger`, `CharmAi.canPlayWithSubs`) also rewrite the X the cast already announced.
+  `ComputerUtilCost.canPayCost` counts whatever X is there.
+- **How we hit it:** Kozilek's Command ({X}{C}{C}, Charm). The ability carried X=2 from an earlier weighing, so the
+  cost check said it could not be paid while the same check on a fresh ability said it could. During a cast that
+  announced X=0, Forge AI's target logic set X=5 and the payment failed ("could not be played", 104 refusals in one
+  pairing of the layer gate, and casts the live shadow refused).
+- **Our workaround:** the potential-cast check runs with no X (`AgentPlayerController.payableWithMoreMana`); target
+  and mode delegations during a cast put the announced X back (`keepingX`).
+- **Fix upstream:** weigh X on a copy of the ability, or clear it when the AI decides not to play the spell; never
+  overwrite the X of a cast in progress.
