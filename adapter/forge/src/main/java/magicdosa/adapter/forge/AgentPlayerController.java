@@ -205,23 +205,46 @@ public class AgentPlayerController extends ObservedAiController {
     }
 
     /**
-     * Whether more mana could pay for {@code sa} (a potential cast). Forge AI's cost check counts the X already on the
-     * ability, and Forge AI leaves the X it weighed a spell with there; only a seat whose answers come from Forge AI
-     * (the shadow) has one, so the check runs with no X (as the real game's ability has none) and puts it back.
+     * Whether more mana could pay for {@code sa} (a potential cast). Forge AI's cost check counts the X and the targets
+     * already on the ability (a target's ward), and Forge AI leaves the X and targets it weighed a spell with there;
+     * only a seat whose answers come from Forge AI (the shadow) has them, so the check runs without them (as the real
+     * game's ability has none) and puts them back.
      */
     private boolean payableWithMoreMana(SpellAbility sa) {
         SpellAbility root = sa.getRootAbility();
         Integer x = root.getXManaCostPaid();
-        if (x == null) {
-            return ComputerUtilCost.canPayCost(sa, player, false);
+        Map<SpellAbility, forge.game.spellability.TargetChoices> targets = new java.util.IdentityHashMap<>();
+        for (SpellAbility part = root; part != null; part = part.getSubAbility()) {
+            if (part.getTargets() != null && !part.getTargets().isEmpty()) {
+                targets.put(part, part.getTargets());
+                part.resetTargets();
+            }
         }
         root.setXManaCostPaid(null);
+        // and with no mana source held back for a later spell (ComputerUtilMana.isManaSourceReserved: Forge AI's own
+        // memory, which only a seat whose answers come from Forge AI fills)
+        forge.ai.AiCardMemory memory = getAi().getCardMemory();
+        Map<forge.ai.AiCardMemory.MemorySet, List<Card>> held = new java.util.EnumMap<>(forge.ai.AiCardMemory.MemorySet.class);
+        for (forge.ai.AiCardMemory.MemorySet m : HELD_MANA) {
+            java.util.Set<Card> cards = forge.ai.AiCardMemory.getMemorySet(player, m);
+            if (cards != null && !cards.isEmpty()) {
+                held.put(m, new ArrayList<>(cards));
+                memory.clearMemorySet(m);
+            }
+        }
         try {
             return ComputerUtilCost.canPayCost(sa, player, false);
         } finally {
             root.setXManaCostPaid(x);
+            targets.forEach(SpellAbility::setTargets);
+            held.forEach((m, cards) -> cards.forEach(c -> memory.rememberCard(c, m)));
         }
     }
+
+    private static final forge.ai.AiCardMemory.MemorySet[] HELD_MANA = {
+        forge.ai.AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_MAIN2, forge.ai.AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_DECLBLK,
+        forge.ai.AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_ENEMY_DECLBLK,
+        forge.ai.AiCardMemory.MemorySet.HELD_MANA_SOURCES_FOR_NEXT_SPELL};
 
     /**
      * Runs Forge AI's logic for a part of a cast in progress with the X the cast announced kept: Forge AI sets X on
