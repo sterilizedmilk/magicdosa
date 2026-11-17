@@ -1883,6 +1883,50 @@ public final class ForgeGameSession {
      * caller goes on as usual (and logs it as a delegation); an answer that maps to no candidate (or breaks the
      * constraints) becomes an unintended fallback, counted by decision type. Not delegated: {@code asked} unchanged.
      */
+    private Map<Player, List<forge.game.mana.Mana>> pools() {
+        Map<Player, List<forge.game.mana.Mana>> out = new HashMap<>();
+        for (Player p : game.getRegisteredPlayers()) {
+            List<forge.game.mana.Mana> pool = new ArrayList<>();
+            p.getManaPool().forEach(pool::add);
+            out.put(p, pool);
+        }
+        return out;
+    }
+
+    /**
+     * Forge AI weighing its answer pays costs on trial: it spends pool mana and puts it back, at the end of the pool.
+     * A pool's order is public and Forge pays from it in order, so a pool Forge AI went through would later spend
+     * other mana than the same pool of a seat that did not ask Forge AI (the real game, whose answers come from the
+     * shadow). The pools go back to their order (only when they hold the same mana; no events).
+     */
+    private static void restorePoolOrders(Map<Player, List<forge.game.mana.Mana>> before) {
+        before.forEach((p, order) -> {
+            List<forge.game.mana.Mana> now = new ArrayList<>();
+            p.getManaPool().forEach(now::add);
+            if (now.size() != order.size()) {
+                return;
+            }
+            java.util.Set<forge.game.mana.Mana> a = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            a.addAll(now);
+            boolean same = true;
+            for (int i = 0; i < order.size(); i++) {
+                if (!a.contains(order.get(i))) {
+                    return;
+                }
+                same &= order.get(i) == now.get(i);
+            }
+            if (same) {
+                return;
+            }
+            for (forge.game.mana.Mana m : now) {
+                p.getManaPool().removeManaNoEvent(m);
+            }
+            for (forge.game.mana.Mana m : order) {
+                p.getManaPool().addManaNoEvent(m);
+            }
+        });
+    }
+
     Asked resolveDelegation(Asked asked, java.util.function.Supplier<List<Integer>> forgeAi, String engineDecision) {
         if (!asked.delegate()) {
             return asked;
@@ -1895,12 +1939,16 @@ public final class ForgeGameSession {
         List<Integer> chosen = null;
         if (forgeAi != null) {
             forgeAiDepth++;
+            Map<Player, List<forge.game.mana.Mana>> pools = nested ? null : pools();
             try {
                 chosen = forgeAi.get();
             } catch (RuntimeException e) {
                 stats.note("Forge AI's answer failed (" + engineDecision + "): " + e);
             } finally {
                 forgeAiDepth--;
+                if (pools != null) {
+                    restorePoolOrders(pools);
+                }
             }
         }
         DecisionResponse resp = chosen == null ? null : DecisionResponse.newBuilder().setGameId(req.getGameId())
