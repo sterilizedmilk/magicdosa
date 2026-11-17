@@ -2478,6 +2478,12 @@ public final class ShadowGame {
                     if (beliefSamples) {
                         // a chosen hidden card (discard, search) is the card its later move shows
                         for (var c : e.getResolutionChoice().getChosenList()) {
+                            Card chosen = session.cardOf(c.getEntityId());
+                            if (game.getStack().isResolving() && chosen != null && chosen.isInZone(ZoneType.Library)) {
+                                // a card a dig looked at: the effect holds the looked cards, and a swap would put
+                                // another card under the chosen ID; its reveal waits until the effect moved it
+                                continue;
+                            }
                             for (Event m : rec.events.tailMap(e.getSeq(), false).values()) {
                                 if (m.getBodyCase() == Event.BodyCase.ZONE_MOVE && m.getZoneMove().getPrevId() == c.getEntityId()) {
                                     identity(c.getEntityId(), m.getZoneMove().getOracleId());
