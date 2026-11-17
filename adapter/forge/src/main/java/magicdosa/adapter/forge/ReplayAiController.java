@@ -203,7 +203,15 @@ public class ReplayAiController extends ObservedAiController {
             return null;
         }
         List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(new CardCollection(c), player);
-        List<SpellAbility> options = ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player);
+        // Forge lists one ability per optional-cost combination, the one this controller prefers: with the recorded
+        // optional costs known (Forge AI weighed another combination), that is the recorded one
+        listingOptionalCosts = recordedOptionalCosts;
+        List<SpellAbility> options;
+        try {
+            options = ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player);
+        } finally {
+            listingOptionalCosts = null;
+        }
         // first the ones whose cost uses other cards exactly when the recorded one did (mana cost or alternative cost)
         for (boolean strict : new boolean[] {true, false}) {
             SpellAbility found = action(e, c, options, strict);
@@ -1191,6 +1199,16 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected List<forge.game.spellability.OptionalCostValue> answerChooseOptionalCosts(SpellAbility choosen,
                                                                                       List<forge.game.spellability.OptionalCostValue> optionalCostValues) {
+        if (listingOptionalCosts != null) {
+            List<String> names = optionalCostNames(listingOptionalCosts);
+            List<forge.game.spellability.OptionalCostValue> out = new ArrayList<>();
+            for (forge.game.spellability.OptionalCostValue v : optionalCostValues) {
+                if (names.contains(v.getType().name())) {
+                    out.add(v);
+                }
+            }
+            return out;
+        }
         if (!session.inAction() || optionalCostValues.isEmpty()) {
             return super.answerChooseOptionalCosts(choosen, optionalCostValues);
         }
@@ -1219,6 +1237,8 @@ public class ReplayAiController extends ObservedAiController {
 
     /** The recorded optional costs of a Forge AI seat's cast, taken with it when Forge AI weighed another combination. */
     private ResolutionChoice recordedOptionalCosts;
+    /** Set while the abilities of a recorded cast are listed: the optional costs the listing takes. */
+    private ResolutionChoice listingOptionalCosts;
 
     private static List<String> optionalCostNames(ResolutionChoice r) {
         List<String> out = new ArrayList<>();

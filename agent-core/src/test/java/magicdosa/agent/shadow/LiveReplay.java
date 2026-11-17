@@ -106,6 +106,10 @@ public final class LiveReplay {
         if (over != null) {
             shadow.gameOver(over);
         }
+        ShadowGame.Result result = shadow.stopAndResult();
+        if (result != null) {
+            result.replayMismatches.forEach(m -> System.out.println("  replay: " + m));
+        }
         System.out.println(file.getFileName() + ": decisions " + decisions + ", answers different " + different);
     }
 }
