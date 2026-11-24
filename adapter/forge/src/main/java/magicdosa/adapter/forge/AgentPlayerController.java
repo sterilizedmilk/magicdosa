@@ -1464,8 +1464,23 @@ public class AgentPlayerController extends ObservedAiController {
     /**
      * Forge AI's modes. Forge AI chooses a charm's modes while it weighs the spell (CharmAi sets the chosen list) and
      * answers null here: then the modes its weighing chose, weighing it now when it has not.
+     * <p>
+     * CharmAi also chains the modes it chose onto a spell while weighing it ("prebuild chain"). Asked here, inside
+     * CharmEffect.makeChoices after it cleared the chain, that chain would stay and makeChoices would append the
+     * chosen modes again: the spell would carry every mode twice (more targets asked than the real game asked, and
+     * each mode resolving twice). The spell's chain is kept as it was before the weighing.
      */
     private List<AbilitySub> forgeAiModes(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
+        SpellAbility root = sa.getRootAbility();
+        AbilitySub chain = root.getSubAbility();
+        try {
+            return weighedModes(sa, possible, min, num, allowRepeat);
+        } finally {
+            root.setSubAbility(chain);
+        }
+    }
+
+    private List<AbilitySub> weighedModes(SpellAbility sa, List<AbilitySub> possible, int min, int num, boolean allowRepeat) {
         List<AbilitySub> v = forgeAi(() -> super.answerChooseModeForAbility(sa, possible, min, num, allowRepeat));
         if (fits(asOffered(possible, v), possible, min, num)) {
             return asOffered(possible, v);

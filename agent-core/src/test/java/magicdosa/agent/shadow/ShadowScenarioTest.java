@@ -97,6 +97,39 @@ class ShadowScenarioTest {
     }
 
     /**
+     * Seat 0's Forge AI casts Kozilek's Command (two modes, each targeting a player) with Eldrazi Temple mana during the
+     * other seat's attack. Asked for the modes inside CharmEffect.makeChoices, Forge AI's weighing (CharmAi) chains the
+     * modes onto the spell, and makeChoices appends them again unless the weighing's chain is undone: the shadow then
+     * asks two more targets than the real game (before the fix: a TARGET where the real game asks priority).
+     */
+    @Test
+    void kozileksCommandCarriesItsModesOnce() throws Exception {
+        String[][] hands = {{"Kozilek's Command", "Forest"}, {"Kozilek's Command", "Kozilek's Command"}};
+        for (int h = 0; h < hands.length; h++) {
+            Scenario s = new Scenario("kcatk-" + (h + 1) + "-2-0", 5, 1); // the name seeds the game
+            s.seat(0).deck("Forest", 26).deck("Eldrazi Temple", 4).deck("Kozilek's Command", 4).deck("Basking Broodscale", 4)
+                .deck("Ancient Stirrings", 4).deck("Malevolent Rumble", 4).deck("Sowing Mycospawn", 4).deck("Urza's Saga", 4)
+                .deck("Ugin's Labyrinth", 4).deck("Dismember", 2)
+                .library("Forest", "Basking Broodscale", "Forest", "Eldrazi Temple", "Forest", "Ancient Stirrings")
+                .hand(hands[h])
+                .battlefield("Eldrazi Temple", "Eldrazi Temple", "Forest");
+            s.seat(1).deck("Mountain", 20).deck("Monastery Swiftspear", 4).deck("Lightning Bolt", 4).deck("Dragon's Rage Channeler", 4)
+                .deck("Slickshot Show-Off", 4).deck("Preordain", 4).deck("Lava Dart", 4).deck("Mishra's Bauble", 4)
+                .deck("Expressive Iteration", 4).deck("Cori-Steel Cutter", 4).deck("Steam Vents", 4)
+                .library("Mountain", "Mountain", "Mountain", "Preordain", "Mountain", "Lava Dart")
+                .hand("Mountain")
+                .battlefield("Monastery Swiftspear", "Mountain", "Steam Vents");
+            ShadowGame.Result r = s.play(3);
+            String oracle = Scenario.keys().oracleIdByName("Kozilek's Command");
+            assertTrue(s.events.stream().anyMatch(e -> e.hasCastSpell() && e.getCastSpell().getSeat() == 0
+                && e.getStep() == magicdosa.protocol.v1.Step.STEP_DECLARE_ATTACKERS
+                && e.getCastSpell().getSpell().getCard().getOracleId().equals(oracle)
+                && e.getCastSpell().getTargetsCount() == 2), s.name + ": Kozilek's Command not cast with two targets in the attack");
+            clean(r);
+        }
+    }
+
+    /**
      * f7bcbe3: a rebuilt Urza's Saga with lore counters has the abilities its chapters gave it for good (I: "{T}: Add
      * {C}", II: the Construct ability); a recovery-2 rebuild without them left the mana ability out of the candidates.
      */
