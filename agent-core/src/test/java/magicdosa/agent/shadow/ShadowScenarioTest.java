@@ -90,6 +90,35 @@ class ShadowScenarioTest {
         }
     }
 
+    /**
+     * The other seat's Soul-Guide Lantern enters ("exile target card from a graveyard") with two or three non-basic lands
+     * in seat 0's graveyard: Forge AI picks one of them at random (ComputerUtilCard.getBestLandAI), so the replayed seat
+     * takes the targets the real stream shows for its trigger (before: about half the seeds targeted another land).
+     */
+    @Test
+    void replayedTriggerTakesItsRecordedTargets() throws Exception {
+        String[][] yards = {{"Marsh Flats", "Polluted Delta"}, {"Marsh Flats", "Polluted Delta", "Flooded Strand"},
+            {"Watery Grave", "Hallowed Fountain"}};
+        String[] names = {"lantern-0-1", "lantern-1-0", "lantern-2-0"}; // names seed the games
+        for (int y = 0; y < yards.length; y++) {
+            Scenario s = new Scenario(names[y], 5, 1);
+            s.seat(0).deck("Island", 26).deck("Plains", 26).deck("Marsh Flats", 2).deck("Polluted Delta", 2).deck("Flooded Strand", 2)
+                .deck("Watery Grave", 1).deck("Hallowed Fountain", 1)
+                .library("Island", "Plains", "Island", "Plains", "Island", "Plains")
+                .hand("Plains")
+                .battlefield("Island", "Plains")
+                .graveyard(yards[y]);
+            s.seat(1).deck("Forest", 52).deck("Soul-Guide Lantern", 4).deck("Ancient Stirrings", 4)
+                .library("Forest", "Forest", "Forest")
+                .hand("Soul-Guide Lantern", "Forest")
+                .battlefield("Forest", "Forest");
+            ShadowGame.Result r = s.play(2);
+            assertTrue(s.events.stream().anyMatch(e -> e.hasTriggerStacked() && e.getTriggerStacked().getSeat() == 1
+                && e.getTriggerStacked().getTargetsCount() == 1), s.name + ": no targeted trigger of seat 1");
+            clean(r);
+        }
+    }
+
     private static boolean casts(Scenario s, int seat, String card) {
         String oracle = Scenario.keys().oracleIdByName(card);
         return s.events.stream().anyMatch(e -> e.hasCastSpell() && e.getCastSpell().getSeat() == seat

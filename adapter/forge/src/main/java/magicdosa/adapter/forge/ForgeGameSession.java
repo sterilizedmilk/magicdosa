@@ -722,6 +722,60 @@ public final class ForgeGameSession {
         return ObjectRef.getDefaultInstance();
     }
 
+    /**
+     * Shadow games: the targets the real game's stream shows for a replayed seat's triggered ability (by trigger ID), or
+     * null where the stream has none. Forge AI targets triggers on its own, partly at random (Soul-Guide Lantern between
+     * two fetch lands in a graveyard: ComputerUtilCard.getBestLandAI picks one at random), so the replayed seat takes the
+     * recorded targets when they name legal targets of the same number.
+     */
+    private java.util.function.BiFunction<Integer, Long, List<ObjectRef>> recordedTriggerTargets;
+
+    public void recordedTriggerTargets(java.util.function.BiFunction<Integer, Long, List<ObjectRef>> source) {
+        recordedTriggerTargets = source;
+    }
+
+    /** A replayed seat's trigger just put on the stack takes the recorded targets (before becomes-target triggers run). */
+    private void recordedTriggerTargets(SpellAbility sa, int seat) {
+        long trigger = ids.triggerId(sa);
+        List<ObjectRef> recorded = recordedTriggerTargets == null || trigger == 0 ? null : recordedTriggerTargets.apply(seat, trigger);
+        if (recorded == null || recorded.equals(targets(sa))) {
+            return;
+        }
+        List<List<GameObject>> plan = new ArrayList<>();
+        int k = 0;
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+            if (!s.usesTargeting()) {
+                continue;
+            }
+            List<GameObject> objects = new ArrayList<>();
+            for (int i = 0; i < s.getTargets().size(); i++) {
+                if (k >= recorded.size()) {
+                    return;
+                }
+                ObjectRef r = recorded.get(k++);
+                GameObject o = r.hasPlayerSeat() ? player(r.getPlayerSeat()) : ids.cardOf(r.getEntityId());
+                if (o == null || (o instanceof Card c && c.isInZone(ZoneType.Stack)) || !s.canTarget(o)) {
+                    return; // a spell on the stack, or not a legal target here: Forge AI's targets stay
+                }
+                objects.add(o);
+            }
+            plan.add(objects);
+        }
+        if (k != recorded.size()) {
+            return;
+        }
+        int i = 0;
+        for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+            if (s.usesTargeting()) {
+                s.resetTargets();
+                for (GameObject o : plan.get(i++)) {
+                    s.getTargets().add(o);
+                }
+            }
+        }
+        stats.note("replayed seat's trigger: targets taken from the record");
+    }
+
     List<ObjectRef> targets(SpellAbility sa) {
         List<ObjectRef> out = new ArrayList<>();
         for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
@@ -1567,6 +1621,9 @@ public final class ForgeGameSession {
             : idsAtActionStart.containsKey(host.getId()) ? idsAtActionStart.get(host.getId())
             : movedInLastSync.contains(host.getId()) ? ids.prevIdOf(hostId) : hostId;
         ids.setSource(si, sa.isTrigger() ? triggerSources.getOrDefault(ids.triggerId(sa), sourceId) : sourceId);
+        if (sa.isTrigger() && !sa.isCopied()) {
+            recordedTriggerTargets(sa, seat);
+        }
         List<ObjectRef> targets = targets(sa);
         if (sa.isCopied()) {
             // copies are created, not cast: a spell copy was reported as ObjectCreated when it appeared on the stack

@@ -1584,6 +1584,7 @@ public final class ShadowGame {
         }
         session = new ForgeGameSession(game, rec.header.getMatchId(), rec.header.getGameNumber(), decks, won, Set.of(viewer),
             new Client(), keys, LogSink.DISCARD, rec.header.getMode(), rec.header.getGameSeed());
+        session.recordedTriggerTargets(this::recordedTriggerTargets);
         for (Player p : game.getRegisteredPlayers()) {
             if (p.getLobbyPlayer() instanceof magicdosa.adapter.forge.AgentLobbyPlayer lobby) {
                 lobby.session(session); // the viewer controlling the other seat decides its choices, as in the real game
@@ -1684,6 +1685,20 @@ public final class ShadowGame {
             }
         }
         return out;
+    }
+
+    /** The targets the real stream shows for the other seat's triggered ability {@code trigger}, or null. */
+    private List<magicdosa.protocol.v1.ObjectRef> recordedTriggerTargets(int seat, long trigger) {
+        if (seat == viewer) {
+            return null;
+        }
+        for (Event e : rec.events.values()) {
+            if (e.getBodyCase() == Event.BodyCase.TRIGGER_STACKED && e.getTriggerStacked().getAbilityId() == trigger
+                    && e.getTriggerStacked().getSeat() == seat) {
+                return e.getTriggerStacked().getTargetsList();
+            }
+        }
+        return null;
     }
 
     private static boolean answerBearing(Event e, int seat) {
