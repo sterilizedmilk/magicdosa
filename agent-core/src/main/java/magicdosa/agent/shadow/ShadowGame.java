@@ -1016,7 +1016,15 @@ public final class ShadowGame {
         Card owner = session.cardOf(id);
         boolean sampledSixty = startSnapshot.snapshot().getObservation().getMatch().getGameNumber() > 1
             && owner != null && game.getRegisteredPlayers().indexOf(owner.getOwner()) != viewer;
-        int r = session.swapIdentity(id, oracle, shownIds, sync, sampledSixty, sameZoneOnly);
+        // a card the resolving effect holds (a discard's chosen card) is no swap partner either: it would leave its
+        // ID to the card it trades with, and the effect would then move the card it holds under the other's ID (seen
+        // live: Geier Reach Sanitarium discarding the card a later cast needs)
+        Set<Long> locked = shownIds;
+        if (!heldByEffect.isEmpty() && game.getStack().isResolving()) {
+            locked = new java.util.HashSet<>(shownIds);
+            locked.addAll(heldByEffect);
+        }
+        int r = session.swapIdentity(id, oracle, locked, sync, sampledSixty, sameZoneOnly);
         if (r == 2) {
             result.sixtyChanges++;
         }

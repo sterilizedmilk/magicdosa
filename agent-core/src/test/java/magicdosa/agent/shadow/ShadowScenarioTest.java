@@ -62,6 +62,34 @@ class ShadowScenarioTest {
         }
     }
 
+    /**
+     * The other seat activates Geier Reach Sanitarium in its second main phase, draws Teferi, discards another hidden
+     * card and then casts the Teferi. Live, its discard choice comes before the record shows what the discarded card is,
+     * and the sample may have made that card the Teferi; the Teferi's reveal (taken after our own discard answer, inside
+     * the effect) must not trade identities with the card the effect holds, or the effect discards the Teferi under the
+     * drawn card's ID and the recorded cast finds no card (before the fix: 1 of 32 decisions did not match).
+     */
+    @Test
+    void castOfACardDrawnInsideAnEffectThatDiscardsAnother() throws Exception {
+        for (String name : new String[] {"tefcast-1-0-0", "tefcast-1-0-1"}) { // names seed the games and the sample
+            Scenario s = new Scenario(name, 5, 1);
+            s.seat(0).deck("Island", 26).deck("Plains", 30).deck("Geier Reach Sanitarium", 4)
+                .library("Island", "Plains", "Island", "Plains", "Island", "Plains")
+                .hand("Plains")
+                .battlefield("Island", "Plains");
+            s.seat(1).deck("Island", 14).deck("Plains", 14).deck("Wrath of the Skies", 4).deck("Teferi, Time Raveler", 24)
+                .deck("Geier Reach Sanitarium", 4)
+                .library("Island", "Teferi, Time Raveler", "Plains")
+                .hand("Wrath of the Skies", "Island", "Plains")
+                .battlefield("Geier Reach Sanitarium", "Island", "Plains", "Plains", "Island", "Island");
+            ShadowGame.Result r = s.play(3);
+            assertTrue(s.events.stream().anyMatch(e -> e.hasResolutionChoice() && e.getResolutionChoice().getSeat() == 1
+                && e.getResolutionChoice().getEnginePrompt().equals("chooseCardsToDiscardFrom")), name + ": no discard by seat 1");
+            assertTrue(casts(s, 1, "Teferi, Time Raveler"), name + ": Teferi not cast");
+            clean(r);
+        }
+    }
+
     private static boolean casts(Scenario s, int seat, String card) {
         String oracle = Scenario.keys().oracleIdByName(card);
         return s.events.stream().anyMatch(e -> e.hasCastSpell() && e.getCastSpell().getSeat() == seat
