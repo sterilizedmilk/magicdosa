@@ -62,6 +62,13 @@ import java.util.function.LongFunction;
  */
 public final class ForgeSearchGame implements SearchGame {
     /** Types the rollout policy answers even in the tree (3단계 기획 쟁점 2: delegated, rates recorded). */
+    /**
+     * Decisions searched at the root: priority (the shadow waits at a priority point) and the combat declarations (the
+     * copy goes back to the step before and Forge's loop asks again). Roots inside an action are not done yet.
+     */
+    public static final Set<DecisionType> ROOTS = Set.of(DecisionType.DECISION_TYPE_PRIORITY,
+        DecisionType.DECISION_TYPE_DECLARE_ATTACKERS, DecisionType.DECISION_TYPE_DECLARE_BLOCKERS);
+
     static final Set<DecisionType> DELEGATED = Set.of(DecisionType.DECISION_TYPE_MANA_PAYMENT,
         DecisionType.DECISION_TYPE_DAMAGE_ASSIGNMENT, DecisionType.DECISION_TYPE_TRIGGER_ORDER,
         DecisionType.DECISION_TYPE_MULLIGAN, DecisionType.DECISION_TYPE_BOTTOM_CARDS,
@@ -82,13 +89,20 @@ public final class ForgeSearchGame implements SearchGame {
     private final String matchId;
     private final int gameNumber;
     private final List<String> rootActions;
+    /** The root request's candidates by name, in candidate order. */
+    private final List<String> rootNames;
+
+    /** The candidate index an action of the root decision's steps names; -1 for "done". */
+    public int rootCandidate(String action) {
+        return action.equals(DONE) ? -1 : rootNames.indexOf(action);
+    }
     /** What the simulations did, for the search's report. */
     public final Map<String, Integer> counts = new TreeMap<>();
 
     public ForgeSearchGame(Game shadow, ForgeGameSession shadowSession, DecisionRequest root, CardKeys keys, List<Deck> decks,
                            int[] gamesWon, String matchId, int gameNumber) {
-        if (root.getType() != DecisionType.DECISION_TYPE_PRIORITY) {
-            throw new IllegalArgumentException("search roots are priority decisions for now: " + root.getType());
+        if (!ROOTS.contains(root.getType())) {
+            throw new IllegalArgumentException("not a search root yet: " + root.getType());
         }
         this.shadow = shadow;
         this.shadowSession = shadowSession;
@@ -103,7 +117,14 @@ public final class ForgeSearchGame implements SearchGame {
         for (Candidate c : root.getCandidatesList()) {
             a.add(rootKey(c, id -> forgeIdOf(shadowSession.cardOf(id), id)));
         }
-        this.rootActions = List.copyOf(a);
+        this.rootNames = List.copyOf(a);
+        count("root " + root.getType().name().replace("DECISION_TYPE_", ""));
+        List<Integer> all = new ArrayList<>();
+        for (int i = 0; i < root.getCandidatesCount(); i++) {
+            all.add(i);
+        }
+        // the root decision's first step: its fitting candidates and, where it may stop at once, "done"
+        this.rootActions = List.copyOf(stepActions(rootNames, fitting(root, all, List.of()), doneAllowed(root, List.of())));
     }
 
     @Override
@@ -136,6 +157,9 @@ public final class ForgeSearchGame implements SearchGame {
         Game copy = copier.makeCopy();
         copy.AI_TIMEOUT = 600; // Forge AI's wall-clock limit as a safeguard only (as in the shadow), never a budget
         PhaseState.copy(shadow, copy, copier);
+        if (root.getType() != DecisionType.DECISION_TYPE_PRIORITY) {
+            PhaseState.rewindToDeclaration(copy);
+        }
         deal(copier, rng);
         magicdosa.agent.Timing.add("search.copy", t0);
         return chooser -> {
@@ -304,22 +328,22 @@ public final class ForgeSearchGame implements SearchGame {
         public DecisionResponse decide(DecisionRequest r) {
             delegate = false;
             DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(r.getGameId()).setDecisionId(r.getDecisionId());
-            if (!askedRoot) {
-                askedRoot = true;
-                List<String> actions = new ArrayList<>();
-                for (Candidate c : r.getCandidatesList()) {
-                    actions.add(rootKey(c, id -> forgeIdOf(session.cardOf(id), id)));
-                }
-                int pick = chooser.choose(new Decision(r.getSeat(), "root", actions));
-                return out.addChosen(pick).build();
-            }
-            if (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0) {
+            boolean isRoot = !askedRoot;
+            askedRoot = true;
+            if (!isRoot && (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0)) {
                 count("delegated " + r.getType().name().replace("DECISION_TYPE_", ""));
                 delegate = true;
                 delegatedAt = magicdosa.agent.Timing.start();
                 return out.build();
             }
-            String info = magicdosa.agent.shadow.Fingerprint.hash(magicdosa.agent.shadow.Fingerprint.normalise(
+            // the root decision's candidates are named by Forge card numbers (they must equal the real request's);
+            // elsewhere by the copy's own entity IDs
+            List<String> names = new ArrayList<>();
+            for (Candidate k : r.getCandidatesList()) {
+                names.add(isRoot ? rootKey(k, id -> forgeIdOf(session.cardOf(id), id))
+                    : com.google.protobuf.TextFormat.shortDebugString(k));
+            }
+            String info = isRoot ? "root" : magicdosa.agent.shadow.Fingerprint.hash(magicdosa.agent.shadow.Fingerprint.normalise(
                 r.toBuilder().clearCandidates().clearConstraints().build()));
             SelectionConstraints c = r.getConstraints();
             List<Integer> remaining = new ArrayList<>();
@@ -330,8 +354,7 @@ public final class ForgeSearchGame implements SearchGame {
             boolean inTree = true;
             while (chosen.size() < c.getMax()) {
                 List<Integer> fit = fitting(r, remaining, chosen);
-                boolean doneAllowed = chosen.size() >= c.getMin() && complete(r, chosen)
-                    && !(c.getMin() == 1 && c.getMax() == 1);
+                boolean doneAllowed = doneAllowed(r, chosen);
                 if (fit.isEmpty() && !doneAllowed) {
                     throw new IllegalStateException(r.getType() + ": no legal way to complete the selection");
                 }
@@ -340,17 +363,12 @@ public final class ForgeSearchGame implements SearchGame {
                 }
                 int pick = Chooser.ROLLOUT;
                 if (inTree) {
-                    List<String> actions = new ArrayList<>();
-                    for (int i : fit) {
-                        actions.add(com.google.protobuf.TextFormat.shortDebugString(r.getCandidates(i)));
-                    }
-                    if (doneAllowed) {
-                        actions.add("done");
-                    }
+                    List<String> actions = stepActions(names, fit, doneAllowed);
                     // a step's information set: the decision's plus what is chosen so far, in order-free form
                     List<Integer> sorted = new ArrayList<>(chosen);
                     sorted.sort(Integer::compare);
-                    pick = chooser.choose(new Decision(r.getSeat(), info + "|" + sorted, actions));
+                    pick = chooser.choose(new Decision(r.getSeat(), chosen.isEmpty() ? info : info + "|" + sorted, actions,
+                        !chosen.isEmpty()));
                     if (pick == Chooser.ROLLOUT) {
                         if (chosen.isEmpty()) {
                             delegate = true; // Forge AI answers the whole request
@@ -372,6 +390,37 @@ public final class ForgeSearchGame implements SearchGame {
             }
             return out.addAllChosen(chosen).build();
         }
+    }
+
+    /** A step's actions: the fitting candidates' names, then "done" where the selection may stop. */
+    static List<String> stepActions(List<String> names, List<Integer> fit, boolean doneAllowed) {
+        List<String> actions = new ArrayList<>();
+        for (int i : fit) {
+            actions.add(names.get(i));
+        }
+        if (doneAllowed) {
+            actions.add(DONE);
+        }
+        return actions;
+    }
+
+    /** The "done" action of a multi-select step. */
+    public static final String DONE = "done";
+
+    /** Whether a selection with these constraints may stop with "done" after {@code chosen} picks. */
+    static boolean doneAllowed(DecisionRequest r, List<Integer> chosen) {
+        SelectionConstraints c = r.getConstraints();
+        return chosen.size() >= c.getMin() && complete(r, chosen) && !(c.getMin() == 1 && c.getMax() == 1);
+    }
+
+    /** {@link #doneAllowed}, for the answer's own steps. */
+    public static boolean mayStop(DecisionRequest r, List<Integer> chosen) {
+        return chosen.size() >= r.getConstraints().getMin() && complete(r, chosen);
+    }
+
+    /** {@link #fitting}, for the answer's own steps. */
+    public static List<Integer> fits(DecisionRequest r, List<Integer> remaining, List<Integer> chosen) {
+        return fitting(r, remaining, chosen);
     }
 
     /** Pair candidates (attack, block) still within their objects' limits; every other candidate. */
@@ -457,6 +506,28 @@ public final class ForgeSearchGame implements SearchGame {
                 return f;
             } catch (NoSuchFieldException e) {
                 throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        /**
+         * A combat declaration root: the shadow waits inside the declaration (a turn-based action at the start of the
+         * step), which a copy cannot resume. The copy goes back to the step before, with first priority on the other
+         * seat and none given, so Forge's loop moves on at once and starts the step again (the combat itself is copied:
+         * no attackers yet for an attack root, the attackers for a block root).
+         */
+        static void rewindToDeclaration(Game copy) {
+            PhaseHandler ph = copy.getPhaseHandler();
+            forge.game.phase.PhaseType step = ph.getPhase();
+            forge.game.phase.PhaseType before = step == forge.game.phase.PhaseType.COMBAT_DECLARE_ATTACKERS
+                ? forge.game.phase.PhaseType.COMBAT_BEGIN : forge.game.phase.PhaseType.COMBAT_DECLARE_ATTACKERS;
+            Player active = ph.getPlayerTurn();
+            ph.devModeSet(before, active, false, ph.getTurn());
+            try {
+                PRIORITY.set(ph, active);
+                FIRST.set(ph, active.getWeakestOpponent());
+                GIVE.setBoolean(ph, false);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
             }
         }
 

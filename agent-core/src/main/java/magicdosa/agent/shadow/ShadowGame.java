@@ -223,7 +223,7 @@ public final class ShadowGame {
         }
         DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(real.getGameId())
             .setDecisionId(real.getDecisionId());
-        if (real.getCandidatesCount() == 1) {
+        if (real.getCandidatesCount() == 1 && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
             step.setChosen(0).setMethod(magicdosa.protocol.v1.Method.newBuilder()
                 .setPrior(magicdosa.protocol.v1.Prior.PRIOR_UNIFORM)
                 .setSkipped(magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SINGLE_CANDIDATE));
@@ -250,8 +250,52 @@ public final class ShadowGame {
             }
             return b.build();
         }
-        step.setChosen(r.chosen()).addAllVisitRatio(r.visitRatios()).setMethod(r.method());
-        return out.addChosen(r.chosen()).addSteps(step).build();
+        // one protocol step per pick of the root decision (a multi-select's steps; one for a single pick), each with
+        // the visit ratios of its node
+        List<Integer> chosen = new ArrayList<>();
+        boolean done = false;
+        for (magicdosa.agent.search.SearchResult.Step s : r.steps) {
+            magicdosa.protocol.v1.DecisionStep.Builder b = magicdosa.protocol.v1.DecisionStep.newBuilder()
+                .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL).setMethod(r.method());
+            for (String a : s.actions()) {
+                int idx = g.rootCandidate(a);
+                b.addCandidates(idx < 0 ? magicdosa.protocol.v1.StepCandidate.newBuilder().setDone(true)
+                    : magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(idx));
+            }
+            b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios());
+            out.addSteps(b);
+            int idx = g.rootCandidate(s.actions().get(s.chosen()));
+            if (idx < 0) {
+                done = true;
+                break;
+            }
+            chosen.add(idx);
+        }
+        if (!done && chosen.size() < real.getConstraints().getMax()) {
+            // the tree went no deeper: the rest of the selection is finished here (first fitting candidates until it
+            // may stop), recorded as steps without visit ratios
+            List<Integer> remaining = new ArrayList<>();
+            for (int i = 0; i < real.getCandidatesCount(); i++) {
+                if (!chosen.contains(i)) {
+                    remaining.add(i);
+                }
+            }
+            while (!magicdosa.agent.search.ForgeSearchGame.mayStop(real, chosen) && chosen.size() < real.getConstraints().getMax()) {
+                List<Integer> fit = magicdosa.agent.search.ForgeSearchGame.fits(real, remaining, chosen);
+                if (fit.isEmpty()) {
+                    break;
+                }
+                magicdosa.protocol.v1.DecisionStep.Builder b = magicdosa.protocol.v1.DecisionStep.newBuilder()
+                    .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL).setMethod(r.method());
+                for (int i : fit) {
+                    b.addCandidates(magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(i));
+                }
+                out.addSteps(b.setChosen(0));
+                chosen.add(fit.get(0));
+                remaining.remove(fit.get(0));
+            }
+        }
+        return out.addAllChosen(chosen).build();
     }
 
     /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
@@ -2192,7 +2236,7 @@ public final class ShadowGame {
             DecisionResponse resp = recorded;
             if (resp == null) {
                 if (stage != 3 && (live.search() == null
-                        || real.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY)) {
+                        || !magicdosa.agent.search.ForgeSearchGame.ROOTS.contains(real.getType()))) {
                     // live, tracking: the shadow game's Forge AI answers (the decision layer maps its answer back);
                     // with search, the roots search does not take yet (inside an action) are delegated the same way
                     pendingReal = real;

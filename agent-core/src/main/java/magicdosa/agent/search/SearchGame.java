@@ -40,8 +40,13 @@ public interface SearchGame {
      * One decision met in a simulation. {@code infoKey} identifies the deciding seat's information set (what that seat
      * can see: public state plus its own hidden cards), so two determinizations that the seat cannot tell apart reach
      * the same tree node; {@code actions} are its legal actions as keys stable across determinizations.
+     * {@code continuation}: the next step of the decision just answered (a multi-select picks one candidate per step,
+     * protocol steps[]); the root decision's steps are read back from the tree as the answer's steps.
      */
-    record Decision(int seat, String infoKey, List<String> actions) {
+    record Decision(int seat, String infoKey, List<String> actions, boolean continuation) {
+        public Decision(int seat, String infoKey, List<String> actions) {
+            this(seat, infoKey, actions, false);
+        }
     }
 
     /** Answers the decisions of a simulation. */

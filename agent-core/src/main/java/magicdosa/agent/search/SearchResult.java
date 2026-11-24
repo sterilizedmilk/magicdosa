@@ -31,8 +31,26 @@ public final class SearchResult {
     private final long[] visits;
     /** First few reasons by kind (diagnostics). */
     public final Map<String, Integer> problems;
+    /** The root decision's steps, the first one over the root candidates (one step for a single pick). */
+    public final List<Step> steps;
 
-    private SearchResult(Builder b, long[] visits, double rootValue) {
+    /** One step of the answer: the actions seen at the step's node, their visits and the most visited. */
+    public record Step(List<String> actions, long[] visits, int chosen) {
+        public List<Float> visitRatios() {
+            long total = 0;
+            for (long v : visits) {
+                total += v;
+            }
+            List<Float> out = new ArrayList<>(visits.length);
+            for (long v : visits) {
+                out.add(total == 0 ? 0f : (float) ((double) v / total));
+            }
+            return out;
+        }
+    }
+
+    private SearchResult(Builder b, long[] visits, double rootValue, List<Step> steps) {
+        this.steps = List.copyOf(steps);
         this.config = b.config;
         this.seed = b.seed;
         this.iterations = b.iterations;
@@ -126,8 +144,8 @@ public final class SearchResult {
             }
         }
 
-        SearchResult build(long[] visits, double rootValue) {
-            return new SearchResult(this, visits, rootValue);
+        SearchResult build(long[] visits, double rootValue, List<Step> steps) {
+            return new SearchResult(this, visits, rootValue, steps);
         }
     }
 }

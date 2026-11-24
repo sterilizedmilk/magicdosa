@@ -48,11 +48,17 @@ public final class IsMcts {
     /** An information set of the deciding seat. */
     static final class Node {
         final int seat;
+        final boolean continuation;
         long visits;
         final Map<String, Edge> edges = new LinkedHashMap<>();
 
         Node(int seat) {
+            this(seat, false);
+        }
+
+        Node(int seat, boolean continuation) {
             this.seat = seat;
+            this.continuation = continuation;
         }
     }
 
@@ -126,7 +132,43 @@ public final class IsMcts {
             reward += e.reward;
         }
         out.nodes = nodes[0];
-        return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits);
+        return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits, steps(root));
+    }
+
+    /**
+     * The root decision's steps as the search answers them: at each step the most visited action (the first of
+     * equals), then the most visited continuation node under it, until "done" or no further step was searched.
+     */
+    private static List<SearchResult.Step> steps(Node root) {
+        List<SearchResult.Step> out = new ArrayList<>();
+        Node node = root;
+        while (node != null && node.visits > 0) {
+            List<String> actions = new ArrayList<>();
+            long[] v = new long[node.edges.size()];
+            int best = -1;
+            int i = 0;
+            for (Edge e : node.edges.values()) {
+                actions.add(e.action);
+                v[i] = e.visits;
+                if (e.visits > 0 && (best < 0 || e.visits > v[best])) {
+                    best = i;
+                }
+                i++;
+            }
+            if (best < 0) {
+                break;
+            }
+            out.add(new SearchResult.Step(actions, v, best));
+            Edge chosen = node.edges.get(actions.get(best));
+            Node next = null;
+            for (Node n : chosen.next.values()) {
+                if (n.continuation && n.seat == root.seat && (next == null || n.visits > next.visits)) {
+                    next = n;
+                }
+            }
+            node = next;
+        }
+        return out;
     }
 
     /** One simulation's walk down the tree: the tree-lookup chooser. */
@@ -169,7 +211,7 @@ public final class IsMcts {
                 node = last.next.get(key);
                 if (node == null) {
                     // expansion: one new node per simulation, then the rollout policy plays on
-                    last.next.put(key, new Node(d.seat()));
+                    last.next.put(key, new Node(d.seat(), d.continuation()));
                     nodes[0]++;
                     outOfTree = true;
                     return ROLLOUT;

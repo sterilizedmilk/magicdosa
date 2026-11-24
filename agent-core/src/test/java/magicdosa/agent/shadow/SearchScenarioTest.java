@@ -39,6 +39,28 @@ class SearchScenarioTest {
         assertEquals(r.decisions, r.decisionsMatched, why);
     }
 
+    /** Combat declarations are searched at the root: the copy goes back a step and Forge's loop asks again. */
+    @Test
+    void combatDeclarationsAreSearched() throws Exception {
+        Scenario s = new Scenario("search-combat-0", 5, 0);
+        s.seat(0).deck("Mountain", 30).deck("Monastery Swiftspear", 30)
+            .library("Mountain", "Mountain", "Mountain", "Mountain", "Mountain", "Mountain")
+            .hand("Mountain")
+            .battlefield("Mountain", "Mountain", "Monastery Swiftspear", "Monastery Swiftspear", "Monastery Swiftspear");
+        s.seat(1).deck("Forest", 30).deck("Monastery Swiftspear", 30)
+            .library("Forest", "Forest", "Forest", "Forest")
+            .hand("Forest")
+            .battlefield("Forest", "Forest", "Monastery Swiftspear", "Monastery Swiftspear");
+        s.search = SearchConfig.of(6);
+        ShadowGame.Result r = s.play(2);
+        LiveShadow.Stats st = s.stats;
+        String why = st.line() + " samples: " + r.samples;
+        System.out.println("search combat scenario: " + why);
+        assertTrue(st.search.getOrDefault("root DECLARE_ATTACKERS", 0) > 0, why);
+        assertTrue(st.backedUp * 2 > st.simulations, why);
+        assertEquals(r.decisions, r.decisionsMatched, why);
+    }
+
     @Test
     void sameSeedSameSearches() throws Exception {
         String[] lines = new String[2];
