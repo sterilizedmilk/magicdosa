@@ -131,12 +131,21 @@ public final class ForgeSearchGame implements SearchGame {
 
     @Override
     public Simulation determinize(SplittableRandom rng) {
+        long t0 = magicdosa.agent.Timing.start(); // measurement only
         GameCopier copier = new GameCopier(shadow).withStack(true);
         Game copy = copier.makeCopy();
         copy.AI_TIMEOUT = 600; // Forge AI's wall-clock limit as a safeguard only (as in the shadow), never a budget
         PhaseState.copy(shadow, copy, copier);
         deal(copier, rng);
-        return chooser -> play(copy, chooser, rng);
+        magicdosa.agent.Timing.add("search.copy", t0);
+        return chooser -> {
+            long t1 = magicdosa.agent.Timing.start();
+            try {
+                return play(copy, chooser, rng);
+            } finally {
+                magicdosa.agent.Timing.addHistogram("search.simulation", t1);
+            }
+        };
     }
 
     /**
@@ -212,7 +221,10 @@ public final class ForgeSearchGame implements SearchGame {
             if (!client.askedRoot) {
                 return 0.5; // the walk reports it: the root decision was never asked
             }
-            return value(copy, me);
+            long tv = magicdosa.agent.Timing.start();
+            double v = value(copy, me);
+            magicdosa.agent.Timing.add("search.leafValue", tv);
+            return v;
         } finally {
             ForgeRandom.restore(saved);
         }
@@ -273,9 +285,14 @@ public final class ForgeSearchGame implements SearchGame {
             return delegate;
         }
 
+        /** When the last delegated request went to Forge AI (measurement only: rollout decision times). */
+        private long delegatedAt;
+
         @Override
         public void delegated(DecisionRequest request, List<Integer> chosen, String engineDecision) {
             count("rollout " + request.getType().name().replace("DECISION_TYPE_", ""));
+            magicdosa.agent.Timing.addHistogram("search.forgeAi." + request.getType().name().replace("DECISION_TYPE_", ""),
+                delegatedAt);
         }
 
         @Override
@@ -299,6 +316,7 @@ public final class ForgeSearchGame implements SearchGame {
             if (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0) {
                 count("delegated " + r.getType().name().replace("DECISION_TYPE_", ""));
                 delegate = true;
+                delegatedAt = magicdosa.agent.Timing.start();
                 return out.build();
             }
             String info = magicdosa.agent.shadow.Fingerprint.hash(magicdosa.agent.shadow.Fingerprint.normalise(
@@ -336,6 +354,7 @@ public final class ForgeSearchGame implements SearchGame {
                     if (pick == Chooser.ROLLOUT) {
                         if (chosen.isEmpty()) {
                             delegate = true; // Forge AI answers the whole request
+                            delegatedAt = magicdosa.agent.Timing.start();
                             return out.build();
                         }
                         inTree = false;

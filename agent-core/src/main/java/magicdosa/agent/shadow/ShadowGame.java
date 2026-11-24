@@ -236,7 +236,9 @@ public final class ShadowGame {
         }
         magicdosa.agent.search.ForgeSearchGame g = new magicdosa.agent.search.ForgeSearchGame(game, session, real, keys,
             decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber());
+        long t0 = magicdosa.agent.Timing.start(); // measurement only
         magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
+        magicdosa.agent.Timing.addHistogram("search.decision", t0);
         live.searched(r, g.counts);
         if (!r.searched()) {
             sample(result.samples, "decision " + real.getDecisionId() + ": " + r);

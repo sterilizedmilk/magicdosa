@@ -37,6 +37,28 @@ public final class Timing {
         }
     }
 
+    /** Upper bounds (ms) of the histogram buckets; the last bucket is everything above. */
+    private static final long[] BUCKETS_MS = {1, 10, 100, 1_000, 10_000, 60_000};
+    private static final Map<String, java.util.concurrent.atomic.AtomicLongArray> HIST = new ConcurrentHashMap<>();
+    private static final Map<String, java.util.concurrent.atomic.AtomicLong> MAX = new ConcurrentHashMap<>();
+
+    /** Adds the time since {@code start} to {@code part} and to its histogram (a distribution, not only a sum). */
+    public static void addHistogram(String part, long start) {
+        if (!ON || start == 0) {
+            return;
+        }
+        long nanos = System.nanoTime() - start;
+        NANOS.computeIfAbsent(part, k -> new LongAdder()).add(nanos);
+        COUNTS.computeIfAbsent(part, k -> new LongAdder()).increment();
+        long ms = nanos / 1_000_000;
+        int b = 0;
+        while (b < BUCKETS_MS.length && ms >= BUCKETS_MS[b]) {
+            b++;
+        }
+        HIST.computeIfAbsent(part, k -> new java.util.concurrent.atomic.AtomicLongArray(BUCKETS_MS.length + 1)).incrementAndGet(b);
+        MAX.computeIfAbsent(part, k -> new java.util.concurrent.atomic.AtomicLong()).accumulateAndGet(ms, Math::max);
+    }
+
     /** "timing part=ms/count ..." for the agent-core summary line; empty when off. */
     public static String line() {
         if (!ON) {
@@ -45,6 +67,13 @@ public final class Timing {
         StringBuilder b = new StringBuilder("timing");
         new TreeMap<>(NANOS).forEach((k, v) -> b.append(' ').append(k).append('=').append(v.sum() / 1_000_000)
             .append("ms/").append(COUNTS.get(k).sum()));
+        new TreeMap<>(HIST).forEach((k, h) -> {
+            b.append(' ').append(k).append(".hist=[");
+            for (int i = 0; i < h.length(); i++) {
+                b.append(i == 0 ? "" : ",").append(i < BUCKETS_MS.length ? "<" + BUCKETS_MS[i] + "ms:" : ">=60s:").append(h.get(i));
+            }
+            b.append("] max=").append(MAX.get(k).get()).append("ms");
+        });
         long peak = 0;
         for (var pool : java.lang.management.ManagementFactory.getMemoryPoolMXBeans()) {
             if (pool.getType() == java.lang.management.MemoryType.HEAP && pool.getPeakUsage() != null) {
