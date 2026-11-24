@@ -65,16 +65,25 @@ public final class ShardWriter {
     private final Encoder encoder;
     private final Path dir;
     private final String modelVersion;
+    private final String policy;
 
     public Vocab vocabulary() {
         return encoder.vocab();
     }
 
-    public ShardWriter(Encoder encoder, Path dir, String modelVersion) {
+    /**
+     * {@code modelVersion}: the network the decisions came from, {@value #NO_MODEL} when there is none (phase 3);
+     * {@code policy}: how agent-core decided (random, search-uniform, ...).
+     */
+    public ShardWriter(Encoder encoder, Path dir, String modelVersion, String policy) {
         this.encoder = encoder;
         this.dir = dir;
         this.modelVersion = modelVersion;
+        this.policy = policy;
     }
+
+    /** The model version of shards written without a network. */
+    public static final String NO_MODEL = "none";
 
     /** A decision as agent-core answered it. */
     public record Decided(DecisionRequest request, DecisionResponse response) {}
@@ -109,6 +118,18 @@ public final class ShardWriter {
         meta.put("encoder_version", String.valueOf(AgentCore.ENCODER_VERSION));
         meta.put("vocab_version", String.valueOf(encoder.vocab().version()));
         meta.put("model_version", modelVersion);
+        meta.put("policy", policy);
+        // the match this game belongs to (3단계 게임 전 샤드 항목, 2026-11-24): our deck, the opponent's, game number
+        meta.put("match_id", hello.getMatchId());
+        meta.put("game_number", String.valueOf(hello.getGameNumber()));
+        int me = hello.getAgentSeatsCount() > 0 ? hello.getAgentSeats(0) : 0;
+        meta.put("agent_seat", String.valueOf(me));
+        if (!decided.isEmpty()) {
+            for (var mp : decided.get(0).request().getObservation().getMatch().getPlayersList()) {
+                String deck = mp.getDeckName() + (mp.getDeckVersion().isEmpty() ? "" : "@" + mp.getDeckVersion());
+                meta.put(mp.getSeat() == me ? "our_deck" : "opponent_deck", deck);
+            }
+        }
         meta.put("engine", hello.getAdapter() + " " + hello.getEngineVersion());
         meta.put("global_features", String.join(",", Encoder.GLOBAL));
         meta.put("token_features", String.join(",", Encoder.TOKEN));

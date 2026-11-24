@@ -82,7 +82,8 @@ public final class AgentCore {
             search = magicdosa.agent.search.SearchConfig.fromSystemProperties(budget);
         }
         Agent agent = new Agent(policy, shardDir == null ? null : new magicdosa.agent.encoder.ShardWriter(
-            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir, policy.modelVersion()),
+            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir,
+            magicdosa.agent.encoder.ShardWriter.NO_MODEL, policy.modelVersion()),
             shadowKeys, search);
         AgentCoreServer server = AgentCoreServer.start(port, agent);
         System.out.println("agent-core: protocol " + Versions.PROTOCOL + ", encoder " + ENCODER_VERSION + ", model "
