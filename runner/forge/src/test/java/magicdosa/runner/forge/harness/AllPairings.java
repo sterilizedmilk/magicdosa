@@ -39,7 +39,7 @@ public final class AllPairings {
     private AllPairings() {}
 
     /** Intended delegations the gate reports by count (2026-11-07 wrap-up): copy retargets, uncommon costs, division. */
-    private static final List<String> WATCHED = List.of("chooseNewTargetsFor", "cost:", "chooseTargetsFor(divided)",
+    private static final List<String> WATCHED = List.of("chooseNewTargetsFor", "chooseNewTargetsFor(divided)", "cost:", "chooseTargetsFor(divided)",
         "orderCosts");
 
     /** Runs one pairing in its own JVM ({@link PairingWorker}) and reads its result. */

@@ -2372,17 +2372,7 @@ public class AgentPlayerController extends ObservedAiController {
             session.delegated(player, "chooseTargetsFor(divided)", DecisionType.DECISION_TYPE_TARGET, null);
             return getAi().doTrigger(s, true);
         }
-        List<GameObject> options = new ArrayList<>(tgt.getAllCandidates(s));
-        if (tgt.getZone().contains(ZoneType.Stack)) {
-            // spells and abilities on the stack are targeted as SpellAbility objects, not as cards
-            options.removeIf(o -> o instanceof Card c && c.getZone() != null && c.getZone().is(ZoneType.Stack));
-            for (SpellAbilityStackInstance si : player.getGame().getStack()) {
-                if (s.canTarget(si.getSpellAbility())) {
-                    options.add(si.getSpellAbility());
-                }
-            }
-        }
-        options.removeIf(o -> o == s.getRootAbility() || o == s);
+        List<GameObject> options = targetOptions(s);
         int min = tgt.getMinTargets(s.getHostCard(), s);
         int max = Math.min(tgt.getMaxTargets(s.getHostCard(), s), options.size());
         if (options.isEmpty() || max == 0) {
@@ -2427,6 +2417,89 @@ public class AgentPlayerController extends ObservedAiController {
             }
         }
         return ok;
+    }
+
+    /** What {@code s} may target now (its targets as they are taken into account by its restrictions). */
+    private List<GameObject> targetOptions(SpellAbility s) {
+        TargetRestrictions tgt = s.getTargetRestrictions();
+        List<GameObject> options = new ArrayList<>(tgt.getAllCandidates(s));
+        if (tgt.getZone().contains(ZoneType.Stack)) {
+            // spells and abilities on the stack are targeted as SpellAbility objects, not as cards
+            options.removeIf(o -> o instanceof Card c && c.getZone() != null && c.getZone().is(ZoneType.Stack));
+            for (SpellAbilityStackInstance si : player.getGame().getStack()) {
+                if (s.canTarget(si.getSpellAbility())) {
+                    options.add(si.getSpellAbility());
+                }
+            }
+        }
+        options.removeIf(o -> o == s.getRootAbility() || o == s);
+        return options;
+    }
+
+    /**
+     * New targets for a spell or ability that already has them: a copy that may choose new targets (707.10c) or a
+     * redirect. The number of targets stays; keeping the current ones is choosing them again. Null keeps them.
+     */
+    @Override
+    protected forge.game.spellability.TargetChoices answerChooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter,
+                                                                              boolean optional) {
+        SpellAbility s = ability instanceof forge.game.trigger.WrappedAbility w ? w.getWrappedAbility() : ability;
+        if (!s.usesTargeting()) {
+            return null;
+        }
+        forge.game.spellability.TargetChoices old = s.getTargets();
+        int count = old.size();
+        if (count == 0) {
+            return null;
+        }
+        if (s.isDividedAsYouChoose()) {
+            // the division stays with the targets; choosing it anew is an option choice the protocol has no candidates for
+            session.delegated(player, "chooseNewTargetsFor(divided)", DecisionType.DECISION_TYPE_TARGET, null);
+            return null;
+        }
+        List<GameObject> current = new ArrayList<>(old);
+        s.resetTargets(); // restrictions on other targets of the same ability (TargetUnique) look at the chosen ones
+        List<GameObject> options = targetOptions(s);
+        if (filter != null) {
+            options.removeIf(o -> !filter.test(o));
+        }
+        if (options.size() < count) {
+            s.setTargets(old); // no other choice than the current targets
+            return null;
+        }
+        List<Candidate> candidates = new ArrayList<>();
+        for (GameObject o : options) {
+            candidates.add(Candidate.newBuilder().setTarget(session.ref(o)).build());
+        }
+        SelectionConstraints c = SelectionConstraints.newBuilder().setMin(count).setMax(count).build();
+        DecisionContext.Builder ctx = DecisionContext.newBuilder().setSourceId(session.ids().idOf(s.getHostCard()))
+            .setNewTargets(true);
+        for (GameObject o : current) {
+            ctx.addTargets(session.ref(o));
+        }
+        ForgeGameSession.Asked asked = session.resolveDelegation(
+            session.ask(decider, player, DecisionType.DECISION_TYPE_TARGET, candidates, c, ctx.build(), List.of()),
+            () -> {
+                if (options.containsAll(current)) {
+                    return indicesOf(options, current); // Forge AI keeps the targets of a copy it may retarget
+                }
+                // Forge AI picks new targets for a copy whose targets are no longer all legal (chooseNewTargetsForCopy)
+                keepingX(s.getRootAbility(), () -> forgeAi(() -> getAi().doTrigger(s, true)));
+                List<Object> picked = new ArrayList<>(s.getTargets());
+                s.resetTargets();
+                return indicesOf(options, picked);
+            }, "chooseNewTargetsFor");
+        if (!asked.ok()) {
+            session.record(asked, List.of(), "chooseNewTargetsFor", true, asked.failure());
+            s.setTargets(old);
+            return null;
+        }
+        session.record(asked, asked.response().getChosenList(), "chooseNewTargetsFor", false, null);
+        s.resetTargets();
+        for (int i : asked.response().getChosenList()) {
+            s.getTargets().add(options.get(i));
+        }
+        return s.getTargets();
     }
 
     // ---- combat ----

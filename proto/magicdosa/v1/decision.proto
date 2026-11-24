@@ -102,6 +102,10 @@ message DecisionContext {
   optional int64 x = 8;
   repeated ManaUnit paid = 9;       // MANA_PAYMENT: mana spent on it so far (colors count for e.g. Prismatic Ending)
   DamageAssignment damage = 10;     // DAMAGE_ASSIGNMENT
+  // TARGET: new targets for a spell or ability that already has them, a copy that may choose new targets (707.10c)
+  // or a redirect. `targets` holds its current targets; the number of targets stays, and choosing the current ones
+  // keeps them (protocol 11).
+  bool new_targets = 11;
 }
 
 // One step of dividing a source's combat damage (DAMAGE_ASSIGNMENT; source_id is the damage source).

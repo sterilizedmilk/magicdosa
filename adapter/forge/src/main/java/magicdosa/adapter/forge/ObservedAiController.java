@@ -709,7 +709,7 @@ public class ObservedAiController extends PlayerControllerAi {
         session.choice(player, DecisionType.DECISION_TYPE_DAMAGE_ASSIGNMENT, "assignCombatDamage", to, null, amounts);
     }
 
-    /** New targets chosen for a copy. */
+    /** The targets of a copy or a redirected spell after its controller may have chosen new ones. */
     private void newTargets(TargetChoices r) {
         List<GameObject> to = new ArrayList<>();
         if (r != null) {
@@ -1234,7 +1234,9 @@ public class ObservedAiController extends PlayerControllerAi {
         } finally {
             answering--;
         }
-        newTargets(r);
+        // reported as the targets the ability has afterwards: kept targets are reported too (null keeps them)
+        SpellAbility s = ability instanceof forge.game.trigger.WrappedAbility w ? w.getWrappedAbility() : ability;
+        newTargets(r != null ? r : s.usesTargeting() ? s.getTargets() : null);
         return r;
     }
 

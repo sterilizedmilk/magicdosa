@@ -177,8 +177,16 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
 ## Not done / approximate
 
 - Intended delegations kept in phase 1 (2026-11-07, counted by AllPairings, not moved): the order cost parts are paid
-  in (`orderCosts`), new targets for a copy (`chooseNewTargetsFor`), the uncommon
-  forms of non-mana costs (`cost:*`), dividing damage among targets as a spell is cast (`chooseTargetsFor(divided)`).
+  in (`orderCosts`), the uncommon forms of non-mana costs (`cost:*`), dividing damage among targets as a spell is cast
+  (`chooseTargetsFor(divided)`).
+- New targets for a copy or a redirect (`chooseNewTargetsFor`) is a TARGET decision since protocol 11
+  (`DecisionContext.new_targets`, the current targets in `DecisionContext.targets`): min = max = the number of
+  current targets (707.10c), the candidates are the targets legal now, and choosing the current ones keeps them.
+  Delegated, Forge AI keeps them when they are all still legal, else picks new ones as its own copy logic does
+  (`chooseNewTargetsForCopy`). Not asked when fewer legal targets than the count exist (the targets are kept). A
+  divided spell keeps its targets and division (`chooseNewTargetsFor(divided)`, an intended delegation). The
+  `ResolutionChoice` reports the targets the ability has afterwards, kept ones included (before protocol 11: an
+  empty list for kept targets).
 - Castability is a greedy check of the pool and does not run the payment on a copy; the sampled check found no
   omission so far. X and the other values announced while casting (601.2b; March of Otherworldly
   Light: the number of white cards to exile, then X) are offered only where the whole cost can still be paid with

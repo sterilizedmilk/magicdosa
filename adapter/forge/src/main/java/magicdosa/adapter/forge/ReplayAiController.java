@@ -1363,18 +1363,28 @@ public class ReplayAiController extends ObservedAiController {
     protected forge.game.spellability.TargetChoices answerChooseNewTargetsFor(SpellAbility ability, java.util.function.Predicate<GameObject> filter,
                                                                               boolean optional) {
         ResolutionChoice r = choice("chooseNewTargetsFor");
-        forge.game.spellability.TargetChoices out = super.answerChooseNewTargetsFor(ability, filter, optional);
-        if (r == null || out == null) {
-            return out;
+        SpellAbility s = ability instanceof forge.game.trigger.WrappedAbility w ? w.getWrappedAbility() : ability;
+        if (r == null || !s.usesTargeting()) {
+            return super.answerChooseNewTargetsFor(ability, filter, optional);
         }
-        out.clear();
+        // the record holds the targets the ability had afterwards (protocol 11): the same ones means they were kept
+        List<GameObject> chosen = new ArrayList<>();
         for (ObjectRef o : r.getChosenList()) {
             GameObject t = targetOf(o);
-            if (t != null) {
-                out.add(t);
+            if (t == null) {
+                source.mismatch(seat, "chooseNewTargetsFor: recorded target " + o + " not found");
+                return null;
             }
+            chosen.add(t);
         }
-        return out;
+        if (chosen.equals(new ArrayList<>(s.getTargets()))) {
+            return null;
+        }
+        s.resetTargets();
+        for (GameObject t : chosen) {
+            s.getTargets().add(t);
+        }
+        return s.getTargets();
     }
 
     // Library arrangements keep their hidden part out of the stream: where the source knows the real library
