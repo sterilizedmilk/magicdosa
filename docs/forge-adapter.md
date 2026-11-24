@@ -189,7 +189,7 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
   empty list for kept targets).
 - Mana-only priority stops (3단계 기획 쟁점 3, 2026-11-16): when the potential-cast list is empty (nothing more mana
   could pay for), mana abilities that only make mana are left out of the priority candidates; a stop left with pass
-  alone is an auto pass. "Only make mana": costs are {T} and mana, no sub-ability, and the source has no Taps /
+  alone is an auto pass. "Only make mana": the only cost is {T} (a filter land's mana cost keeps it), no sub-ability, and the source has no Taps /
   TapsForMana / ManaAdded trigger (`AgentPlayerController.manaOnly`; painlands, sacrifice, life, tapping another
   permanent stay candidates; `MANA_WITH_SIDE_EFFECTS` lists exceptions by name, empty for the target decks). Shared
   code, so the shadow's L3 fingerprint sees the same list. Counted per game (`DecisionStats.manaOnlyFiltered`,

@@ -220,9 +220,9 @@ public class AgentPlayerController extends ObservedAiController {
     public static final java.util.Set<String> MANA_WITH_SIDE_EFFECTS = java.util.Set.of();
 
     /**
-     * A mana ability that does nothing but make mana: its costs are tapping its source and mana, it has no further
-     * effect, and its source has no trigger on being tapped. Sacrifices, life, damage (painlands), tapping other
-     * permanents and counters are effects: such abilities stay candidates.
+     * A mana ability that does nothing but make mana: its only cost is tapping its source ({T}), it has no further
+     * effect, and its source has no trigger on being tapped. Any other cost (mana, as a filter land's; sacrifice, life,
+     * tapping other permanents, counters) or effect (painlands) keeps it a candidate.
      */
     public static boolean manaOnly(SpellAbility sa) {
         if (!sa.isManaAbility() || sa.getSubAbility() != null) {
@@ -235,7 +235,7 @@ public class AgentPlayerController extends ObservedAiController {
         Cost cost = sa.getPayCosts();
         if (cost != null) {
             for (CostPart part : cost.getCostParts()) {
-                if (!(part instanceof forge.game.cost.CostTap) && !(part instanceof CostPartMana)) {
+                if (!(part instanceof forge.game.cost.CostTap)) {
                     return false;
                 }
             }
