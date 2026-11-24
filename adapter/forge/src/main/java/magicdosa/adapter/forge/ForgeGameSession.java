@@ -689,6 +689,13 @@ public final class ForgeGameSession {
     }
 
     boolean visible(Card c, Player viewer) {
+        // Forge's views lag while its tracker is frozen (state-based actions freeze it): a card that has moved into a
+        // hidden zone since (a shadow's identity swap inside them takes a graveyard card's object into a library) would
+        // still be judged by the public zone it left, and its identity taken as seen
+        ZoneType now = c.getZone() == null ? null : c.getZone().getZoneType();
+        if (now != c.getView().getZone() && (now == ZoneType.Library || now == ZoneType.Hand)) {
+            return now == ZoneType.Hand && c.getController() == viewer || c.getView().mayPlayerLook(viewer.getView());
+        }
         return c.getView().canBeShownTo(viewer.getView());
     }
 
