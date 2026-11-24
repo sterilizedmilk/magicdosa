@@ -156,7 +156,8 @@ public final class GameSession {
         }
         if (agent.shards() != null) {
             try {
-                agent.shards().write(hello, decided, g);
+                agent.shards().write(hello, decided, g, shadow == null ? java.util.Map.of()
+                    : java.util.Map.of("reproducible", String.valueOf(shadow.reproducible())));
                 agent.shardWritten(true);
             } catch (java.io.IOException | RuntimeException e) {
                 agent.shardWritten(false);

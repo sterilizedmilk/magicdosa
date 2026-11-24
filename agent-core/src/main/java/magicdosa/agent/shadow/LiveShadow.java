@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LiveShadow implements ShadowGame.Live {
     private static final AtomicInteger THREADS = new AtomicInteger();
     /** Safeguard against a hung shadow (never a decision budget): the stream thread stops waiting after this. */
-    private static final long HANG_MS = Long.getLong("magicdosa.shadowHangMs", 600_000);
+    private final long HANG_MS = Long.getLong("magicdosa.shadowHangMs", 600_000);
 
     /** Totals over the games of this JVM (for the agent-core summary line). */
     private static final Stats TOTAL = new Stats();
@@ -54,6 +54,8 @@ public final class LiveShadow implements ShadowGame.Live {
         /** Search (phase 3): what the searches and their simulations did. */
         public final Map<String, Integer> search = new TreeMap<>();
         public long searches, simulations, backedUp, searchNodes;
+        /** Hang safeguard: fired, the shadow started again, a Forge thread could not be ended. */
+        public int hangs, hangRestarts, hangTainted;
         public int decisions, games, shadowErrors;
 
         synchronized void add(Stats o) {
@@ -66,6 +68,9 @@ public final class LiveShadow implements ShadowGame.Live {
             simulations += o.simulations;
             backedUp += o.backedUp;
             searchNodes += o.searchNodes;
+            hangs += o.hangs;
+            hangRestarts += o.hangRestarts;
+            hangTainted += o.hangTainted;
             decisions += o.decisions;
             games += o.games;
             shadowErrors += o.shadowErrors;
@@ -76,7 +81,8 @@ public final class LiveShadow implements ShadowGame.Live {
             int w = withoutShadow.values().stream().mapToInt(Integer::intValue).sum();
             int u = unmapped.values().stream().mapToInt(Integer::intValue).sum();
             return "shadow-forge-ai games=" + games + " decisions=" + decisions + " delegated=" + d + " withoutShadow=" + w
-                + " unmapped=" + u + " shadowErrors=" + shadowErrors + " unmappedByType=" + unmapped
+                + " unmapped=" + u + " shadowErrors=" + shadowErrors
+                + (hangs == 0 ? "" : " hangs=" + hangs + " hangRestarts=" + hangRestarts + " hangTainted=" + hangTainted) + " unmappedByType=" + unmapped
                 + " withoutShadowBy=" + withoutShadow
                 + (searches == 0 && search.isEmpty() ? "" : " searches=" + searches + " simulations=" + simulations
                     + " backedUp=" + backedUp + " searchNodes=" + searchNodes + " search=" + search);
@@ -153,7 +159,34 @@ public final class LiveShadow implements ShadowGame.Live {
 
     /** The answer to a request of the game (the stream thread waits while the shadow plays up to it). */
     public DecisionResponse decide(DecisionRequest r) throws InterruptedException {
+        boolean hung;
         synchronized (lock) {
+            DecisionResponse early = decideLocked(r);
+            if (early != null) {
+                return early;
+            }
+            hung = !answered;
+        }
+        if (hung) {
+            // outside the lock: the shadow's threads take the lock as they end
+            hang(r);
+            synchronized (lock) {
+                pending = null;
+                DecisionResponse resp = skippedLocked(r, "shadow stop: hung", magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SHADOW_STOPPED);
+                rec.decisions.add(new GameRecord.Decision(pendingAt, record(r, resp))); // a restarted shadow replays it
+                return resp;
+            }
+        }
+        synchronized (lock) {
+            DecisionResponse a = answer;
+            answer = null;
+            return a;
+        }
+    }
+
+    /** Waits for the shadow's answer; returns an answer made without it, or null once the shadow answered or hung. */
+    private DecisionResponse decideLocked(DecisionRequest r) throws InterruptedException {
+        {
             int pos = at++;
             stats.decisions++;
             if (r.getSeat() != viewer) {
@@ -174,30 +207,146 @@ public final class LiveShadow implements ShadowGame.Live {
                 }
                 start();
             }
+            if (restartAfterHang) {
+                restart();
+            }
             if (shadowDone || stopped) {
-                return withoutShadowLocked(r, "shadow ended: " + (result == null ? "stopped" : end(result)));
+                DecisionResponse resp = skippedLocked(r, "shadow stop: " + (result == null ? "stopped" : end(result)), magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SHADOW_STOPPED);
+                rec.decisions.add(new GameRecord.Decision(pos, record(r, resp)));
+                return resp;
             }
             pending = r;
             pendingAt = pos;
             answered = false;
             lock.notifyAll();
-            long deadline = System.currentTimeMillis() + HANG_MS; // safeguard only
+            // safeguard only (2026-11-24 directive): it never picks a decision; a game where it fires is marked
+            // outside the reproducibility guarantee
+            long deadline = System.currentTimeMillis() + HANG_MS;
             while (!answered && !shadowDone) {
                 long left = deadline - System.currentTimeMillis();
                 if (left <= 0) {
-                    stopShadow("shadow hung at decision " + r.getDecisionId());
-                    break;
+                    return null; // hung: handled outside the lock
                 }
                 lock.wait(left);
             }
             if (!answered) {
                 pending = null;
-                return withoutShadowLocked(r, "shadow ended: " + (result == null ? "hung" : end(result)));
+                DecisionResponse resp = skippedLocked(r, "shadow stop: " + (result == null ? "ended" : end(result)), magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SHADOW_STOPPED);
+                rec.decisions.add(new GameRecord.Decision(pos, record(r, resp)));
+                return resp;
             }
-            DecisionResponse a = answer;
-            answer = null;
-            return a;
+            return null;
         }
+    }
+
+    // ---- the hang safeguard (2026-11-24 directive, phase-2 open risk 1) ----
+
+    /** The hang safeguard fired in this game: its decisions are outside the reproducibility guarantee. */
+    private boolean outsideReproducibility;
+    /** The shadow is started again from the record at the next decision (its stuck threads were ended). */
+    private boolean restartAfterHang;
+    /** A stuck Forge thread could not be ended: this JVM must not run another Forge game (restart agent-core). */
+    private static volatile boolean tainted;
+    private final List<String> hangDumps = new ArrayList<>();
+
+    /** Whether this game's decisions are all inside the reproducibility guarantee (no hang safeguard fired). */
+    public boolean reproducible() {
+        synchronized (lock) {
+            return !outsideReproducibility;
+        }
+    }
+
+    /** A Forge thread of an earlier game could not be ended: agent-core must be restarted before another game. */
+    public static boolean tainted() {
+        return tainted;
+    }
+
+    /**
+     * The shadow did not answer within the safeguard: a thread dump of every thread running Forge code, the shadow
+     * stopped, and its threads ended. Ended for certain (all gone), the shadow starts again from the record at the next
+     * decision (one Forge thread per JVM still holds); else the shadow stays stopped for this game and agent-core is
+     * marked for a restart (its remaining decisions are search skipped, cause shadow stop).
+     */
+    private void hang(DecisionRequest r) throws InterruptedException {
+        List<Thread> forge = forgeThreads();
+        StringBuilder dump = new StringBuilder("shadow hang at decision " + r.getDecisionId() + " (" + r.getType()
+            + ", turn " + r.getObservation().getGame().getTurn() + "): " + forge.size() + " Forge threads\n");
+        for (Thread t : forge) {
+            dump.append("  thread ").append(t.getName()).append(' ').append(t.getState()).append('\n');
+            StackTraceElement[] st = t.getStackTrace();
+            for (int i = 0; i < Math.min(st.length, 120); i++) {
+                dump.append("    at ").append(st[i]).append('\n');
+            }
+        }
+        System.err.println("agent-core: " + hello.getGameId() + " " + dump);
+        synchronized (lock) {
+            outsideReproducibility = true;
+            stats.hangs++;
+            hangDumps.add(dump.toString());
+            stopShadow("hang at decision " + r.getDecisionId());
+        }
+        boolean ended = endThreads(forge);
+        synchronized (lock) {
+            if (ended) {
+                restartAfterHang = true;
+                stats.hangRestarts++;
+            } else {
+                tainted = true;
+                stats.hangTainted++;
+            }
+        }
+    }
+
+    /** Threads other than this one whose stack runs Forge code (one game per JVM: they are this game's shadow). */
+    private List<Thread> forgeThreads() {
+        List<Thread> out = new ArrayList<>();
+        for (Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            Thread t = e.getKey();
+            if (t == Thread.currentThread() || !t.isAlive()) {
+                continue;
+            }
+            boolean runsForge = t == thread;
+            for (StackTraceElement f : e.getValue()) {
+                runsForge |= f.getClassName().startsWith("forge.");
+            }
+            if (runsForge) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    /** Ends the threads; true when every one is gone. */
+    @SuppressWarnings({"deprecation", "removal"})
+    private static boolean endThreads(List<Thread> threads) throws InterruptedException {
+        for (Thread t : threads) {
+            try {
+                t.stop(); // JDK 17: ThreadDeath in the thread; the shadow is rebuilt from the record anyway
+            } catch (UnsupportedOperationException e) {
+                return false; // a JDK without Thread.stop
+            }
+        }
+        boolean all = true;
+        for (Thread t : threads) {
+            t.join(10_000);
+            all &= !t.isAlive();
+        }
+        return all;
+    }
+
+    /** A new shadow from the record (the game start snapshot, every decision so far), after a hang ended the old one. */
+    private void restart() {
+        restartAfterHang = false;
+        if (tainted) {
+            return;
+        }
+        stats.withoutShadow.merge("shadow restarted after a hang", 0, Integer::sum);
+        shadow = null;
+        thread = null;
+        result = null;
+        stopped = false;
+        shadowDone = false;
+        start();
     }
 
     /** The game end; waits for the shadow to finish its replay of the game (its end is compared with the real one). */
@@ -287,6 +436,11 @@ public final class LiveShadow implements ShadowGame.Live {
     @Override
     public DecisionResponse withoutShadow(DecisionRequest request, String why) {
         synchronized (lock) {
+            if (why.startsWith("search skipped")) {
+                // recovery 3: the turn could not be followed
+                return skippedLocked(request, why.substring("search skipped".length()).replaceFirst("^: ", ""),
+                    magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SHADOW_RECOVERY_FAILED);
+            }
             return withoutShadowLocked(request, why);
         }
     }
@@ -361,6 +515,20 @@ public final class LiveShadow implements ShadowGame.Live {
     private DecisionResponse withoutShadowLocked(DecisionRequest r, String why) {
         stats.withoutShadow.merge(why.length() > 60 ? why.substring(0, 60) : why, 1, Integer::sum);
         return alone.decide(r);
+    }
+
+    /**
+     * Search skipped (no network: the uniform random answer of {@code alone}), counted by cause and recorded with
+     * the skip reason (2026-11-24 directive: "shadow stop" is a cause of search skipped, not a category of its own).
+     */
+    private DecisionResponse skippedLocked(DecisionRequest r, String cause, magicdosa.protocol.v1.SearchSkipReason reason) {
+        String key = "search skipped: " + cause;
+        stats.withoutShadow.merge(key.length() > 70 ? key.substring(0, 70) : key, 1, Integer::sum);
+        DecisionResponse.Builder b = alone.decide(r).toBuilder();
+        for (int i = 0; i < b.getStepsCount(); i++) {
+            b.setSteps(i, b.getSteps(i).toBuilder().setMethod(b.getSteps(i).getMethod().toBuilder().setSkipped(reason)));
+        }
+        return b.build();
     }
 
     private static DecisionRecord record(DecisionRequest r, DecisionResponse resp) {
@@ -451,6 +619,8 @@ public final class LiveShadow implements ShadowGame.Live {
         out.add("delegatedByMethod=" + stats.delegatedByMethod);
         out.add("withoutShadow=" + stats.withoutShadow);
         out.add("unmapped=" + stats.unmapped);
+        out.add("reproducible=" + !outsideReproducibility);
+        hangDumps.forEach(d -> out.add("hangDump=" + d.replace('\n', '|')));
         stats.unmappedSamples.forEach(x -> out.add("unmappedSample=" + x));
         out.add("winner=" + (rec.gameOver == null || !rec.gameOver.hasWinnerSeat() ? "none" : rec.gameOver.getWinnerSeat())
             + " viewer=" + viewer);

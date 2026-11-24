@@ -273,6 +273,9 @@ enum SearchSkipReason {
   SEARCH_SKIP_REASON_SINGLE_CANDIDATE = 4;
   // Search ran but no simulation was backed up (every one failed; SearchRun is not logged then).
   SEARCH_SKIP_REASON_SEARCH_FAILED = 5;
+  // The shadow game was stopped (the hang safeguard fired, or it ended early); protocol 13 (2026-11-24 directive:
+  // counted as search skipped, cause "shadow stop", not as a category of its own).
+  SEARCH_SKIP_REASON_SHADOW_STOPPED = 6;
 }
 
 // Optional diagnostics (design: "후보별 확률, 가치, 전략별 승률").

@@ -90,6 +90,11 @@ public final class ShardWriter {
 
     /** Writes the game's shard; returns its path. */
     public Path write(Hello hello, List<Decided> decided, GameOver over) throws IOException {
+        return write(hello, decided, over, Map.of());
+    }
+
+    /** {@code extra}: more schema metadata (e.g. "reproducible": false where the shadow's hang safeguard fired). */
+    public Path write(Hello hello, List<Decided> decided, GameOver over, Map<String, String> extra) throws IOException {
         Map<String, PrivilegedRecord> privileged = new HashMap<>();
         for (PrivilegedRecord p : over.getPrivilegedList()) {
             privileged.put(p.getDecisionId() + "/" + p.getSeat(), p);
@@ -135,6 +140,7 @@ public final class ShardWriter {
         meta.put("token_features", String.join(",", Encoder.TOKEN));
         meta.put("candidate_features", String.join(",", Encoder.CANDIDATE));
         meta.put("oov", String.valueOf(encoder.vocab().oovCount() - oovBefore));
+        meta.putAll(extra);
         write(file, rows, meta);
         return file;
     }

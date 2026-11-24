@@ -96,6 +96,10 @@ public final class Agent {
             return "model " + policy.modelVersion() + " was trained with encoder version " + policy.encoderVersion()
                 + ", agent-core has encoder version " + AgentCore.ENCODER_VERSION;
         }
+        if (shadowKeys != null && magicdosa.agent.shadow.LiveShadow.tainted()) {
+            // the hang safeguard could not end a stuck Forge thread: one Forge thread per JVM no longer holds here
+            return "agent-core must be restarted: a stuck Forge thread of an earlier game is still running";
+        }
         if (h.getGameId().isEmpty()) {
             return "no game_id";
         }

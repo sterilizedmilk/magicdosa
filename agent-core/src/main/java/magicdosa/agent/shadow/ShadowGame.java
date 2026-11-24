@@ -252,6 +252,10 @@ public final class ShadowGame {
         return out.addChosen(r.chosen()).addSteps(step).build();
     }
 
+    /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
+    static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
+    static final java.util.concurrent.atomic.AtomicBoolean HANG_TEST_FIRED = new java.util.concurrent.atomic.AtomicBoolean();
+
     /** The record marks an answer the shadow does not know (an unintended fallback of the real game) with this ID. */
     static final long UNKNOWN_ANSWER = 0;
 
@@ -2067,6 +2071,14 @@ public final class ShadowGame {
 
         @Override
         public DecisionResponse decide(DecisionRequest request) {
+            if (live != null && live.pending() != null && live.pending().getDecisionId() == HANG_TEST_AT
+                    && HANG_TEST_FIRED.compareAndSet(false, true)) {
+                // test of the hang safeguard (-Dmagicdosa.shadowHangTestAt=<decision ID>): this thread spins at the
+                // live decision until it is ended
+                while (true) {
+                    Thread.onSpinWait();
+                }
+            }
             DecisionRequest real;
             DecisionResponse recorded;
             if (decisionIdx < rec.decisions.size()) {
