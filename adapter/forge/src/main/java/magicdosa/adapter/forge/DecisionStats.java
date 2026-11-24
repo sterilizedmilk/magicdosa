@@ -131,6 +131,26 @@ public final class DecisionStats implements java.io.Serializable {
         autoPasses++;
     }
 
+    /** Priority lists that lost mana-only abilities (3단계 기획 쟁점 3); of them, the ones left with pass alone. */
+    private int manaOnlyFiltered;
+    private int manaOnlyStopsSkipped;
+
+    void manaOnlyFiltered(boolean nothingLeft) {
+        manaOnlyFiltered++;
+        if (nothingLeft) {
+            manaOnlyStopsSkipped++;
+        }
+    }
+
+    public int manaOnlyFiltered() {
+        return manaOnlyFiltered;
+    }
+
+    /** Priority stops not asked because mana-only abilities were their only actions (now auto passes). */
+    public int manaOnlyStopsSkipped() {
+        return manaOnlyStopsSkipped;
+    }
+
     public Map<DecisionType, Integer> decided() {
         return decided;
     }
@@ -199,6 +219,8 @@ public final class DecisionStats implements java.io.Serializable {
         o.rejected.forEach((k, v) -> rejected.merge(k, v, Integer::sum));
         o.rejectionKinds.forEach((k, v) -> rejectionKinds.merge(k, v, Integer::sum));
         autoPasses += o.autoPasses;
+        manaOnlyFiltered += o.manaOnlyFiltered;
+        manaOnlyStopsSkipped += o.manaOnlyStopsSkipped;
         translationErrors += o.translationErrors;
         candidateChecks += o.candidateChecks;
         candidateOmissions += o.candidateOmissions;

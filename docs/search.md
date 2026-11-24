@@ -48,7 +48,7 @@ This file records how the code does it and what is not done yet. It changes no d
   a scry) are not used yet.
 - A copy shares the shadow's lobby players (mind control inside a simulation would bind to the shadow session).
 - Rollout decisions go through the decision layer (an observation each); first wiring run: about 24 rollout
-  priority requests per simulation. Plain Forge AI controllers for the rollout are an optimisation to measure.
+  priority requests per simulation, about 12 with the mana-only stop filter. Plain Forge AI controllers for the rollout are an optimisation to measure.
 - The confirmed-kill checker (item 7) and the privileged library order (item 10) are not part of this.
 
 ## First wiring run (2026-11-24, `SearchScenarioTest`, budget 6, two turns of a small burn scenario)

@@ -187,6 +187,13 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
   divided spell keeps its targets and division (`chooseNewTargetsFor(divided)`, an intended delegation). The
   `ResolutionChoice` reports the targets the ability has afterwards, kept ones included (before protocol 11: an
   empty list for kept targets).
+- Mana-only priority stops (3단계 기획 쟁점 3, 2026-11-16): when the potential-cast list is empty (nothing more mana
+  could pay for), mana abilities that only make mana are left out of the priority candidates; a stop left with pass
+  alone is an auto pass. "Only make mana": costs are {T} and mana, no sub-ability, and the source has no Taps /
+  TapsForMana / ManaAdded trigger (`AgentPlayerController.manaOnly`; painlands, sacrifice, life, tapping another
+  permanent stay candidates; `MANA_WITH_SIDE_EFFECTS` lists exceptions by name, empty for the target decks). Shared
+  code, so the shadow's L3 fingerprint sees the same list. Counted per game (`DecisionStats.manaOnlyFiltered`,
+  `manaOnlyStopsSkipped`, AllPairings line); the runner's candidate check skips these abilities.
 - Castability is a greedy check of the pool and does not run the payment on a copy; the sampled check found no
   omission so far. X and the other values announced while casting (601.2b; March of Otherworldly
   Light: the number of white cards to exile, then X) are offered only where the whole cost can still be paid with

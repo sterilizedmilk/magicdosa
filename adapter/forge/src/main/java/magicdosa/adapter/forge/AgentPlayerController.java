@@ -196,12 +196,58 @@ public class AgentPlayerController extends ObservedAiController {
         } finally {
             checkingCosts = false;
         }
+        if (potential.isEmpty()) {
+            // 3단계 기획 쟁점 3 (2026-11-16): nothing more mana could pay for, so mana that does nothing else is never
+            // better than passing (it empties at the end of the step and only the sources stay tapped)
+            int before = out.size();
+            out.removeIf(AgentPlayerController::manaOnly);
+            if (out.size() < before) {
+                session.stats().manaOnlyFiltered(out.isEmpty());
+            }
+        }
         if (decider == player) {
             session.potentialCasts(player, potential);
         }
         priorityAsks++;
         session.priorityCheck().check(player, priorityAsks, out, considered, session.stats());
         return out;
+    }
+
+    /**
+     * Cards whose mana abilities do something besides the mana that this check does not see (3단계 기획 쟁점 3: none in
+     * the target decks yet; Secret of Bloodbending would go here if a deck took it). By oracle name.
+     */
+    public static final java.util.Set<String> MANA_WITH_SIDE_EFFECTS = java.util.Set.of();
+
+    /**
+     * A mana ability that does nothing but make mana: its costs are tapping its source and mana, it has no further
+     * effect, and its source has no trigger on being tapped. Sacrifices, life, damage (painlands), tapping other
+     * permanents and counters are effects: such abilities stay candidates.
+     */
+    public static boolean manaOnly(SpellAbility sa) {
+        if (!sa.isManaAbility() || sa.getSubAbility() != null) {
+            return false;
+        }
+        Card host = sa.getHostCard();
+        if (MANA_WITH_SIDE_EFFECTS.contains(host.getName())) {
+            return false;
+        }
+        Cost cost = sa.getPayCosts();
+        if (cost != null) {
+            for (CostPart part : cost.getCostParts()) {
+                if (!(part instanceof forge.game.cost.CostTap) && !(part instanceof CostPartMana)) {
+                    return false;
+                }
+            }
+        }
+        for (forge.game.trigger.Trigger t : host.getTriggers()) {
+            forge.game.trigger.TriggerType mode = t.getMode();
+            if (mode == forge.game.trigger.TriggerType.Taps || mode == forge.game.trigger.TriggerType.TapsForMana
+                    || mode == forge.game.trigger.TriggerType.ManaAdded) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
