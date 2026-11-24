@@ -205,6 +205,13 @@ public final class ShardWriter {
         if (priv != null) {
             Privileged p = priv.getPrivileged();
             Map<Long, String> identity = new HashMap<>();
+            // a library card the seat can name (revealed on top, put back known) is not hidden from it: its identity is
+            // in the observation, not in the privileged identities
+            for (GameObject g : q.getObservation().getObjectsList()) {
+                if (!g.getOracleId().isEmpty()) {
+                    identity.put(g.getId(), g.getOracleId());
+                }
+            }
             for (HiddenIdentity h : p.getIdentitiesList()) {
                 identity.put(h.getId(), h.getOracleId());
             }
