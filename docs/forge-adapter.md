@@ -47,6 +47,11 @@ same seeds give byte-identical game logs.
 - A delayed trigger without text of its own (Emrakul's extra turn) is keyed by the ability that created it.
 - An ability a copy effect brought (Shifting Woodland as a copy of Urza's Saga) is matched against the copied card's
   text, also after the copy effect ended.
+- When the printed match's paragraph lacks a symbol of the ability's text ({C} against Shifting Woodland's
+  "{T}: Add {G}"), the match against the state that defined the ability wins if its symbols agree: Urza's Saga
+  chapter I's gained "{T}: Add {C}" on Shifting Woodland is keyed as Urza's Saga's chapter I (as on the Saga itself),
+  no longer as Woodland's own mana ability (two candidates under one key before, phase-2 issue 14). No new
+  vocabulary entry.
 
 ## Harnesses (runner/forge test sources, `magicdosa.runner.forge.harness`; not run by mvn install; working directory forge/forge-gui)
 
