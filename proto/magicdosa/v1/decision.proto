@@ -250,9 +250,14 @@ enum Prior {
 
 // IS-MCTS run (design: 학습 전략과 보상 초기 탐색). Budgets are node counts, never time (Q8).
 message SearchRun {
-  uint64 nodes = 1;
-  uint32 determinizations = 2;      // belief samples searched
-  float root_value = 3;
+  uint64 nodes = 1;                 // tree nodes, the root included (at most one new node per simulation)
+  uint32 determinizations = 2;      // simulations played and backed up, each in its own belief sample (SO-ISMCTS)
+  float root_value = 3;             // visit-weighted mean reward of the root seat, in [0, 1]
+  // protocol 12 (phase 3): what reproduces the run and what it spent. Same game state, seed and settings, same result.
+  uint64 budget = 4;                // simulations asked for (node budget, Q8)
+  uint64 seed = 5;
+  uint64 simulations = 6;           // simulations started (= budget)
+  uint64 failed = 7;                // started but not backed up: no sample fit, the root decision differed, an error
 }
 
 // No time-based reason for now (Q8); real-time limits come later, after measurement.
@@ -264,6 +269,10 @@ enum SearchSkipReason {
   SEARCH_SKIP_REASON_POLICY_CONFIDENT = 2;
   // The stage has no search yet (phase 1: random policy, no shadow game).
   SEARCH_SKIP_REASON_NOT_AVAILABLE = 3;
+  // One candidate: nothing to search (3단계 기획 쟁점 5).
+  SEARCH_SKIP_REASON_SINGLE_CANDIDATE = 4;
+  // Search ran but no simulation was backed up (every one failed; SearchRun is not logged then).
+  SEARCH_SKIP_REASON_SEARCH_FAILED = 5;
 }
 
 // Optional diagnostics (design: "후보별 확률, 가치, 전략별 승률").

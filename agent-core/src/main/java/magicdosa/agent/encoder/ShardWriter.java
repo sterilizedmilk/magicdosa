@@ -138,6 +138,8 @@ public final class ShardWriter {
         r.put("search_ran", step.getMethod().hasRan());
         r.put("search_skip_reason", step.getMethod().getSkippedValue());
         r.put("search_nodes", step.getMethod().hasRan() ? step.getMethod().getRan().getNodes() : 0L);
+        r.put("search_budget", step.getMethod().hasRan() ? step.getMethod().getRan().getBudget() : 0L);
+        r.put("search_seed", step.getMethod().hasRan() ? step.getMethod().getRan().getSeed() : 0L);
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
         boolean draw = !over.hasWinnerSeat();
@@ -252,6 +254,8 @@ public final class ShardWriter {
         fields.add(new Field("decision_id", FieldType.notNullable(I64), null));
         fields.add(new Field("bundle_id", FieldType.notNullable(I64), null));
         fields.add(new Field("search_nodes", FieldType.notNullable(I64), null));
+        fields.add(new Field("search_budget", FieldType.notNullable(I64), null));
+        fields.add(new Field("search_seed", FieldType.notNullable(I64), null));
         for (String c : INT_COLS) {
             fields.add(new Field(c, FieldType.notNullable(I32), null));
         }
@@ -276,6 +280,8 @@ public final class ShardWriter {
                 ((BigIntVector) root.getVector("decision_id")).setSafe(i, (Long) r.get("decision_id"));
                 ((BigIntVector) root.getVector("bundle_id")).setSafe(i, (Long) r.get("bundle_id"));
                 ((BigIntVector) root.getVector("search_nodes")).setSafe(i, (Long) r.get("search_nodes"));
+                ((BigIntVector) root.getVector("search_budget")).setSafe(i, (Long) r.get("search_budget"));
+                ((BigIntVector) root.getVector("search_seed")).setSafe(i, (Long) r.get("search_seed"));
                 for (String c : INT_COLS) {
                     ((IntVector) root.getVector(c)).setSafe(i, ((Number) r.get(c)).intValue());
                 }
