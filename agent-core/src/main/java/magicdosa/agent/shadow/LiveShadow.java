@@ -51,6 +51,9 @@ public final class LiveShadow implements ShadowGame.Live {
         public final Map<String, Integer> withoutShadow = new TreeMap<>();
         public final Map<String, Integer> unmapped = new TreeMap<>();
         public final List<String> unmappedSamples = new ArrayList<>();
+        /** Search (phase 3): what the searches and their simulations did. */
+        public final Map<String, Integer> search = new TreeMap<>();
+        public long searches, simulations, backedUp, searchNodes;
         public int decisions, games, shadowErrors;
 
         synchronized void add(Stats o) {
@@ -58,6 +61,11 @@ public final class LiveShadow implements ShadowGame.Live {
             o.delegatedByMethod.forEach((k, v) -> delegatedByMethod.merge(k, v, Integer::sum));
             o.withoutShadow.forEach((k, v) -> withoutShadow.merge(k, v, Integer::sum));
             o.unmapped.forEach((k, v) -> unmapped.merge(k, v, Integer::sum));
+            o.search.forEach((k, v) -> search.merge(k, v, Integer::sum));
+            searches += o.searches;
+            simulations += o.simulations;
+            backedUp += o.backedUp;
+            searchNodes += o.searchNodes;
             decisions += o.decisions;
             games += o.games;
             shadowErrors += o.shadowErrors;
@@ -69,7 +77,9 @@ public final class LiveShadow implements ShadowGame.Live {
             int u = unmapped.values().stream().mapToInt(Integer::intValue).sum();
             return "shadow-forge-ai games=" + games + " decisions=" + decisions + " delegated=" + d + " withoutShadow=" + w
                 + " unmapped=" + u + " shadowErrors=" + shadowErrors + " unmappedByType=" + unmapped
-                + " withoutShadowBy=" + withoutShadow;
+                + " withoutShadowBy=" + withoutShadow
+                + (searches == 0 && search.isEmpty() ? "" : " searches=" + searches + " simulations=" + simulations
+                    + " backedUp=" + backedUp + " searchNodes=" + searchNodes + " search=" + search);
         }
     }
 
@@ -81,6 +91,7 @@ public final class LiveShadow implements ShadowGame.Live {
     private final int viewer;
     private final CardKeys keys;
     private final Policy alone;
+    private final magicdosa.agent.search.SearchConfig searchConfig;
     private final GameRecord rec;
     private final Stats stats = new Stats();
 
@@ -103,6 +114,12 @@ public final class LiveShadow implements ShadowGame.Live {
      * {@code viewer}: the agent seat the shadow follows.
      */
     public LiveShadow(Hello hello, int viewer, CardKeys keys, Policy alone) {
+        this(hello, viewer, keys, alone, null);
+    }
+
+    /** {@code search}: the policy searches the viewer's priority decisions (phase 3); null for the shadow Forge AI policy. */
+    public LiveShadow(Hello hello, int viewer, CardKeys keys, Policy alone, magicdosa.agent.search.SearchConfig search) {
+        this.searchConfig = search;
         this.hello = hello;
         this.viewer = viewer;
         this.keys = keys;
@@ -248,6 +265,26 @@ public final class LiveShadow implements ShadowGame.Live {
     }
 
     @Override
+    public magicdosa.agent.search.SearchConfig search() {
+        return searchConfig;
+    }
+
+    @Override
+    public void searched(magicdosa.agent.search.SearchResult r, Map<String, Integer> counts) {
+        synchronized (lock) {
+            counts.forEach((k, v) -> stats.search.merge(k, v, Integer::sum));
+            if (r != null) {
+                stats.searches++;
+                stats.simulations += r.iterations;
+                stats.backedUp += r.determinizations;
+                stats.searchNodes += r.nodes;
+                r.problems.forEach((k, v) -> stats.search.merge("problem: " + (k.length() > 80 ? k.substring(0, 80) : k), v,
+                    Integer::sum));
+            }
+        }
+    }
+
+    @Override
     public DecisionResponse withoutShadow(DecisionRequest request, String why) {
         synchronized (lock) {
             return withoutShadowLocked(request, why);
@@ -339,6 +376,11 @@ public final class LiveShadow implements ShadowGame.Live {
             }
         }
         return false;
+    }
+
+    /** This game's counts (tests). */
+    Stats stats() {
+        return stats;
     }
 
     /** Tests: stops the shadow (the stream ends here) and returns its result once its thread is over. */

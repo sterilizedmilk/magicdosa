@@ -280,6 +280,14 @@ public final class ForgeGameSession {
     }
 
     /**
+     * Search (agent-core, phase 3): this session translates a copy of a game made for one simulation. No handshake and
+     * no log; both seats' requests go to the session's client (the search's tree-lookup client).
+     */
+    public void attachToCopy() {
+        game.subscribeToEvents(this);
+    }
+
+    /**
      * Shadow game (agent-core, phase 2): the game was rebuilt from {@code snapshot} with {@code idsByCard} naming its
      * objects as the real game does. The stream of the snapshot's seat continues from the snapshot's sequence number,
      * with what the seat knew then (seen objects, library positions, pool, designations, mulligans). No handshake and

@@ -275,6 +275,11 @@ final class Scenario {
      * Plays the scenario through {@code turns} turns (or to the game end) and returns the shadow's result. Seeds are
      * fixed: the same scenario plays the same game.
      */
+    /** Search settings for seat 0's priority decisions (phase 3), or null for the shadow Forge AI policy. */
+    magicdosa.agent.search.SearchConfig search;
+    /** The live shadow's counts after {@link #play}. */
+    LiveShadow.Stats stats;
+
     ShadowGame.Result play(int turns) throws Exception {
         CardKeys k = keys();
         write();
@@ -291,7 +296,7 @@ final class Scenario {
             public DecisionResponse decide(DecisionRequest request) {
                 return random.decide(request);
             }
-        });
+        }, search);
         Throwable[] failure = {null};
         Thread t = new Thread(() -> {
             try {
@@ -333,6 +338,7 @@ final class Scenario {
         t.start();
         t.join(300_000);
         ShadowGame.Result r = shadow.stopAndResult();
+        stats = shadow.stats();
         if (failure[0] != null) {
             throw new IllegalStateException("scenario " + name + " failed", failure[0]);
         }

@@ -44,17 +44,25 @@ public final class Agent {
      * whose Forge AI answers its first agent seat's requests; {@code policy} answers what the shadow cannot.
      */
     public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards, magicdosa.adapter.forge.CardKeys shadowKeys) {
+        this(policy, shards, shadowKeys, null);
+    }
+
+    /** {@code search}: with {@code shadowKeys}, the live shadow searches the agent seat's priority decisions (phase 3). */
+    public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards, magicdosa.adapter.forge.CardKeys shadowKeys,
+                 magicdosa.agent.search.SearchConfig search) {
+        this.search = search;
         this.policy = policy;
         this.shards = shards;
         this.shadowKeys = shadowKeys;
     }
 
     private final magicdosa.adapter.forge.CardKeys shadowKeys;
+    private final magicdosa.agent.search.SearchConfig search;
 
     /** The live shadow of a new game (shadow Forge AI policy), or null. */
     magicdosa.agent.shadow.LiveShadow liveShadow(Hello hello) {
         return shadowKeys == null ? null
-            : new magicdosa.agent.shadow.LiveShadow(hello, hello.getAgentSeats(0), shadowKeys, policy);
+            : new magicdosa.agent.shadow.LiveShadow(hello, hello.getAgentSeats(0), shadowKeys, policy, search);
     }
 
     magicdosa.agent.encoder.ShardWriter shards() {
