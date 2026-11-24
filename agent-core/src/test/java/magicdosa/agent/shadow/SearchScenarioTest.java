@@ -61,6 +61,36 @@ class SearchScenarioTest {
         assertEquals(r.decisions, r.decisionsMatched, why);
     }
 
+    /**
+     * A target chosen while casting is searched at the root from the anchor (the copy made at the priority decision
+     * that cast the spell), replaying the cast's earlier answers. Lightning Bolt wins at once: the other seat has
+     * 3 life; waiting loses: seat 0 has 2 life, the other seat's two attackers come next turn, and its Teferi, Time
+     * Raveler lets seat 0 cast only at sorcery speed.
+     */
+    @Test
+    void targetsInsideACastAreSearchedFromTheAnchor() throws Exception {
+        Scenario s = new Scenario("search-target-0", 5, 0);
+        s.seat(0).deck("Mountain", 30).deck("Lightning Bolt", 30)
+            .library("Mountain", "Mountain", "Mountain", "Mountain")
+            .hand("Lightning Bolt")
+            .battlefield("Mountain");
+        s.seat(0).life = 2;
+        s.seat(1).deck("Plains", 28).deck("Monastery Swiftspear", 28).deck("Teferi, Time Raveler", 4)
+            .library("Plains", "Plains", "Plains", "Plains")
+            .hand("Plains")
+            .battlefield("Plains", "Monastery Swiftspear", "Monastery Swiftspear")
+            .battlefieldWith("Teferi, Time Raveler", "loyalty", 4);
+        s.seat(1).life = 3;
+        s.search = SearchConfig.of(40);
+        ShadowGame.Result r = s.play(1);
+        LiveShadow.Stats st = s.stats;
+        String why = st.line() + " samples: " + r.samples;
+        System.out.println("search target scenario: " + why);
+        assertTrue(st.search.getOrDefault("root TARGET", 0) > 0, why);
+        assertTrue(st.backedUp * 2 > st.simulations, why);
+        assertEquals(r.decisions, r.decisionsMatched, why);
+    }
+
     @Test
     void sameSeedSameSearches() throws Exception {
         String[] lines = new String[2];

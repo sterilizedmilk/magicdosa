@@ -69,6 +69,35 @@ public final class ForgeSearchGame implements SearchGame {
     public static final Set<DecisionType> ROOTS = Set.of(DecisionType.DECISION_TYPE_PRIORITY,
         DecisionType.DECISION_TYPE_DECLARE_ATTACKERS, DecisionType.DECISION_TYPE_DECLARE_BLOCKERS);
 
+    /**
+     * Decisions inside an action searched at the root (3단계 기획 쟁점 2: targets, modes / X / costs, scry, surveil,
+     * cards from the top): each copy starts from the anchor (a copy made at the root seat's last priority decision) and
+     * replays the root seat's recorded answers since then, the other seat passing, until the engine asks the root
+     * decision again (design: 그림자·탐색 "루트가 하위 결정이면 직전 상위 지점에서 복제한 뒤 이미 내린 선택을 다시 적용").
+     */
+    public static final Set<DecisionType> INNER_ROOTS = Set.of(DecisionType.DECISION_TYPE_TARGET,
+        DecisionType.DECISION_TYPE_CHOOSE_OPTION, DecisionType.DECISION_TYPE_CHOOSE_CARDS);
+
+    /**
+     * The root seat's last priority point: a copy of the shadow made there and the root seat's decisions answered
+     * since (that priority decision first), as the real game recorded them.
+     */
+    public record Anchor(Game game, List<magicdosa.protocol.v1.DecisionRecord> replay) {
+    }
+
+    private final Anchor anchor;
+
+    /** A copy of the shadow at the root seat's priority decision, to start anchored searches from. */
+    public static Game anchorCopy(Game shadow) {
+        GameCopier copier = new GameCopier(shadow).withStack(true);
+        Game copy = copier.makeCopy();
+        copy.AI_TIMEOUT = 600;
+        PhaseState.copy(shadow, copy, copier);
+        return copy;
+    }
+    /** Forge card numbers of the cards in hands and libraries the root seat can see at the root (kept when dealing). */
+    private final Set<Integer> seenNow = new java.util.HashSet<>();
+
     static final Set<DecisionType> DELEGATED = Set.of(DecisionType.DECISION_TYPE_MANA_PAYMENT,
         DecisionType.DECISION_TYPE_DAMAGE_ASSIGNMENT, DecisionType.DECISION_TYPE_TRIGGER_ORDER,
         DecisionType.DECISION_TYPE_MULLIGAN, DecisionType.DECISION_TYPE_BOTTOM_CARDS,
@@ -101,8 +130,25 @@ public final class ForgeSearchGame implements SearchGame {
 
     public ForgeSearchGame(Game shadow, ForgeGameSession shadowSession, DecisionRequest root, CardKeys keys, List<Deck> decks,
                            int[] gamesWon, String matchId, int gameNumber) {
-        if (!ROOTS.contains(root.getType())) {
-            throw new IllegalArgumentException("not a search root yet: " + root.getType());
+        this(shadow, shadowSession, root, keys, decks, gamesWon, matchId, gameNumber, null);
+    }
+
+    /** {@code anchor}: required for {@link #INNER_ROOTS}, ignored otherwise. */
+    public ForgeSearchGame(Game shadow, ForgeGameSession shadowSession, DecisionRequest root, CardKeys keys, List<Deck> decks,
+                           int[] gamesWon, String matchId, int gameNumber, Anchor anchor) {
+        if (!ROOTS.contains(root.getType()) && !(INNER_ROOTS.contains(root.getType()) && anchor != null)) {
+            throw new IllegalArgumentException("not a search root: " + root.getType() + (anchor == null ? " (no anchor)" : ""));
+        }
+        this.anchor = ROOTS.contains(root.getType()) ? null : anchor;
+        Player viewerNow = shadow.getRegisteredPlayers().get(root.getSeat());
+        for (Player p : shadow.getRegisteredPlayers()) {
+            for (ZoneType z : List.of(ZoneType.Hand, ZoneType.Library)) {
+                for (Card c : p.getCardsIn(z)) {
+                    if (c.getView().canBeShownTo(viewerNow.getView())) {
+                        seenNow.add(c.getId());
+                    }
+                }
+            }
         }
         this.shadow = shadow;
         this.shadowSession = shadowSession;
@@ -153,14 +199,16 @@ public final class ForgeSearchGame implements SearchGame {
     @Override
     public Simulation determinize(SplittableRandom rng) {
         long t0 = magicdosa.agent.Timing.start(); // measurement only
-        GameCopier copier = new GameCopier(shadow).withStack(true);
+        Game source = anchor == null ? shadow : anchor.game();
+        GameCopier copier = new GameCopier(source).withStack(true);
         Game copy = copier.makeCopy();
         copy.AI_TIMEOUT = 600; // Forge AI's wall-clock limit as a safeguard only (as in the shadow), never a budget
-        PhaseState.copy(shadow, copy, copier);
-        if (root.getType() != DecisionType.DECISION_TYPE_PRIORITY) {
+        PhaseState.copy(source, copy, copier);
+        if (root.getType() == DecisionType.DECISION_TYPE_DECLARE_ATTACKERS
+                || root.getType() == DecisionType.DECISION_TYPE_DECLARE_BLOCKERS) {
             PhaseState.rewindToDeclaration(copy);
         }
-        deal(copier, rng);
+        deal(source, copier, rng);
         magicdosa.agent.Timing.add("search.copy", t0);
         return chooser -> {
             long t1 = magicdosa.agent.Timing.start();
@@ -177,9 +225,9 @@ public final class ForgeSearchGame implements SearchGame {
      * the root seat's library. The copy holds the shadow's sample; a permutation of the unseen cards is a fresh uniform
      * sample of the same 60 (game 1; the 60 of games 2 and 3 stays the shadow's sample).
      */
-    private void deal(GameCopier copier, SplittableRandom rng) {
-        Player viewer = shadow.getRegisteredPlayers().get(rootSeat);
-        for (Player po : shadow.getRegisteredPlayers()) {
+    private void deal(Game source, GameCopier copier, SplittableRandom rng) {
+        Player viewer = source.getRegisteredPlayers().get(rootSeat);
+        for (Player po : source.getRegisteredPlayers()) {
             Player pc = (Player) copier.find(po);
             List<ZoneType> zones = po == viewer ? List.of(ZoneType.Library) : List.of(ZoneType.Hand, ZoneType.Library);
             Map<ZoneType, List<Card>> lists = new EnumMap<>(ZoneType.class);
@@ -194,7 +242,8 @@ public final class ForgeSearchGame implements SearchGame {
                 }
                 lists.put(z, copied);
                 for (int i = 0; i < orig.size(); i++) {
-                    if (!orig.get(i).getView().canBeShownTo(viewer.getView())) {
+                    // the cards the root seat sees at the root stay (an anchor is older: a scry shows them later)
+                    if (!seenNow.contains(orig.get(i).getId()) && !orig.get(i).getView().canBeShownTo(viewer.getView())) {
                         slotZone.add(z);
                         slotIndex.add(i);
                         unseen.add(copied.get(i));
@@ -309,6 +358,36 @@ public final class ForgeSearchGame implements SearchGame {
             return delegate;
         }
 
+        private int replayed;
+
+        /**
+         * Before the root of an anchored search: the root seat's recorded answers in order (by candidate index: the
+         * same decision layer asks the same request), the other seat passing. Null when the root is next.
+         */
+        private DecisionResponse replay(DecisionRequest r, DecisionResponse.Builder out) {
+            if (r.getSeat() != rootSeat) {
+                if (r.getType() == DecisionType.DECISION_TYPE_PRIORITY) {
+                    for (int i = 0; i < r.getCandidatesCount(); i++) {
+                        if (r.getCandidates(i).hasPass()) {
+                            return out.addChosen(i).build();
+                        }
+                    }
+                }
+                throw new IllegalStateException("replay: the other seat asked " + r.getType());
+            }
+            if (replayed >= anchor.replay().size()) {
+                return null;
+            }
+            magicdosa.protocol.v1.DecisionRecord rec = anchor.replay().get(replayed++);
+            if (rec.getRequest().getType() != r.getType() || rec.getRequest().getCandidatesCount() != r.getCandidatesCount()
+                    || !rec.hasResponse()) {
+                throw new IllegalStateException("replay differs at step " + replayed + ": recorded "
+                    + rec.getRequest().getType() + "/" + rec.getRequest().getCandidatesCount() + ", asked " + r.getType()
+                    + "/" + r.getCandidatesCount());
+            }
+            return out.addAllChosen(rec.getResponse().getChosenList()).build();
+        }
+
         /** When the last delegated request went to Forge AI (measurement only: rollout decision times). */
         private long delegatedAt;
 
@@ -328,6 +407,12 @@ public final class ForgeSearchGame implements SearchGame {
         public DecisionResponse decide(DecisionRequest r) {
             delegate = false;
             DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(r.getGameId()).setDecisionId(r.getDecisionId());
+            if (anchor != null && !askedRoot) {
+                DecisionResponse replayed = replay(r, out);
+                if (replayed != null) {
+                    return replayed;
+                }
+            }
             boolean isRoot = !askedRoot;
             askedRoot = true;
             if (!isRoot && (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0)) {
