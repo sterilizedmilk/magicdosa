@@ -62,6 +62,12 @@ public final class ShardWriter {
         "rel_kind", "deck_card", "deck_count", "deck_group", "cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key",
         "cand_string", "priv_opp_hand", "priv_my_library", "priv_opp_library");
 
+    /**
+     * zstd level of the shards' buffer compression (2026-11-25: the disk is the bottleneck); 0 writes them uncompressed.
+     * -Dmagicdosa.shards.zstdLevel, default 3.
+     */
+    static final int ZSTD_LEVEL = Integer.getInteger("magicdosa.shards.zstdLevel", 3);
+
     private final Encoder encoder;
     private final Path dir;
     private final String modelVersion;
@@ -353,7 +359,10 @@ public final class ShardWriter {
             root.setRowCount(n);
             try (FileChannel ch = FileChannel.open(file, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
                     StandardOpenOption.TRUNCATE_EXISTING); // a game ID seen before fails (shard error) instead of overwriting
-                 ArrowFileWriter writer = new ArrowFileWriter(root, null, ch)) {
+                 ArrowFileWriter writer = ZSTD_LEVEL <= 0 ? new ArrowFileWriter(root, null, ch)
+                     : new ArrowFileWriter(root, null, ch, null, org.apache.arrow.vector.ipc.message.IpcOption.DEFAULT,
+                         ZstdCodec.factory(ZSTD_LEVEL), org.apache.arrow.vector.compression.CompressionUtil.CodecType.ZSTD,
+                         java.util.Optional.of(ZSTD_LEVEL))) {
                 writer.start();
                 writer.writeBatch();
                 writer.end();
