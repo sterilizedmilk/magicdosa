@@ -518,6 +518,27 @@ public final class ForgeSearchGame implements SearchGame {
                 delegatedAt = magicdosa.agent.Timing.start();
                 return out.build();
             }
+            SelectionConstraints c = r.getConstraints();
+            if (!isRoot && chooser.outOfTree()) {
+                // out of the tree every step is the rollout's: the loop below without the tree's keys (its first step
+                // delegates the request), and from here on the copy's session builds nothing the rollout does not read
+                session.quiet();
+                if (c.getMax() > 0) {
+                    List<Integer> all = new ArrayList<>();
+                    for (int i = 0; i < r.getCandidatesCount(); i++) {
+                        all.add(i);
+                    }
+                    List<Integer> fit = fitting(r, all, List.of());
+                    if (fit.isEmpty() && !doneAllowed(r, List.of())) {
+                        throw new IllegalStateException(r.getType() + ": no legal way to complete the selection");
+                    }
+                    if (!fit.isEmpty()) {
+                        delegate = true;
+                        delegatedAt = magicdosa.agent.Timing.start();
+                    }
+                }
+                return out.build();
+            }
             // the root decision's candidates are named by Forge card numbers (they must equal the real request's);
             // elsewhere by the copy's own entity IDs
             List<String> names = new ArrayList<>();
@@ -527,7 +548,6 @@ public final class ForgeSearchGame implements SearchGame {
             }
             String info = isRoot ? "root" : magicdosa.agent.shadow.Fingerprint.hash(magicdosa.agent.shadow.Fingerprint.normalise(
                 r.toBuilder().clearCandidates().clearConstraints().build()));
-            SelectionConstraints c = r.getConstraints();
             List<Integer> remaining = new ArrayList<>();
             for (int i = 0; i < r.getCandidatesCount(); i++) {
                 remaining.add(i);
@@ -552,6 +572,9 @@ public final class ForgeSearchGame implements SearchGame {
                     pick = chooser.choose(new Decision(r.getSeat(), chosen.isEmpty() ? info : info + "|" + sorted, actions,
                         !chosen.isEmpty()));
                     rootChosen |= isRoot;
+                    if (chooser.outOfTree()) {
+                        session.quiet(); // the walk left the tree at this decision
+                    }
                     if (pick == Chooser.ROLLOUT) {
                         if (chosen.isEmpty()) {
                             delegate = true; // Forge AI answers the whole request
