@@ -134,8 +134,9 @@ vocab 3). 최종 게이트 fin4: 16조합×60 네 가지(순수 Forge AI, 결정
 동일. 남은 리스크(큰 보드 공격에서 그림자 Forge AI가 10분 안전장치에 걸린 1건)는 3단계에서 다룬다. 보고서:
 https://claude.ai/artifact/NRbTKugmT5UTSKjephvyod
 
-**3단계: 탐색(IS-MCTS).** 목표와 게이트는 설계 문서 개요 탭의 "3단계 목표" 단락. 코드는 브랜치
-`claude/phase3-search-b28914`(protocol 12 / encoder 5 / vocab 3, `main` 병합 전).
+**3단계: 탐색(IS-MCTS).** 목표와 게이트는 설계 문서 개요 탭의 "3단계 목표" 단락, 방침은 작업 대화 구성 문서의
+"2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색 골격은 `main`에 병합됨(2026-11-25, ab87b4a, protocol 13 / encoder 5 /
+vocab 3). 구현 메모는 `docs/search.md`. 실행: `--policy search --budget N`(예산은 시뮬레이션 수, 시간 아님).
 
 - 게이트(AllPairings)는 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
 - **병렬은 프로세스 단위 (2026-11-11 결정):** 한 JVM에서 Forge 게임을 여러 스레드로 동시에 돌리면 게임끼리 간섭한다
