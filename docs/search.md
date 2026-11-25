@@ -30,8 +30,12 @@ This file records how the code does it and what is not done yet. It changes no d
     priority decision the shadow is copied once (the anchor, `search.anchorCopy` in the timing). A simulation copies
     the anchor and replays the viewer's recorded answers since then by candidate index; the other seat may only pass
     (anything else fails that simulation, counted). Then the engine asks the root again and the tree takes over. The
-    anchor is dropped after any recovery; without an anchor the request is delegated as before. Cards the viewer
-    sees at the root (a scry's) keep their identity when the copy is dealt.
+    anchor is dropped after any recovery and holds only in the turn and step it was taken in (the viewer may not
+    have been asked since: auto passes, mana-only stops; an older anchor replays into another step and never meets
+    the root); without an anchor the request is delegated, counted as "delegated: no anchor in this step: TYPE".
+    Cards the viewer sees at the root (a scry's) keep their identity when the copy is dealt. The root's candidates
+    are matched by name in the searched order: cards from a hidden zone (a library search) come in that zone's
+    order, which differs between the shadow and a copy.
   - A multi-select root is read back as the most visited path through its steps: one protocol step per pick with
     that node's visit ratios; a selection the tree did not finish is completed with the first fitting candidates
     (steps without visit ratios).

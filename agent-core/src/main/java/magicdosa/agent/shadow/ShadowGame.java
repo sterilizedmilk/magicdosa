@@ -307,9 +307,16 @@ public final class ShadowGame {
     private int anchorAt = -1;
     private int anchorRecoveries = -1;
 
-    /** An anchor taken since the last recovery (a recovery may have corrected the state the anchor copied). */
+    /**
+     * An anchor taken since the last recovery (a recovery may have corrected the state the anchor copied) in the step
+     * the shadow is in now: the decisions inside an action come in the step of the priority decision that started it.
+     * An older anchor (the viewer was not asked since: auto passes, mana-only stops) would replay into another step and
+     * never reach the root (a cleanup discard searched from a priority turns earlier).
+     */
     private boolean anchorValid() {
-        return anchorGame != null && anchorRecoveries == result.recoveries1 + result.recoveries2;
+        return anchorGame != null && anchorRecoveries == result.recoveries1 + result.recoveries2
+            && anchorGame.getPhaseHandler().getTurn() == game.getPhaseHandler().getTurn()
+            && anchorGame.getPhaseHandler().getPhase() == game.getPhaseHandler().getPhase();
     }
 
     private DecisionResponse searched(DecisionRequest real) {
@@ -2365,6 +2372,13 @@ public final class ShadowGame {
                     // a triggered ability (or a copy) on the stack: a search copy could not hold it; the shadow's Forge
                     // AI answers (an intended delegation), counted
                     live.searched(null, java.util.Map.of("delegated: stack holds what a copy cannot", 1));
+                }
+                if (stage != 3 && live.search() != null && GameCopier.stackCopyable(game)
+                        && magicdosa.agent.search.ForgeSearchGame.INNER_ROOTS.contains(real.getType()) && !anchorValid()) {
+                    // inside an action whose priority decision the viewer was not asked in this step: no anchor to search
+                    // from; the shadow's Forge AI answers (an intended delegation), counted
+                    live.searched(null, java.util.Map.of("delegated: no anchor in this step: " + real.getType().name()
+                        .replace("DECISION_TYPE_", ""), 1));
                 }
                 if (stage != 3 && (live.search() == null || !GameCopier.stackCopyable(game)
                         || !(magicdosa.agent.search.ForgeSearchGame.ROOTS.contains(real.getType())
