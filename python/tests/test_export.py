@@ -33,7 +33,8 @@ def test_contract(exported):
     assert meta["encoder_version"] == str(versions.ENCODER_VERSION)
     assert meta["protocol_version"] == str(versions.PROTOCOL_VERSION)
     assert meta["vocab_version"] == str(versions.VOCAB_VERSION)
-    assert meta["model_version"] == "test-0"
+    assert meta["model_version"] == str(versions.MODEL_VERSION)
+    assert meta["model_name"] == "test-0"
     dims = {i.name: [d.dim_param or d.dim_value for d in i.type.tensor_type.shape.dim] for i in model.graph.input}
     assert dims["token_feat"][:2] == ["batch", "tokens"]
     assert dims["cand_mask"] == ["batch", "candidates"]

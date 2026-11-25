@@ -5,8 +5,9 @@ Contract (also in docs/python-training.md):
   Dynamic axes: batch, tokens, relations, deck, candidates. No privileged input exists in the graph.
 - outputs: `policy_logits` float32 [batch, candidates] (padded candidates = -1e9; softmax over a row gives the policy
   over that step's candidates), `value` float32 [batch] (P(win) of the deciding seat, observation only).
-- metadata_props: protocol_version, encoder_version, vocab_version (versions.py), model_version (given by the
-  caller), feature names of the shard the model was built for, input order.
+- metadata_props: protocol_version, encoder_version, vocab_version, model_version (versions.py; model_version is the
+  network structure), model_name (the trained instance, given by the caller, e.g. "gen0-run1"), feature names of
+  the shard the model was built for, input order.
 The training-only critic is never exported.
 """
 
@@ -41,7 +42,7 @@ for _name in MODEL_INPUTS:
 OUTPUT_AXES = {"policy_logits": {0: "batch", 1: "candidates"}, "value": {0: "batch"}}
 
 
-def export_onnx(net: PlayNet, example: Mapping[str, np.ndarray], path: Path | str, model_version: str,
+def export_onnx(net: PlayNet, example: Mapping[str, np.ndarray], path: Path | str, model_name: str,
                 feature_names: Mapping[str, Sequence[str]] | None = None, opset: int = 18) -> Path:
     """Writes `net` as ONNX to `path`, traced on `example` (a shards.training_batch(...)['inputs'])."""
     import onnx
@@ -59,7 +60,8 @@ def export_onnx(net: PlayNet, example: Mapping[str, np.ndarray], path: Path | st
                                     dynamic_shapes=(shapes,), opset_version=opset, dynamo=True, verbose=False)
     model = program.model_proto
     meta = {"protocol_version": str(versions.PROTOCOL_VERSION), "encoder_version": str(versions.ENCODER_VERSION),
-            "vocab_version": str(versions.VOCAB_VERSION), "model_version": model_version,
+            "vocab_version": str(versions.VOCAB_VERSION), "model_version": str(versions.MODEL_VERSION),
+            "model_name": model_name,
             "inputs": ",".join(MODEL_INPUTS)}
     for group, names in (feature_names or {}).items():
         meta[group + "_features"] = ",".join(names)
@@ -86,3 +88,30 @@ def _widen(example: Mapping[str, np.ndarray]) -> Dict[str, np.ndarray]:
             v = np.concatenate([v, pad], axis=1)
         out[k] = v
     return out
+
+
+def main(argv=None) -> None:
+    """python -m magicdosa.export --checkpoint <checkpoint.pt> --shard <any shard of the same encoder> --out <x.onnx>
+    --name <model name>"""
+    import argparse
+    from . import shards
+    from .model import ModelConfig
+    p = argparse.ArgumentParser()
+    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--shard", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--name", required=True)
+    a = p.parse_args(argv)
+    ck = torch.load(a.checkpoint, map_location="cpu")
+    if ck.get("model_version") != versions.MODEL_VERSION:
+        raise ValueError(f"checkpoint model_version {ck.get('model_version')}, expected {versions.MODEL_VERSION}")
+    net = PlayNet(ModelConfig(**ck["config"]))
+    net.load_state_dict(ck["state"])
+    table = shards.read_shard(a.shard)
+    example = shards.training_batch(table, range(min(4, table.num_rows)))["inputs"]
+    names = {g: shards.feature_names(table, g) for g in ("global", "token", "candidate")}
+    print(export_onnx(net, example, a.out, a.name, names))
+
+
+if __name__ == "__main__":
+    main()
