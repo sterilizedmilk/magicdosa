@@ -2433,6 +2433,13 @@ public final class ShadowGame {
                 }
                 if (j < 0) {
                     String why = "decision " + real.getDecisionId() + ": the real answer " + text(c) + " is not a shadow candidate";
+                    if (Boolean.getBoolean("magicdosa.search.debug")) {
+                        StringBuilder own = new StringBuilder();
+                        for (var k : request.getCandidatesList()) {
+                            own.append(" | ").append(text(k));
+                        }
+                        System.out.println("shadow debug: " + why + "; the shadow's candidates" + own); // diagnosis only
+                    }
                     if (stage != 3 && !forcedRegeneration) {
                         escalate(real, why);
                     }
