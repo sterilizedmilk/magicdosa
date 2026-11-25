@@ -62,3 +62,24 @@ the state at each of its decisions (LiveReplay / ShadowCheck with the real privi
 candidates with our decision layer there; that is several CPU-hours per run (the shadow loop runs at about 6-10 s
 per game) and new code to ask the layer for the other seat's candidates without answering them. It would roughly
 double the data.
+
+## Converter (2026-11-25 planning decision: phase-4 generation-0 initialisation only)
+
+`magicdosa.agent.tools.ImitationShards` (agent-core test sources, a main program; nothing about training):
+
+```powershell
+mvn -pl agent-core exec:exec "-Djvm.args=-Xmx2g --add-opens=java.base/java.nio=ALL-UNNAMED" "-Dexec.mainClass=magicdosa.agent.tools.ImitationShards" "-Dexec.args=<abs log root> <abs out dir> <threads>"
+```
+
+- Reads each game log (decision-layer gates: fin3-layer, fin4-layer), rebuilds the steps of every answer recorded as
+  Forge AI's from its chosen candidates (one step per pick, then "done" where the selection may stop), keeps the
+  delegation as each step's decider, joins the privileged records and the game end, and writes one shard per game
+  with the current encoder (5) and vocabulary (3).
+- Schema metadata: `source=imitation:forge-ai`, `teacher` (the log's model version, `real-forge-ai`),
+  `policy=forge-ai (decision layer)`, `model_version=none`, `log_protocol_version`, `log_encoder_version`, `log`.
+  `shards.policy_target_rows` gives none of these rows (no visit ratios, not decided by the model), so they cannot
+  enter the search policy targets by accident; an imitation loader selects them by the source tag and the decider.
+- Trial on fin4-layer IzzetProwess mirror (150 games): 23,455 decisions, every answer's steps rebuilt, 636 records
+  left out (no request body), 5.3 s on two threads, no vocabulary miss; the Python reader takes the shards.
+- Size: about 1.6 MB per game (247 MB for 150 games), so about 3.7 GB per gate run. E: has 28 GB free (95% used):
+  converting fin3-layer and fin4-layer (about 7.5 GB) is left for the user's go-ahead.
