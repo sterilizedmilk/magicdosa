@@ -132,7 +132,13 @@ final class AgentConnection implements AutoCloseable {
         }
         String budget = System.getProperty("magicdosa.agentBudget");
         if (budget != null) {
-            cmd.addAll(List.of("--budget", budget)); // --policy search: simulations per decision
+            cmd.addAll(List.of("--budget", budget)); // --policy search: a fixed number of simulations per decision
+        }
+        String perCandidate = System.getProperty("magicdosa.agentBudgetPerCandidate");
+        if (perCandidate != null) {
+            // --policy search: simulations per root action (1x = 12), times the multiplier (2x, 4x)
+            cmd.addAll(List.of("--budget-per-candidate", perCandidate, "--budget-multiplier",
+                System.getProperty("magicdosa.agentBudgetMultiplier", "1")));
         }
         for (String k : System.getProperties().stringPropertyNames()) {
             if (k.startsWith("magicdosa.shadow") || k.startsWith("magicdosa.search") || k.equals("magicdosa.timing")) {

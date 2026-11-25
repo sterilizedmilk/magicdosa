@@ -82,7 +82,9 @@ public final class IsMcts {
             root.edges.put(a, new Edge(a, rng.nextLong()));
         }
         long[] nodes = {1};
-        for (long it = 0; it < config.budget(); it++) {
+        long budget = config.budgetFor(n);
+        out.budget = budget;
+        for (long it = 0; it < budget; it++) {
             SplittableRandom simRng = rng.split();
             out.iterations++;
             SearchGame.Simulation sim;

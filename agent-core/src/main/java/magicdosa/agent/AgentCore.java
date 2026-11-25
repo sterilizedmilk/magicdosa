@@ -8,7 +8,7 @@ import magicdosa.protocol.Versions;
 /**
  * agent-core entry point: serves adapters over gRPC. Phase 1 answers every decision with the uniform random policy.
  *
- * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--policy random|shadow-forge-ai|search] [--budget N] [--until-stdin-closes]</pre>
+ * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--policy random|shadow-forge-ai|search] [--budget N | --budget-per-candidate N [--budget-multiplier M]] [--until-stdin-closes]</pre>
  *
  * The port defaults to 50051; 0 picks a free port. Prints {@code agent-core listening on port N} once it accepts
  * connections. With {@code --shards}, each finished game's training samples are written there as an Arrow file (the
@@ -30,6 +30,8 @@ public final class AgentCore {
         java.nio.file.Path shardDir = null;
         String policyName = "random";
         long budget = 0;
+        int perCandidate = 0;
+        int multiplier = 1;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 port = Integer.parseInt(args[++i]);
@@ -39,6 +41,10 @@ public final class AgentCore {
                 policyName = args[++i];
             } else if (args[i].equals("--budget") && i + 1 < args.length) {
                 budget = Long.parseLong(args[++i]);
+            } else if (args[i].equals("--budget-per-candidate") && i + 1 < args.length) {
+                perCandidate = Integer.parseInt(args[++i]);
+            } else if (args[i].equals("--budget-multiplier") && i + 1 < args.length) {
+                multiplier = Integer.parseInt(args[++i]);
             } else if (args[i].equals("--until-stdin-closes")) {
                 untilStdinCloses = true;
             } else {
@@ -76,10 +82,15 @@ public final class AgentCore {
         magicdosa.agent.search.SearchConfig search = null;
         if (policyName.equals("search")) {
             // phase 3: IS-MCTS on the live shadow; the node budget has no default (3단계 기획 쟁점 5: measured, not set)
-            if (budget < 1) {
-                throw new IllegalArgumentException("--policy search needs --budget N (simulations per decision)");
+            // 2026-11-25 planning decision: the budget by root, simulations per root action (1x = 12) times a multiplier
+            if (perCandidate > 0) {
+                search = magicdosa.agent.search.SearchConfig.fromSystemProperties(1).perCandidate(perCandidate, multiplier);
+            } else if (budget >= 1) {
+                search = magicdosa.agent.search.SearchConfig.fromSystemProperties(budget);
+            } else {
+                throw new IllegalArgumentException("--policy search needs --budget-per-candidate N [--budget-multiplier M]"
+                    + " or --budget N");
             }
-            search = magicdosa.agent.search.SearchConfig.fromSystemProperties(budget);
         }
         Agent agent = new Agent(policy, shardDir == null ? null : new magicdosa.agent.encoder.ShardWriter(
             new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir,

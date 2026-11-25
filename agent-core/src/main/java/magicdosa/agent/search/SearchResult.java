@@ -17,6 +17,8 @@ import java.util.TreeMap;
 public final class SearchResult {
     public final SearchConfig config;
     public final long seed;
+    /** Simulations this root got (fixed, or its actions x per candidate x multiplier). */
+    public final long budget;
     /** Simulations started (= the budget). */
     public final long iterations;
     /** Simulations that were played and backed up. */
@@ -69,6 +71,7 @@ public final class SearchResult {
     private SearchResult(Builder b, long[] visits, double rootValue, List<Step> steps) {
         this.steps = List.copyOf(steps);
         this.config = b.config;
+        this.budget = b.budget;
         this.seed = b.seed;
         this.iterations = b.iterations;
         this.determinizations = b.determinizations;
@@ -125,13 +128,13 @@ public final class SearchResult {
         return Method.newBuilder().setPrior(Prior.PRIOR_UNIFORM).setRan(SearchRun.newBuilder()
             .setNodes(nodes).setDeterminizations((int) Math.min(Integer.MAX_VALUE, determinizations))
             .setRootValue(Double.isNaN(rootValue) ? 0f : (float) rootValue)
-            .setBudget(config.budget()).setSeed(seed).setSimulations(iterations)
+            .setBudget(budget).setSeed(seed).setSimulations(iterations)
             .setFailed(noDeterminization + rootMismatches + failures)).build();
     }
 
     @Override
     public String toString() {
-        return "search budget=" + config.budget() + " seed=" + seed + " backedUp=" + determinizations + " noSample="
+        return "search budget=" + budget + " (" + config.describe() + ") seed=" + seed + " backedUp=" + determinizations + " noSample="
             + noDeterminization + " rootMismatch=" + rootMismatches + " failures=" + failures + " nodes=" + nodes
             + " value=" + rootValue + " visits=" + java.util.Arrays.toString(visits) + " tie=" + rootTie() + (problems.isEmpty() ? "" : " " + problems);
     }
@@ -139,7 +142,7 @@ public final class SearchResult {
     static final class Builder {
         final SearchConfig config;
         final long seed;
-        long iterations, determinizations, noDeterminization, rootMismatches, failures, nodes;
+        long budget, iterations, determinizations, noDeterminization, rootMismatches, failures, nodes;
         final Map<String, Integer> problems = new TreeMap<>();
 
         Builder(SearchConfig config, long seed, int candidates) {

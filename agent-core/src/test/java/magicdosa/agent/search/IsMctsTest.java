@@ -126,6 +126,18 @@ class IsMctsTest {
         assertTrue(!a.toString().equals(c.toString()), "another seed should give another run");
     }
 
+    /** 2026-11-25: the budget by root is its actions x simulations per action x the multiplier. */
+    @Test
+    void theBudgetPerCandidateScalesWithTheRoot() {
+        SearchConfig oneX = SearchConfig.of(1).perCandidate(12, 1);
+        SearchResult r = new IsMcts(oneX).search(new Bandit(new double[] {0.5, 0.5, 0.5}), 4);
+        assertEquals(36, r.budget);
+        assertEquals(36, r.iterations);
+        assertEquals(36, r.method().getRan().getBudget());
+        SearchResult four = new IsMcts(SearchConfig.of(1).perCandidate(12, 4)).search(new Bandit(new double[] {0.5, 0.5}), 4);
+        assertEquals(96, four.budget);
+    }
+
     @Test
     void theBudgetBoundsTheTree() {
         for (long budget : new long[] {1, 10, 100}) {
