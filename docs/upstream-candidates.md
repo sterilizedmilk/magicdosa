@@ -182,3 +182,16 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Our workaround:** our `GameCopier` copies the pools after the cards, as new `Mana` of the copied player with the
   copied source card and mana ability; search counts any simulation that still changes the source's waiting triggers.
 - **Fix upstream:** the same in Forge's `GameCopier` (copy the pool once the cards are mapped).
+
+## 14. GameCopier drops a card's plotted state and the turn it entered its zone (2026-11-25)
+
+- **What:** `forge.ai.simulation.GameCopier` builds each card anew and adds it to its zone; adding stamps the copy's
+  current turn as the card's turn in zone, and the plotted flag is not copied. A plotted card in exile is therefore
+  neither plotted nor "entered before this turn" in the copy, so the copy never offers casting it by plot
+  (`GameActionUtil`: `isPlotted() && !enteredThisTurn()`). Any other "entered this turn" check reads the copy's turn.
+- **How we hit it:** search roots where the real game offered `cast_method plot` (Slickshot Show-Off) failed every
+  simulation: the copy's priority candidates lacked the plot cast.
+- **Our workaround:** our `GameCopier` copies `turnInZone` for every card and sets the `plotted` field directly
+  (`setPlotted(true)` runs a BecomesPlotted trigger).
+- **Fix upstream:** copy `turnInZone` and the plotted flag (without the trigger) in Forge's `GameCopier`, as
+  `CardCopyService` does for LKI copies.

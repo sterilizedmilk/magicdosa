@@ -600,6 +600,32 @@ public class GameCopier {
         } else {
             zoneOwner.getZone(zone).add(newCard);
         }
+        // adding to a zone stamps the copy's current turn: keep the original's ("entered this turn" decides, e.g., whether
+        // a plotted card may be cast)
+        newCard.setTurnInZone(c.getTurnInZone());
+        if (c.isPlotted()) {
+            // the field itself: setPlotted(true) runs a BecomesPlotted trigger
+            setPlotted(newCard);
+        }
+    }
+
+    private static final java.lang.reflect.Field PLOTTED;
+
+    static {
+        try {
+            PLOTTED = Card.class.getDeclaredField("plotted");
+            PLOTTED.setAccessible(true);
+        } catch (NoSuchFieldException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static void setPlotted(Card c) {
+        try {
+            PLOTTED.setBoolean(c, true);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
