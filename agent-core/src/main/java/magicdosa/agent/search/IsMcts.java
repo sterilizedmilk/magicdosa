@@ -111,6 +111,10 @@ public final class IsMcts {
                 out.failure("value out of range: " + v);
                 continue;
             }
+            if (walk.mismatch != null) {
+                out.rootMismatch(walk.mismatch);
+                continue;
+            }
             if (walk.path.isEmpty()) {
                 out.rootMismatch("the simulation never asked the root decision");
                 continue;
@@ -171,6 +175,10 @@ public final class IsMcts {
         return out;
     }
 
+    private static String abbreviate(String s) {
+        return s.length() > 160 ? s.substring(0, 160) + "..." : s;
+    }
+
     /** One simulation's walk down the tree: the tree-lookup chooser. */
     private final class Walk implements SearchGame.Chooser {
         private final Node root;
@@ -181,6 +189,8 @@ public final class IsMcts {
         final List<Node> pathNodes = new ArrayList<>();
         private boolean started;
         private boolean outOfTree;
+        /** Why the root decision did not match, also when the engine swallowed the exception. */
+        String mismatch;
 
         Walk(Node root, List<String> rootActions, SplittableRandom rng, long[] nodes) {
             this.root = root;
@@ -195,8 +205,19 @@ public final class IsMcts {
             if (!started) {
                 started = true;
                 if (d.seat() != root.seat || !d.actions().equals(rootActions)) {
-                    throw new RootMismatch("root decision differs: seat " + d.seat() + " actions " + d.actions().size()
-                        + " (searched " + rootActions.size() + ")");
+                    String first = "";
+                    for (int i = 0; i < Math.max(d.actions().size(), rootActions.size()); i++) {
+                        String x = i < d.actions().size() ? d.actions().get(i) : "-";
+                        String y = i < rootActions.size() ? rootActions.get(i) : "-";
+                        if (!x.equals(y)) {
+                            first = "; first difference at " + i + ": " + abbreviate(x) + " vs searched " + abbreviate(y);
+                            break;
+                        }
+                    }
+                    // kept on the walk too: the engine may catch the exception inside its own call (Forge AI code)
+                    mismatch = "root decision differs: seat " + d.seat() + " actions " + d.actions().size()
+                        + " (searched " + rootActions.size() + ")" + first;
+                    throw new RootMismatch(mismatch);
                 }
                 node = root;
             } else {
