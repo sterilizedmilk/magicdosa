@@ -215,6 +215,93 @@ public final class ShadowGame {
      * in the real request's candidate order with the visit ratios and the search run. One candidate is not searched; a
      * search whose simulations all failed answers by the network alone (the random policy), recorded as such.
      */
+    /**
+     * Confirmed-kill checker (measurement only, never changes the answer): at the viewer's attack declaration, whether
+     * attacking with everything was a confirmed kill and whether the answer kept it; at its block declaration, whether
+     * the answer took lethal damage that some blocks would have prevented. Counted in the live stats ("kill: ...").
+     */
+    private void judgeCombat(DecisionRequest real, DecisionResponse resp) {
+        if (live == null || (real.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_DECLARE_ATTACKERS
+                && real.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_DECLARE_BLOCKERS)) {
+            return;
+        }
+        Map<String, Integer> out = new java.util.TreeMap<>();
+        try {
+            int actingSeat = real.hasActingSeat() ? real.getActingSeat() : real.getSeat();
+            Player me = game.getRegisteredPlayers().get(actingSeat);
+            if (real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_DECLARE_ATTACKERS) {
+                Player opp = me.getWeakestOpponent();
+                List<forge.game.card.Card> possible = new ArrayList<>();
+                List<forge.game.card.Card> chosen = new ArrayList<>();
+                for (int i = 0; i < real.getCandidatesCount(); i++) {
+                    var c = real.getCandidates(i);
+                    if (!c.hasAttack() || !c.getAttack().getDefender().hasPlayerSeat()) {
+                        continue; // planeswalkers and battles: not a kill
+                    }
+                    forge.game.card.Card a = session.cardOf(c.getAttack().getAttackerId());
+                    if (a == null) {
+                        continue;
+                    }
+                    if (!possible.contains(a)) {
+                        possible.add(a);
+                    }
+                    if (resp.getChosenList().contains(i) && !chosen.contains(a)) {
+                        chosen.add(a);
+                    }
+                }
+                magicdosa.agent.search.KillCheck.Outcome all = magicdosa.agent.search.KillCheck.evaluate(possible, opp);
+                int life = opp.getLife();
+                if (all.lethal(life)) {
+                    out.put("kill: available", 1);
+                    if (!magicdosa.agent.search.KillCheck.evaluate(chosen, opp).lethal(life)) {
+                        out.put("kill: missed", 1);
+                    }
+                    if (all.approximate()) {
+                        out.put("kill: approximate", 1);
+                    }
+                }
+            } else {
+                forge.game.combat.Combat combat = game.getPhaseHandler().getCombat();
+                if (combat == null) {
+                    return;
+                }
+                List<forge.game.card.Card> attackers = new ArrayList<>();
+                for (forge.game.card.Card a : combat.getAttackers()) {
+                    if (combat.getDefenderByAttacker(a) == me) {
+                        attackers.add(a);
+                    }
+                }
+                Map<forge.game.card.Card, forge.game.card.Card> blockOf = new java.util.HashMap<>();
+                for (int i : resp.getChosenList()) {
+                    var c = real.getCandidates(i);
+                    if (c.hasBlock()) {
+                        forge.game.card.Card a = session.cardOf(c.getBlock().getAttackerId());
+                        forge.game.card.Card b = session.cardOf(c.getBlock().getBlockerId());
+                        if (a != null && b != null) {
+                            blockOf.putIfAbsent(a, b);
+                        }
+                    }
+                }
+                magicdosa.agent.search.KillCheck.Outcome best = magicdosa.agent.search.KillCheck.evaluate(attackers, me);
+                int life = me.getLife();
+                int took = magicdosa.agent.search.KillCheck.damageWith(attackers, blockOf);
+                if (best.lethal(life)) {
+                    out.put("kill: lethal attack unpreventable", 1);
+                } else if (took >= life) {
+                    out.put("kill: preventable lethal taken", 1);
+                    if (best.approximate()) {
+                        out.put("kill: approximate", 1);
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            out.put("kill: check failed: " + e.getClass().getSimpleName(), 1);
+        }
+        if (!out.isEmpty()) {
+            live.searched(null, out);
+        }
+    }
+
     /** The viewer's last priority point (search): a copy of the shadow there and the record position of that decision. */
     private Game anchorGame;
     private int anchorAt = -1;
@@ -1944,7 +2031,9 @@ public final class ShadowGame {
             }
             out.addSteps(magicdosa.protocol.v1.DecisionStep.newBuilder()
                 .setDecider(magicdosa.protocol.v1.Decider.DECIDER_INTENDED_DELEGATION));
-            live.answer(out.build(), "shadow Forge AI: " + engineDecision);
+            DecisionResponse delegatedAnswer = out.build();
+            judgeCombat(real, delegatedAnswer);
+            live.answer(delegatedAnswer, "shadow Forge AI: " + engineDecision);
             decisionIdx++;
             afterAnswer(real);
             revealsAhead(real.getAppliedSeq());
@@ -2285,9 +2374,11 @@ public final class ShadowGame {
                 }
                 if (stage != 3) {
                     resp = searched(real);
+                    judgeCombat(real, resp);
                     live.answer(resp, "search");
                 } else {
                     resp = live.withoutShadow(real, "search skipped: " + stageCause);
+                    judgeCombat(real, resp);
                     live.answer(resp, "without shadow");
                 }
                 decisionIdx++;

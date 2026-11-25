@@ -91,6 +91,28 @@ class SearchScenarioTest {
         assertEquals(r.decisions, r.decisionsMatched, why);
     }
 
+    /** The confirmed-kill checker sees an available kill: three attackers, one blocker, the other seat at 2 life. */
+    @Test
+    void theKillCheckerSeesAnAvailableKill() throws Exception {
+        Scenario s = new Scenario("search-kill-0", 5, 0);
+        s.seat(0).deck("Mountain", 30).deck("Monastery Swiftspear", 30)
+            .library("Mountain", "Mountain", "Mountain", "Mountain")
+            .hand("Mountain")
+            .battlefield("Mountain", "Monastery Swiftspear", "Monastery Swiftspear", "Monastery Swiftspear");
+        s.seat(1).deck("Forest", 30).deck("Monastery Swiftspear", 30)
+            .library("Forest", "Forest", "Forest", "Forest")
+            .hand("Forest")
+            .battlefield("Forest", "Monastery Swiftspear");
+        s.seat(1).life = 2;
+        s.search = SearchConfig.of(6);
+        ShadowGame.Result r = s.play(1);
+        LiveShadow.Stats st = s.stats;
+        String why = st.line();
+        System.out.println("search kill scenario: " + why);
+        assertTrue(st.search.getOrDefault("kill: available", 0) > 0, why);
+        assertEquals(r.decisions, r.decisionsMatched, why);
+    }
+
     @Test
     void sameSeedSameSearches() throws Exception {
         String[] lines = new String[2];
