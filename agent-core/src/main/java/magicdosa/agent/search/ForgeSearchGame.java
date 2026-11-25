@@ -154,6 +154,18 @@ public final class ForgeSearchGame implements SearchGame {
     static final double EVAL_SCALE = Double.parseDouble(System.getProperty("magicdosa.search.evalScale", "400"));
     /** Safeguard against a copy that never reaches the horizon (loop steps, never time). */
     static final int MAX_LOOP_STEPS = Integer.getInteger("magicdosa.search.maxLoopSteps", 20_000);
+    /**
+     * Measurement only (2026-11-26, options for the user, not recorded in SearchRun): where a rollout stops.
+     * "own-turn" (the default, 3단계 기획 쟁점 4): the start of the root seat's next turn; "turn": the start of the next
+     * turn, whoever's it is (the end of the root's turn).
+     */
+    static final boolean HORIZON_NEXT_TURN = "turn".equals(System.getProperty("magicdosa.search.horizon", "own-turn"));
+    /**
+     * Measurement only (2026-11-26, options for the user, not recorded in SearchRun): "forge" (the default) values a
+     * leaf with Forge's GameStateEvaluator including its simulation of the coming combat (one game copy per seat);
+     * "static" scores the leaf's board as it stands (the same score without the combat simulation).
+     */
+    static final boolean LEAF_STATIC = "static".equals(System.getProperty("magicdosa.search.leafEval", "forge"));
 
     private final Game shadow;
     private final ForgeGameSession shadowSession;
@@ -434,7 +446,7 @@ public final class ForgeSearchGame implements SearchGame {
                 if (client.leafValue != null) {
                     break; // Forge's own code caught the exception
                 }
-                if (ph.getTurn() > rootTurn && ph.getPlayerTurn() == me) {
+                if (ph.getTurn() > rootTurn && (HORIZON_NEXT_TURN || ph.getPlayerTurn() == me)) {
                     count("horizon");
                     break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
                 }
@@ -461,6 +473,33 @@ public final class ForgeSearchGame implements SearchGame {
         }
     }
 
+    private static final java.lang.reflect.Method SCORE_IMPL;
+
+    static {
+        java.lang.reflect.Method m = null;
+        if (LEAF_STATIC) {
+            try {
+                m = GameStateEvaluator.class.getDeclaredMethod("getScoreForGameStateImpl", Game.class, Player.class);
+                m.setAccessible(true);
+            } catch (NoSuchMethodException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        SCORE_IMPL = m;
+    }
+
+    /** Forge's score of the board as it stands, without its combat simulation (measurement option "static"). */
+    private static double staticScore(GameStateEvaluator ev, Game copy, Player p) {
+        if (!p.isInGame()) {
+            return ev.getScoreForGameState(copy, p).value; // the terminal score
+        }
+        try {
+            return ((GameStateEvaluator.Score) SCORE_IMPL.invoke(ev, copy, p)).value;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** 1 a win, 0 a loss, 0.5 a draw; else the logistic of the score difference of Forge's state evaluator. */
     private double value(Game copy, Player me) {
         if (copy.isGameOver()) {
@@ -473,8 +512,8 @@ public final class ForgeSearchGame implements SearchGame {
         }
         Player opp = me.getWeakestOpponent();
         GameStateEvaluator ev = new GameStateEvaluator();
-        double mine = ev.getScoreForGameState(copy, me).value;
-        double theirs = ev.getScoreForGameState(copy, opp).value;
+        double mine = LEAF_STATIC ? staticScore(ev, copy, me) : ev.getScoreForGameState(copy, me).value;
+        double theirs = LEAF_STATIC ? staticScore(ev, copy, opp) : ev.getScoreForGameState(copy, opp).value;
         if (GameStateEvaluator.isWinning((int) mine)) {
             return 1;
         }

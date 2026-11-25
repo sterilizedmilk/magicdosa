@@ -217,7 +217,7 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   `getHiddenStaticAbilities` (return an empty view when there is nothing); a card copy that clones the built
   abilities instead of reading the script again.
 
-## 15. GameCopier's stack copy casts the spells again (2026-11-26)
+## 16. GameCopier's stack copy casts the spells again (2026-11-26)
 
 - **What:** `forge.ai.simulation.GameCopier.copyStack` puts each spell on the copy's stack with `MagicStack.add`, which
   treats it as a new cast: it runs SpellCast / SpellAbilityCast triggers (prowess triggers a second time), adds the
@@ -229,3 +229,38 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   rebuilt yet (spells cast earlier in the turn are missing in a copy).
 - **Fix upstream:** add the copied stack entries without the cast bookkeeping (or suppress triggers around it), and
   copy the turn's cast list.
+
+## 17. Where a search simulation's time goes, late-game boards (2026-11-26, measurement only)
+
+- **What:** the gate-1 step-1 run (Izzet mirror, plain Forge AI rollout, 1x budget) measured 111 ms per simulation
+  under load: copy 9.8, leaf value 15.9, and about 83 ms of Forge game loop to the horizon. A JFR profile of one of
+  its games replayed in full (`SearchReplay`, `w21-g1`, 62 searches, 1896 simulations, 10447 samples of the search
+  thread plus Forge AI's evaluation threads) puts that time in Forge:
+
+  | Part (share of the simulation samples) | Share |
+  | --- | --- |
+  | Forge AI's own play in the rollout | 42.5% |
+  | of which on `Game AI Eval` threads (`AiController.chooseSpellAbilitiesToPlayFromList` starts a new thread for every priority decision and waits on it) | 22.6% |
+  | Game rules (stack resolution, state-based checks, phase begin) | 34.2% |
+  | Our decision layer (the tree part of a simulation: candidates, events, IDs) | 8.6% |
+  | Copy (our `GameCopier`; `CardFactory.getCard` per card 6.9%) | 7.4% |
+  | Leaf value (`GameStateEvaluator`: a copy and a combat simulation per seat) | 7.2% |
+
+  Hot spots across those parts (a sample counts for every frame in its stack):
+  - `Game.copyLastState`: an LKI copy of every card on the battlefield and in the graveyards (`CardCopyService.getLKICopy`
+    with `CardView` updates) on every stack resolution and loop step: 11.8%.
+  - `GameAction.checkStaticAbilities` on every state-based check: 13.3%; `Card.getHiddenStaticAbilities` (a new
+    collection per card per pass) 5.1%.
+  - `ComputerUtilAbility.getSpellAbilities` / `Card.getAllPossibleAbilities` (every ability's `canPlay` on every
+    priority check): 11.8%.
+  - View upkeep in a headless copy: `CardView.updateState` 6.5%, `Player.updateZoneForView` (re-collects the whole zone
+    and the flashback view after every card added or removed) 2.2%.
+  - Forge AI: `ComputerUtil.aiLifeInDanger` 6.5%, `AiBlockController.assignBlockersForCombat` 6.2%.
+- **How we hit it:** a 1x search costs about 36 simulations per decision; 4x four times that.
+- **Our workaround:** our `GameCopier` fills each library in one call instead of a `Zone.add` per card (identical
+  searches, -3% thread CPU per simulation). Nothing else on our side is large (the decision layer's share is the
+  tree part, which the walk needs). Options that change what a search evaluates (horizon, leaf value) are measured
+  in `docs/search-perf.md` for the user to decide.
+- **Fix upstream:** a pooled or same-thread evaluation for Forge AI's priority decision when no time limit applies;
+  LKI copies made only for the cards an effect reads (or copy-on-write); a way to turn off view upkeep for simulation
+  copies (`markAsSimulationCopy` games have no UI); the items of 15.

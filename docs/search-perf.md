@@ -144,3 +144,52 @@ evaluation 6%.
 Chosen moves: 9 of the 28 common roots (32%) get another answer. At 1x the visits are nearly flat (12 per candidate,
 plus or minus 2), so many of these are near-ties that any change in the rollouts flips; the number says how much a
 1x answer depends on the rollout, not which rollout plays better.
+
+## Gate step-1 cost and the options that change what a search evaluates (2026-11-26)
+
+The gate-1 step-1 run (`E:\magicdosa-runs\gate3-step1`, main `00be112`) measured 110.9 ms per simulation under five
+workers' load: copy 9.8, leaf value 15.9, Forge AI answers through the decision layer 1.7, the rest of the Forge
+loop to the horizon about 83. Plain Forge AI's own rollout answers are not timed separately (they run inside
+`mainLoopStep`), so the 83 ms is Forge's rules and Forge AI's play together.
+
+**Where it goes.** JFR of `w21-g1` replayed in full (`SearchReplay`, 62 searches, 1896 simulations, 10447 samples of
+the search thread and of Forge AI's `Game AI Eval` threads, which earlier profiles here left out): Forge AI's play
+42.5% (22.6% on the evaluation threads Forge AI starts for every priority decision), rules 34.2%, our decision
+layer 8.6% (the tree part of a simulation), copy 7.4%, leaf value 7.2%. Forge-side detail and fix ideas:
+docs/upstream-candidates.md 17. On our side only the copy had a cheap fix: `GameCopier` fills each library in one
+call (`8470c99`): 24 searches identical, thread CPU per simulation 96.1 -> 93.1 ms (-3%).
+
+**Method for the options.** Root set: the gate's `w0/w00-g1` and `w1/w10-g1`, every agent decision (149 searches,
+4680 simulations at 1x). `SearchReplay -Dfollow=true` (`bc4d8eb`): the shadow searches each root and then plays the
+recorded answer, so every setting searches the same 149 roots (without it, a setting that answers differently leads
+the shadow away from the log and loses most roots: the network leaf kept 21 of 149). The default with follow prints
+the same 149 searches as main without it, and as the gate itself (reproducible mode: 0 answers differ from the log).
+All settings ran at the same time, 10-12 JVMs on the 6 cores (12 logical), so wall time is inflated (about 400 ms per
+simulation); the comparison uses CPU time from the search debug line: the search thread's, and the process's (which
+adds Forge AI's evaluation threads, GC and JIT).
+
+Answers changed are counted against the default 1x on all 149 roots, and against a 4x default run on the 62 roots it
+had reached (mostly the first half of each game; the 1x vs 4x gate was running on the same machine). The seed row is
+the default with another seed (`-Dmagicdosa.search.seedSalt`, `d542922`): how many 1x answers depend on the seed
+alone.
+
+| Setting (measurement switch) | Thread CPU ms/sim | Process CPU ms/sim | Answers changed vs 1x default (149) | Differ from 4x (62) |
+| --- | --- | --- | --- | --- |
+| Default: horizon at the root seat's next turn, Forge evaluator with combat simulation | 116.7 | 231.8 | - | 11 of 61 |
+| Default, another seed | 119.0 | 225.5 | 40 (27%) | 13 |
+| Horizon at the next turn (`horizon=turn`) | 77.3 (-34%) | 160.7 (-31%) | 30 (20%) | 10 |
+| Static leaf score, no combat simulation (`leafEval=static`) | 102.4 (-12%) | 209.0 (-10%) | 10 (7%) | 12 |
+| Both | 59.1 (-49%) | 136.4 (-41%) | 34 (23%) | 10 |
+| gen-0 network at the expanded node (`leafModel=gen0-run1.onnx`) | 28.3 (-76%) | 85.4 (-63%) | 94 (63%) | 34 |
+
+Per game, the leaf value's cost varies most: Forge's evaluator took 49.0 ms per leaf in `w00-g1` and 2.0 in
+`w10-g1` (it copies the game and plays the coming combat once per seat; big boards are expensive); with the horizon
+at the next turn the leaf is the other seat's turn start and costs 25-44 ms; the static score costs 0.4-0.7 ms. With
+the network leaf the copy (14-21 ms) becomes the largest part. The network run's process CPU is three times its
+thread CPU with almost no rollouts; not explained yet.
+
+Reading: at 1x, the seed alone changes 27% of the answers, so the shorter horizon and the static score change no
+more answers than a reseed does, and agree with the 4x answers as often as the default (10-12 of 62 differ, small
+sample, early turns). The gen-0 network changes far more (63%; 34 of 62 differ from 4x). None of the defaults is
+switched: horizon, leaf value and network leaf are the user's decision. These switches are not recorded in
+`SearchRun`; a setting adopted for gates or data needs a protocol field.
