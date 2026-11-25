@@ -106,6 +106,18 @@ final class AgentConnection implements AutoCloseable {
         return summarySource == this ? summary : summarySource.summary;
     }
 
+    /**
+     * Every gate writes shards (2026-11-25 planning decision): unless {@code -Dmagicdosa.shards} names a folder or
+     * {@code -Dmagicdosa.noShards=true}, an agent-core this run spawns writes them to {@code <logs>/shards}.
+     */
+    static void defaultShards(Path logs) throws IOException {
+        if (System.getProperty("magicdosa.shards") == null && !Boolean.getBoolean("magicdosa.noShards")) {
+            Path dir = logs.resolve("shards");
+            java.nio.file.Files.createDirectories(dir);
+            System.setProperty("magicdosa.shards", dir.toAbsolutePath().toString());
+        }
+    }
+
     static AgentConnection open(String spec) throws IOException {
         if (spec.equals("local")) {
             return new AgentConnection(new LocalDecisionClient(new RandomPolicy()), null);

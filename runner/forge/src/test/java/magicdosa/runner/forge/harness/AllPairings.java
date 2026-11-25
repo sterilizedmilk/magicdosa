@@ -88,6 +88,7 @@ public final class AllPairings {
         String deckDir = args[0];
         int matches = Integer.parseInt(args[1]);
         Path logRoot = Path.of(args[2]);
+        AgentConnection.defaultShards(logRoot); // every gate writes shards (2026-11-25), workers inherit the property
         String agentSpec = "spawn";
         int threads = 1;
         int workers = 0;

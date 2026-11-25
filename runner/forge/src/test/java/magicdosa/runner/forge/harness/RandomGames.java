@@ -57,6 +57,9 @@ public final class RandomGames {
         int matches = Integer.parseInt(args[3]);
         Path logDir = args.length > 4 && !args[4].equals("-") ? Path.of(args[4]) : null;
         String agentSpec = args.length > 5 ? args[5] : "spawn";
+        if (logDir != null) {
+            AgentConnection.defaultShards(logDir); // a run that keeps logs writes shards too (2026-11-25)
+        }
         initForge();
         CardKeys keys = CardKeys.load();
         AgentConnection agent = AgentConnection.open(agentSpec);
