@@ -118,3 +118,29 @@ unchanged.
 After rebasing on main `e0e4631` (a copy deals the library cards the root seat sees where the shadow has them now):
 main plus the bench and this branch again print the same 43 searches (two runs each); all in 71.8 -> 56.3 ms per
 simulation. agent-core tests: 36 run, 0 failures.
+
+## Plain Forge AI in the rollout (2026-11-26, user decision: early stage only)
+
+`-Dmagicdosa.search.rollout=plain-forge-ai` (the default) against `layer` (the decision layer delegating, as before),
+on the same R30 root set and code. With `layer` the 43 searches are identical to main `93ce0c9` (visits and root
+values). Each policy repeats exactly: three runs of `plain-forge-ai` print the same 47 searches, three of `layer` the
+same 43.
+
+The two policies search different root sets (43 and 47): `SearchReplay`'s shadow skips search for the rest of a turn
+once the search's answer leads it away from the log, and the answers differ. They are compared on the 28 roots both
+searched. The CPU was shared with other sessions' games (load 80-100%), so only the paired runs compare.
+
+| | ms per simulation (28 common roots, 1128 simulations, all in) |
+| --- | --- |
+| `layer` | 98.2 |
+| `plain-forge-ai` | 73.3 (-25%) |
+
+Forge AI answers mapped by the layer drop from 30918 to 2049 per run. The rest of the decision layer (13% of a plain
+simulation's samples) is the tree part and the rest of the loop step in which the walk leaves the tree, which still
+goes through the layer; the swap waits for the loop step to end, where no controller call is under way. Plain
+simulation profile (JFR, search thread): rules 39%, Forge AI's own play 27%, copy 15%, decision layer 13%, leaf
+evaluation 6%.
+
+Chosen moves: 9 of the 28 common roots (32%) get another answer. At 1x the visits are nearly flat (12 per candidate,
+plus or minus 2), so many of these are near-ties that any change in the rollouts flips; the number says how much a
+1x answer depends on the rollout, not which rollout plays better.
