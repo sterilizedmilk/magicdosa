@@ -91,6 +91,60 @@ public final class ShardWriter {
     /** The model version of shards written without a network. */
     public static final String NO_MODEL = "none";
 
+    /**
+     * A response whose steps do not name their candidates: an answer the shadow's Forge AI gave (an intended delegation
+     * carries only its decider). Such a decision has no row without {@link #withSteps}.
+     */
+    public static boolean needsSteps(DecisionResponse r) {
+        return r.getStepsCount() == 0 || r.getSteps(0).getCandidatesCount() == 0;
+    }
+
+    /**
+     * The response's choice as steps: one per pick over the candidates still available, then "done" where the
+     * selection may stop before its maximum (the order the random policy records), each with the response's decider
+     * (an intended delegation when it names none), so a loader takes the label from it and never mistakes it for a
+     * search target (no visit ratios).
+     */
+    public static DecisionResponse withSteps(DecisionRequest q, DecisionResponse r) {
+        magicdosa.protocol.v1.Decider who = r.getStepsCount() > 0
+            && r.getSteps(0).getDecider() != magicdosa.protocol.v1.Decider.DECIDER_UNSPECIFIED
+            ? r.getSteps(0).getDecider() : magicdosa.protocol.v1.Decider.DECIDER_INTENDED_DELEGATION;
+        magicdosa.protocol.v1.SelectionConstraints c = q.getConstraints();
+        List<Integer> remaining = new ArrayList<>();
+        for (int i = 0; i < q.getCandidatesCount(); i++) {
+            remaining.add(i);
+        }
+        DecisionResponse.Builder b = r.toBuilder().clearSteps();
+        int picked = 0;
+        for (int chosen : r.getChosenList()) {
+            boolean doneAllowed = picked >= c.getMin() && !(c.getMin() == 1 && c.getMax() == 1);
+            DecisionStep.Builder s = DecisionStep.newBuilder().setDecider(who);
+            for (int i : remaining) {
+                s.addCandidates(StepCandidate.newBuilder().setIndex(i));
+            }
+            if (doneAllowed) {
+                s.addCandidates(StepCandidate.newBuilder().setDone(true));
+            }
+            int at = remaining.indexOf(chosen);
+            if (at < 0) {
+                throw new IllegalStateException("decision " + q.getDecisionId() + ": chosen " + chosen + " is not a remaining candidate");
+            }
+            b.addSteps(s.setChosen(at));
+            remaining.remove(at);
+            picked++;
+        }
+        boolean doneAllowed = picked >= c.getMin() && !(c.getMin() == 1 && c.getMax() == 1);
+        if (picked < c.getMax() && doneAllowed && !remaining.isEmpty()) {
+            DecisionStep.Builder s = DecisionStep.newBuilder().setDecider(who);
+            for (int i : remaining) {
+                s.addCandidates(StepCandidate.newBuilder().setIndex(i));
+            }
+            s.addCandidates(StepCandidate.newBuilder().setDone(true));
+            b.addSteps(s.setChosen(remaining.size()));
+        }
+        return b.build();
+    }
+
     /** A decision as agent-core answered it. */
     public record Decided(DecisionRequest request, DecisionResponse response) {}
 
@@ -107,6 +161,11 @@ public final class ShardWriter {
         }
         List<Map<String, Object>> rows = new ArrayList<>();
         long oovBefore = encoder.vocab().oovCount();
+        List<Decided> withSteps = new ArrayList<>();
+        for (Decided d : decided) {
+            withSteps.add(needsSteps(d.response()) ? new Decided(d.request(), withSteps(d.request(), d.response())) : d);
+        }
+        decided = withSteps;
         for (Decided d : decided) {
             long oovStart = encoder.vocab().oovCount();
             Encoder.Encoded e = encoder.encode(d.request());

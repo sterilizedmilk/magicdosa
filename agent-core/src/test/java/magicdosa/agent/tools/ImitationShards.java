@@ -130,50 +130,18 @@ public final class ImitationShards {
         return new long[] {decided.size(), rebuilt, skipped};
     }
 
-    /** A response whose steps do not name their candidates (an answer recorded as Forge AI's). */
+    /** {@link ShardWriter#needsSteps}. */
     static boolean needsSteps(DecisionResponse r) {
-        return r.getStepsCount() == 0 || r.getSteps(0).getCandidatesCount() == 0;
+        return ShardWriter.needsSteps(r);
     }
 
-    /**
-     * The response's choice as steps: one per pick over the candidates still available, then "done" where the
-     * selection may stop before its maximum (the order the random policy records).
-     */
+    /** {@link ShardWriter#withSteps}, with the log record's decider when the response names none. */
     static DecisionResponse withSteps(DecisionRequest q, DecisionResponse r, Decider decider) {
-        Decider who = decider == Decider.DECIDER_UNSPECIFIED ? Decider.DECIDER_INTENDED_DELEGATION : decider;
-        SelectionConstraints c = q.getConstraints();
-        List<Integer> remaining = new ArrayList<>();
-        for (int i = 0; i < q.getCandidatesCount(); i++) {
-            remaining.add(i);
+        DecisionResponse in = r;
+        if ((r.getStepsCount() == 0 || r.getSteps(0).getDecider() == Decider.DECIDER_UNSPECIFIED)
+                && decider != Decider.DECIDER_UNSPECIFIED) {
+            in = r.toBuilder().clearSteps().addSteps(DecisionStep.newBuilder().setDecider(decider)).build();
         }
-        DecisionResponse.Builder b = r.toBuilder().clearSteps();
-        int picked = 0;
-        for (int chosen : r.getChosenList()) {
-            boolean doneAllowed = picked >= c.getMin() && !(c.getMin() == 1 && c.getMax() == 1);
-            DecisionStep.Builder s = DecisionStep.newBuilder().setDecider(who);
-            for (int i : remaining) {
-                s.addCandidates(StepCandidate.newBuilder().setIndex(i));
-            }
-            if (doneAllowed) {
-                s.addCandidates(StepCandidate.newBuilder().setDone(true));
-            }
-            int at = remaining.indexOf(chosen);
-            if (at < 0) {
-                throw new IllegalStateException("decision " + q.getDecisionId() + ": chosen " + chosen + " is not a remaining candidate");
-            }
-            b.addSteps(s.setChosen(at));
-            remaining.remove(at);
-            picked++;
-        }
-        boolean doneAllowed = picked >= c.getMin() && !(c.getMin() == 1 && c.getMax() == 1);
-        if (picked < c.getMax() && doneAllowed && !remaining.isEmpty()) {
-            DecisionStep.Builder s = DecisionStep.newBuilder().setDecider(who);
-            for (int i : remaining) {
-                s.addCandidates(StepCandidate.newBuilder().setIndex(i));
-            }
-            s.addCandidates(StepCandidate.newBuilder().setDone(true));
-            b.addSteps(s.setChosen(remaining.size()));
-        }
-        return b.build();
+        return ShardWriter.withSteps(q, in);
     }
 }
