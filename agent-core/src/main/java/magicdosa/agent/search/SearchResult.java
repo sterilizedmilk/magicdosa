@@ -40,8 +40,8 @@ public final class SearchResult {
         NONE,
         /** Equal visits; the higher mean value decided. */
         MEAN_VALUE,
-        /** Equal visits and equal mean value; the first in candidate order decided. */
-        CANDIDATE_ORDER
+        /** Equal visits and equal mean value; a pick drawn from the search's seed decided. */
+        SEED
     }
 
     /** An action chosen at a step and how a tie was broken. */

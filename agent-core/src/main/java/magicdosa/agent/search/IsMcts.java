@@ -136,54 +136,55 @@ public final class IsMcts {
             reward += e.reward;
         }
         out.nodes = nodes[0];
-        return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits, steps(root));
+        // ties the visits and the mean values leave are drawn from the seed (its own stream: the simulations' draws
+        // above do not depend on it)
+        return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits,
+            steps(root, new SplittableRandom(seed ^ 0x5DEECE66DL)));
     }
 
     /**
-     * The answer among visited actions (2026-11-25 decision): the most visits; equal visits, the higher mean value;
-     * equal means too, the first in candidate order (deterministic). Null when nothing was visited.
+     * The answer among visited actions (2026-11-25 planning decision): the most visits; equal visits, the higher mean
+     * value; equal means too, a pick drawn from {@code rng} (the search's seed: the same seed gives the same pick, and no
+     * candidate, such as pass at candidate 0, is favoured by its position). Null when nothing was visited.
      */
-    static SearchResult.Choice choose(long[] visits, double[] mean) {
-        int best = -1;
-        SearchResult.Tie tie = SearchResult.Tie.NONE;
+    static SearchResult.Choice choose(long[] visits, double[] mean, java.util.SplittableRandom rng) {
+        long most = 0;
+        for (long v : visits) {
+            most = Math.max(most, v);
+        }
+        if (most == 0) {
+            return null;
+        }
+        List<Integer> leaders = new ArrayList<>();
         for (int i = 0; i < visits.length; i++) {
-            if (visits[i] == 0) {
-                continue;
-            }
-            if (best < 0 || visits[i] > visits[best]) {
-                best = i;
-                tie = SearchResult.Tie.NONE;
-            } else if (visits[i] == visits[best]) {
-                if (mean[i] > mean[best]) {
-                    best = i;
-                    tie = SearchResult.Tie.MEAN_VALUE;
-                } else if (mean[i] == mean[best]) {
-                    tie = SearchResult.Tie.CANDIDATE_ORDER;
-                } else if (tie == SearchResult.Tie.NONE) {
-                    tie = SearchResult.Tie.MEAN_VALUE;
-                }
+            if (visits[i] == most) {
+                leaders.add(i);
             }
         }
-        // a later, less visited action does not reset the tie of the leaders: recount on the final best
-        if (best >= 0) {
-            boolean tied = false;
-            boolean sameMean = false;
-            for (int i = 0; i < visits.length; i++) {
-                if (i != best && visits[i] == visits[best]) {
-                    tied = true;
-                    sameMean |= mean[i] == mean[best];
-                }
-            }
-            tie = !tied ? SearchResult.Tie.NONE : sameMean ? SearchResult.Tie.CANDIDATE_ORDER : SearchResult.Tie.MEAN_VALUE;
+        if (leaders.size() == 1) {
+            return new SearchResult.Choice(leaders.get(0), SearchResult.Tie.NONE);
         }
-        return best < 0 ? null : new SearchResult.Choice(best, tie);
+        double best = Double.NEGATIVE_INFINITY;
+        for (int i : leaders) {
+            best = Math.max(best, mean[i]);
+        }
+        List<Integer> top = new ArrayList<>();
+        for (int i : leaders) {
+            if (mean[i] == best) {
+                top.add(i);
+            }
+        }
+        if (top.size() == 1) {
+            return new SearchResult.Choice(top.get(0), SearchResult.Tie.MEAN_VALUE);
+        }
+        return new SearchResult.Choice(top.get(rng.nextInt(top.size())), SearchResult.Tie.SEED);
     }
 
     /**
-     * The root decision's steps as the search answers them: at each step the most visited action (the first of
-     * equals), then the most visited continuation node under it, until "done" or no further step was searched.
+     * The root decision's steps as the search answers them: at each step the action {@link #choose} picks, then the
+     * most visited continuation node under it, until "done" or no further step was searched.
      */
-    private static List<SearchResult.Step> steps(Node root) {
+    private static List<SearchResult.Step> steps(Node root, SplittableRandom tieRng) {
         List<SearchResult.Step> out = new ArrayList<>();
         Node node = root;
         while (node != null && node.visits > 0) {
@@ -197,7 +198,7 @@ public final class IsMcts {
                 mean[i] = e.visits == 0 ? 0 : e.reward / e.visits;
                 i++;
             }
-            SearchResult.Choice c = choose(v, mean);
+            SearchResult.Choice c = choose(v, mean, tieRng);
             if (c == null) {
                 break;
             }

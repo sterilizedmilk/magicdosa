@@ -89,8 +89,9 @@ class IsMctsTest {
     }
 
     /**
-     * 2026-11-25: equal visits are told apart by the mean value, not by candidate order, so the first candidate (pass
-     * at priority) is not favoured. With one simulation per candidate every candidate has one visit.
+     * 2026-11-25: equal visits are told apart by the mean value, then by a pick drawn from the seed, never by candidate
+     * order, so the first candidate (pass at priority) is not favoured. With one simulation per candidate every
+     * candidate has one visit.
      */
     @Test
     void equalVisitsAreDecidedByMeanValueNotByCandidateOrder() {
@@ -100,10 +101,15 @@ class IsMctsTest {
         assertEquals(1, r.visits(2), r.toString());
         assertEquals(1, r.chosen(), r.toString()); // not candidate 0 ("pass"): the higher mean value
         assertEquals(SearchResult.Tie.MEAN_VALUE, r.rootTie());
-        // equal means too: candidate order keeps the result deterministic
-        SearchResult same = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), 11);
-        assertEquals(0, same.chosen(), same.toString());
-        assertEquals(SearchResult.Tie.CANDIDATE_ORDER, same.rootTie());
+        // equal means too: a pick drawn from the seed, the same for the same seed, and not always candidate 0
+        java.util.Set<Integer> picks = new java.util.TreeSet<>();
+        for (long seed = 1; seed <= 40; seed++) {
+            SearchResult same = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), seed);
+            assertEquals(SearchResult.Tie.SEED, same.rootTie(), same.toString());
+            assertEquals(same.chosen(), new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), seed).chosen());
+            picks.add(same.chosen());
+        }
+        assertEquals(java.util.Set.of(0, 1, 2), picks); // every candidate is picked for some seed
         // a clear visit leader needs no tie-break
         SearchResult clear = new IsMcts(SearchConfig.of(400)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
         assertEquals(SearchResult.Tie.NONE, clear.rootTie(), clear.toString());
