@@ -21,7 +21,9 @@ import java.util.List;
  * search prints its visits and root value, the digest to compare before and after a change that must not change them.
  * <p>
  * {@code SearchReplay <perCandidate> <multiplier> <maxDecisionsPerLog> <log.pb.gz>...} (0 for no cap); run with
- * forge-gui as the working directory and {@code -Dmagicdosa.timing=true} for the cost split.
+ * forge-gui as the working directory and {@code -Dmagicdosa.timing=true} for the cost split. With {@code -Dfollow=true}
+ * the shadow plays the recorded answer after each search, so settings that answer differently still search every
+ * root of the recorded game (compare the searches' answers in the debug lines; the shadow's answers then equal the log).
  */
 public final class SearchReplay {
     public static void main(String[] args) throws Exception {
@@ -104,6 +106,9 @@ public final class SearchReplay {
                         break;
                     }
                     decisions++;
+                    if (Boolean.getBoolean("follow")) {
+                        ShadowGame.FOLLOW = r.getDecision().getResponse();
+                    }
                     DecisionResponse mine = shadow.decide(r.getDecision().getRequest());
                     if (!mine.getChosenList().equals(r.getDecision().getResponse().getChosenList())) {
                         different++;

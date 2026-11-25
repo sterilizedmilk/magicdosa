@@ -438,8 +438,19 @@ public final class ShadowGame {
                 remaining.remove(fit.get(0));
             }
         }
+        DecisionResponse follow = FOLLOW;
+        if (follow != null && follow.getDecisionId() == real.getDecisionId()) {
+            return follow; // measurement only (SearchReplay): the search ran, the shadow plays the recorded answer
+        }
         return out.addAllChosen(chosen).build();
     }
+
+    /**
+     * Measurement only ({@code SearchReplay} with {@code -Dfollow=true}): the recorded answer to the request being
+     * replayed. The shadow searches it as usual, then plays this answer, so every search setting is measured on the
+     * same roots (the recorded game's).
+     */
+    static volatile DecisionResponse FOLLOW;
 
     /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
     static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
