@@ -200,8 +200,20 @@ Top-1 by decision type, 5% set (run 1 in brackets): priority 92.4% (91.3), targe
 4.8 MB, protocol 14 metadata, built against a protocol-14 shard) matches PyTorch to 8e-6 on a held-out game (same
 argmax everywhere); one row takes 1.5 ms median on one thread.
 
-Run 3 (`E:\magicdosa-runs\gen0\run3`, started 2026-11-26): the first run on the protocol-14 conversion, run 2's
-network, 3 epochs (15785 steps).
+Run 3 (2026-11-26, `E:\magicdosa-runs\gen0\run3`): the first run on the protocol-14 conversion, run 2's network,
+3 epochs (15785 steps), 4 threads, 12307 s of training (CPU shared with game runs).
+
+| Held-out set | Top-1 | Top-1, 2+ candidates | Value Brier (base rate) | Value accuracy |
+| --- | --- | --- | --- | --- |
+| 5% of matches | 89.8% | 89.7% | 0.142 (0.250) | 80.0% |
+| fin4 IzzetProwess-vs-EsperBlink | 90.3% | 90.1% | 0.176 (0.247) | 73.9% |
+
+Top-1 by decision type, 5% set (run 2 in brackets): priority 92.4% (92.4), target 94.5% (93.7), declare attackers
+81.2% (84.1), declare blockers 64.9% (67.3), choose option 78.3% (71.8), choose cards 58.9% (55.8), mana payment
+74.1% (72.0), trigger order 91.3% (91.3). A third epoch adds a few tenths of policy agreement and makes the value head
+worse on both sets (Brier 0.133 → 0.142, 0.165 → 0.176): the value target is one label per game repeated over
+about 300 rows, so it overfits first. Run 2 stays the better generation-0 candidate; `gen0-run3.onnx` matches
+PyTorch to 2e-5.
 
 The ONNX export (`gen0-run1.onnx`, 1.5 MB) under ONNX Runtime 1.31 (Python, CPU) matches PyTorch to 5e-6 on a
 held-out game (336 rows, same argmax everywhere); one row takes 0.7 ms median on one thread.
