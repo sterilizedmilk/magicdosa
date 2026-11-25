@@ -65,6 +65,8 @@ This file records how the code does it and what is not done yet. It changes no d
     tree after its first step is finished at random.
   - In both, the decisions of the loop step in which the walk left the tree still go through the layer (delegated);
     always delegated in the tree (item 2): mana payment, damage assignment, trigger order, pre-game decisions.
+- Optional leaf network (`-Dmagicdosa.search.leafModel`, off by default; docs/inference.md): a simulation stops at the
+  expanded node and the network values it instead of the rollout and Forge's evaluator.
 - Horizon (item 4): the start of the root seat's next turn, or the game end. Value: 1 / 0 / 0.5 for a result, else
   `1 / (1 + exp(-(score(me) - score(them)) / 400))` with Forge's `GameStateEvaluator` (`-Dmagicdosa.search.evalScale`).
 
