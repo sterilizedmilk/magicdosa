@@ -532,6 +532,14 @@ public final class ForgeSearchGame implements SearchGame {
             for (int i = 0; i < r.getCandidatesCount(); i++) {
                 remaining.add(i);
             }
+            if (isRoot) {
+                // the root's candidates in the searched order, matched by name: cards from a hidden zone (a library
+                // search) come in that zone's order, which is hidden and differs between the shadow and a copy
+                remaining.sort(java.util.Comparator.comparingInt(i -> {
+                    int at = rootNames.indexOf(names.get(i));
+                    return at < 0 ? Integer.MAX_VALUE : at;
+                }));
+            }
             List<Integer> chosen = new ArrayList<>();
             boolean inTree = true;
             while (chosen.size() < c.getMax()) {
