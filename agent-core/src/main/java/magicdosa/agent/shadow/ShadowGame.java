@@ -361,7 +361,7 @@ public final class ShadowGame {
         long debugStart = System.nanoTime(); // measurement only (the debug line)
         long debugCpu = java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime(); // measurement only
         long debugProcCpu = ((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime(); // measurement only
-        magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
+        magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed() ^ SEED_SALT);
         long debugMs = (System.nanoTime() - debugStart) / 1_000_000;
         long debugCpuMs = (java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime() - debugCpu) / 1_000_000;
         long debugProcCpuMs = (((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime() - debugProcCpu) / 1_000_000;
@@ -451,6 +451,9 @@ public final class ShadowGame {
      * same roots (the recorded game's).
      */
     static volatile DecisionResponse FOLLOW;
+
+    /** Measurement only: XORed into each search's seed, to measure how much an answer depends on the seed (0: none). */
+    static final long SEED_SALT = Long.getLong("magicdosa.search.seedSalt", 0);
 
     /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
     static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
