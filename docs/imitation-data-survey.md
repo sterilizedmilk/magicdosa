@@ -83,6 +83,6 @@ mvn -pl agent-core exec:exec "-Djvm.args=-Xmx2g --add-opens=java.base/java.nio=A
   left out (no request body), 5.3 s on two threads, no vocabulary miss; the Python reader takes the shards.
 - Size: shards are zstd-compressed since 2026-11-25 (`-Dmagicdosa.shards.zstdLevel`, default 3). The 150-game
   sample: uncompressed 1,682 KB/game, LZ4 74, zstd 1 37, zstd 3 38; Java write 24.8 s uncompressed vs 11.7 s zstd 3.
-- Converted (2026-11-25): `E:\magicdosa-runs\imitationin3-layer` (2,273 games, 705,865 decisions, 133 s, 135 MB)
-  and `...in4-layer` (2,273 games, 705,891 decisions, 144 s, 135 MB); no failures, no vocabulary misses; the Python
+- Converted (2026-11-25): `E:\magicdosa-runs\imitation\fin3-layer` (2,273 games, 705,865 decisions, 133 s, 135 MB)
+  and `E:\magicdosa-runs\imitation\fin4-layer` (2,273 games, 705,891 decisions, 144 s, 135 MB); no failures, no vocabulary misses; the Python
   reader takes them (source `imitation:forge-ai`, no row among the search policy targets).
