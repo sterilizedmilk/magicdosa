@@ -62,9 +62,11 @@ This file records how the code does it and what is not done yet. It changes no d
 
 - Root mismatches (2026-11-25, IzzetProwess mirror, 12 per candidate x1, reproducible, seed base 3000): backed-up
   simulations 89.8% (5832 / 6492) before the root-order, plotted-copy and anchor-step fixes, 99.1% (6660 / 6720)
-  after. Left: a "look at the top cards, choose one" CHOOSE_CARDS root (60 simulations in that run) whose copy
-  offers other cards than the shadow (the anchor is taken before the cards are looked at, and the copy deals the
-  library apart from the cards the root names). In the same run the shadow lost step once (a triggered-ability
+  after. A scry root after a surveil trigger milled the top card (60 simulations in that run) failed because the
+  anchor (taken at the cast) still had the milled card on top and the copy put the scry's cards there; since
+  2026-11-26 the cards that left a library between the anchor and the root (drawn, milled) and that the viewer knows
+  now go back on top of the copy's library in the anchor's order, and the cards seen now sit below them
+  (`SearchReplay` of that game: 36 / 36 backed up, was 0). In the same run the shadow lost step once (a triggered-ability
   answer that was not a shadow candidate: two decisions "search skipped"); the same command with logs did not
   repeat it (games identical up to that decision), so it depends on timing and is not diagnosed yet.
 - Inner roots whose replay crosses an action of the other seat (it cast or activated something since the anchor)

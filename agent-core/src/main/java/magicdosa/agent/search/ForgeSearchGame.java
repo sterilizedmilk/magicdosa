@@ -188,9 +188,26 @@ public final class ForgeSearchGame implements SearchGame {
         }
         libraryPositionsNow.forEach((seat, at) -> {
             Map<Integer, Integer> seen = new HashMap<>();
+            // an anchor is older than the root: the cards that left a library since (drawn, milled, a surveil's) were on
+            // top of it there. They go back on top in the anchor's order, where the viewer knows them now, so the replay
+            // takes the same cards; the cards seen now sit as many places lower.
+            List<Integer> left = new ArrayList<>();
+            if (this.anchor != null) {
+                for (Card c : this.anchor.game().getRegisteredPlayers().get(seat).getCardsIn(ZoneType.Library)) {
+                    if (!at.containsKey(c.getId())) {
+                        left.add(c.getId());
+                    }
+                }
+            }
+            for (int k = 0; k < left.size(); k++) {
+                Card now = shadow.findById(left.get(k));
+                if (now != null && !now.isInZone(ZoneType.Library) && now.getView().canBeShownTo(viewerNow.getView())) {
+                    seen.put(left.get(k), k);
+                }
+            }
             at.forEach((id, i) -> {
                 if (seenNow.contains(id)) {
-                    seen.put(id, i);
+                    seen.put(id, i + left.size());
                 }
             });
             seenLibraryPositions.put(seat, seen);
