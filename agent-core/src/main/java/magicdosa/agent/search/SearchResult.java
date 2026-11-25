@@ -34,8 +34,25 @@ public final class SearchResult {
     /** The root decision's steps, the first one over the root candidates (one step for a single pick). */
     public final List<Step> steps;
 
-    /** One step of the answer: the actions seen at the step's node, their visits and the most visited. */
-    public record Step(List<String> actions, long[] visits, int chosen) {
+    /** How the chosen action was told apart from others with as many visits. */
+    public enum Tie {
+        /** The chosen action has the most visits alone. */
+        NONE,
+        /** Equal visits; the higher mean value decided. */
+        MEAN_VALUE,
+        /** Equal visits and equal mean value; the first in candidate order decided. */
+        CANDIDATE_ORDER
+    }
+
+    /** An action chosen at a step and how a tie was broken. */
+    public record Choice(int index, Tie tie) {
+    }
+
+    /**
+     * One step of the answer: the actions seen at the step's node, their visits and mean values, the chosen one (most
+     * visits, then the higher mean value, then candidate order) and how a tie was broken.
+     */
+    public record Step(List<String> actions, long[] visits, double[] mean, int chosen, Tie tie) {
         public List<Float> visitRatios() {
             long total = 0;
             for (long v : visits) {
@@ -90,15 +107,17 @@ public final class SearchResult {
         return out;
     }
 
-    /** The most visited candidate (the first of equals); -1 when nothing was backed up. */
+    /**
+     * The root's chosen candidate (most visits, then the higher mean value, then candidate order); -1 when nothing was
+     * backed up.
+     */
     public int chosen() {
-        int best = -1;
-        for (int i = 0; i < visits.length; i++) {
-            if (visits[i] > 0 && (best < 0 || visits[i] > visits[best])) {
-                best = i;
-            }
-        }
-        return best;
+        return steps.isEmpty() ? -1 : steps.get(0).chosen();
+    }
+
+    /** How the root's choice was told apart from equally visited candidates. */
+    public Tie rootTie() {
+        return steps.isEmpty() ? Tie.NONE : steps.get(0).tie();
     }
 
     /** The decision step's method: uniform prior, this search run. */
@@ -114,7 +133,7 @@ public final class SearchResult {
     public String toString() {
         return "search budget=" + config.budget() + " seed=" + seed + " backedUp=" + determinizations + " noSample="
             + noDeterminization + " rootMismatch=" + rootMismatches + " failures=" + failures + " nodes=" + nodes
-            + " value=" + rootValue + " visits=" + java.util.Arrays.toString(visits) + (problems.isEmpty() ? "" : " " + problems);
+            + " value=" + rootValue + " visits=" + java.util.Arrays.toString(visits) + " tie=" + rootTie() + (problems.isEmpty() ? "" : " " + problems);
     }
 
     static final class Builder {

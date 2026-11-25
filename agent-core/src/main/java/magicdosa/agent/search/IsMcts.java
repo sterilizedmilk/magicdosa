@@ -140,6 +140,46 @@ public final class IsMcts {
     }
 
     /**
+     * The answer among visited actions (2026-11-25 decision): the most visits; equal visits, the higher mean value;
+     * equal means too, the first in candidate order (deterministic). Null when nothing was visited.
+     */
+    static SearchResult.Choice choose(long[] visits, double[] mean) {
+        int best = -1;
+        SearchResult.Tie tie = SearchResult.Tie.NONE;
+        for (int i = 0; i < visits.length; i++) {
+            if (visits[i] == 0) {
+                continue;
+            }
+            if (best < 0 || visits[i] > visits[best]) {
+                best = i;
+                tie = SearchResult.Tie.NONE;
+            } else if (visits[i] == visits[best]) {
+                if (mean[i] > mean[best]) {
+                    best = i;
+                    tie = SearchResult.Tie.MEAN_VALUE;
+                } else if (mean[i] == mean[best]) {
+                    tie = SearchResult.Tie.CANDIDATE_ORDER;
+                } else if (tie == SearchResult.Tie.NONE) {
+                    tie = SearchResult.Tie.MEAN_VALUE;
+                }
+            }
+        }
+        // a later, less visited action does not reset the tie of the leaders: recount on the final best
+        if (best >= 0) {
+            boolean tied = false;
+            boolean sameMean = false;
+            for (int i = 0; i < visits.length; i++) {
+                if (i != best && visits[i] == visits[best]) {
+                    tied = true;
+                    sameMean |= mean[i] == mean[best];
+                }
+            }
+            tie = !tied ? SearchResult.Tie.NONE : sameMean ? SearchResult.Tie.CANDIDATE_ORDER : SearchResult.Tie.MEAN_VALUE;
+        }
+        return best < 0 ? null : new SearchResult.Choice(best, tie);
+    }
+
+    /**
      * The root decision's steps as the search answers them: at each step the most visited action (the first of
      * equals), then the most visited continuation node under it, until "done" or no further step was searched.
      */
@@ -149,20 +189,20 @@ public final class IsMcts {
         while (node != null && node.visits > 0) {
             List<String> actions = new ArrayList<>();
             long[] v = new long[node.edges.size()];
-            int best = -1;
+            double[] mean = new double[node.edges.size()];
             int i = 0;
             for (Edge e : node.edges.values()) {
                 actions.add(e.action);
                 v[i] = e.visits;
-                if (e.visits > 0 && (best < 0 || e.visits > v[best])) {
-                    best = i;
-                }
+                mean[i] = e.visits == 0 ? 0 : e.reward / e.visits;
                 i++;
             }
-            if (best < 0) {
+            SearchResult.Choice c = choose(v, mean);
+            if (c == null) {
                 break;
             }
-            out.add(new SearchResult.Step(actions, v, best));
+            int best = c.index();
+            out.add(new SearchResult.Step(actions, v, mean, best, c.tie()));
             Edge chosen = node.edges.get(actions.get(best));
             Node next = null;
             for (Node n : chosen.next.values()) {

@@ -88,6 +88,27 @@ class IsMctsTest {
         assertEquals(7, r.method().getRan().getSeed());
     }
 
+    /**
+     * 2026-11-25: equal visits are told apart by the mean value, not by candidate order, so the first candidate (pass
+     * at priority) is not favoured. With one simulation per candidate every candidate has one visit.
+     */
+    @Test
+    void equalVisitsAreDecidedByMeanValueNotByCandidateOrder() {
+        SearchResult r = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {0, 1, 0}), 11);
+        assertEquals(1, r.visits(0), r.toString());
+        assertEquals(1, r.visits(1), r.toString());
+        assertEquals(1, r.visits(2), r.toString());
+        assertEquals(1, r.chosen(), r.toString()); // not candidate 0 ("pass"): the higher mean value
+        assertEquals(SearchResult.Tie.MEAN_VALUE, r.rootTie());
+        // equal means too: candidate order keeps the result deterministic
+        SearchResult same = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), 11);
+        assertEquals(0, same.chosen(), same.toString());
+        assertEquals(SearchResult.Tie.CANDIDATE_ORDER, same.rootTie());
+        // a clear visit leader needs no tie-break
+        SearchResult clear = new IsMcts(SearchConfig.of(400)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
+        assertEquals(SearchResult.Tie.NONE, clear.rootTie(), clear.toString());
+    }
+
     @Test
     void sameSeedAndBudgetSameResult() {
         Bandit g = new Bandit(new double[] {0.5, 0.52, 0.49, 0.51});

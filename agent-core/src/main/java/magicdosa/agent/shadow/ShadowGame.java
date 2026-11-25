@@ -353,6 +353,9 @@ public final class ShadowGame {
         magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
         magicdosa.agent.Timing.addHistogram("search.decision", t0);
         live.searched(r, g.counts);
+        if (r.searched()) {
+            live.searched(null, Map.of("root tie: " + r.rootTie().name().toLowerCase(java.util.Locale.ROOT), 1));
+        }
         if (Boolean.getBoolean("magicdosa.search.debug")) {
             StringBuilder d = new StringBuilder("search debug: decision " + real.getDecisionId() + " " + real.getType() + " turn "
                 + real.getObservation().getGame().getTurn() + " " + real.getObservation().getGame().getStep() + " " + r);
