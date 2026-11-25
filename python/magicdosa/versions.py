@@ -1,6 +1,6 @@
 """Versions checked against agent-core. Keep in step with magicdosa.protocol.Versions and AgentCore.ENCODER_VERSION."""
 
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
 ENCODER_VERSION = 5
 VOCAB_VERSION = 3
 # Play-network structure (inputs, layers, heads, outputs). Raise it whenever a checkpoint of the old structure can no

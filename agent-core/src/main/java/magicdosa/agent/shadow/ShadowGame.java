@@ -355,9 +355,11 @@ public final class ShadowGame {
             anchor = new magicdosa.agent.search.ForgeSearchGame.Anchor(anchorGame, replay);
         }
         magicdosa.agent.search.ForgeSearchGame g = new magicdosa.agent.search.ForgeSearchGame(game, session, real, keys,
-            decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber(), anchor);
+            decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber(), anchor).withRollout(live.search().rollout());
         long t0 = magicdosa.agent.Timing.start(); // measurement only
+        long debugStart = System.nanoTime(); // measurement only (the debug line)
         magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
+        long debugMs = (System.nanoTime() - debugStart) / 1_000_000;
         magicdosa.agent.Timing.addHistogram("search.decision", t0);
         live.searched(r, g.counts);
         if (r.searched()) {
@@ -366,6 +368,11 @@ public final class ShadowGame {
         if (Boolean.getBoolean("magicdosa.search.debug")) {
             StringBuilder d = new StringBuilder("search debug: decision " + real.getDecisionId() + " " + real.getType() + " turn "
                 + real.getObservation().getGame().getTurn() + " " + real.getObservation().getGame().getStep() + " " + r);
+            List<String> answer = new ArrayList<>();
+            for (magicdosa.agent.search.SearchResult.Step st : r.steps) {
+                answer.add(String.valueOf(g.rootCandidate(st.actions().get(st.chosen()))));
+            }
+            d.append(" answer=").append(answer).append(" ms=").append(debugMs);
             for (int i = 0; i < real.getCandidatesCount(); i++) {
                 d.append(" | [").append(i).append("] ").append(com.google.protobuf.TextFormat.shortDebugString(real.getCandidates(i)));
             }

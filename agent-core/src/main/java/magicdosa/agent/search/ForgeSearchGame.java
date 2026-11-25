@@ -54,8 +54,9 @@ import java.util.function.LongFunction;
  *       session knows from scry and the like yet).</li>
  *   <li>A copy shares the shadow's lobby players: a mind-control effect inside a simulation would bind to the shadow
  *       session.</li>
- *   <li>Out of the tree every decision still goes through the decision layer (an observation per decision); swapping
- *       in plain Forge AI controllers for the rollout is a measured optimisation for later.</li>
+ *   <li>Out of the tree the rollout policy plays ({@link #withRollout}): by default both seats get plain Forge AI
+ *       controllers at the first loop step after the walk leaves the tree (2026-11-26 user decision, early stage
+ *       only); with {@code ROLLOUT_POLICY_LAYER} the decision layer stays and delegates each decision to Forge AI.</li>
  * </ul>
  * Decision types delegated inside simulations (decision 2, 11-16): mana payment (pool allocation), damage assignment,
  * trigger order, and the pre-game ones.
@@ -100,6 +101,13 @@ public final class ForgeSearchGame implements SearchGame {
     }
 
     private final Anchor anchor;
+    private magicdosa.protocol.v1.RolloutPolicy rollout = SearchConfig.DEFAULT_ROLLOUT;
+
+    /** The rollout policy of this search's simulations (the search's {@link SearchConfig#rollout()}). */
+    public ForgeSearchGame withRollout(magicdosa.protocol.v1.RolloutPolicy p) {
+        this.rollout = p;
+        return this;
+    }
 
     /** A copy of the shadow at the root seat's priority decision, to start anchored searches from. */
     public static Game anchorCopy(Game shadow) {
@@ -384,7 +392,17 @@ public final class ForgeSearchGame implements SearchGame {
             Player me = copy.getRegisteredPlayers().get(rootSeat);
             int rootTurn = ph.getTurn();
             int steps = 0;
+            boolean plain = false;
             while (!copy.isGameOver()) {
+                if (!plain && rollout == magicdosa.protocol.v1.RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI
+                        && chooser.outOfTree()) {
+                    // the rollout from here on is Forge's own play (between loop steps: no controller call is under way)
+                    plain = true;
+                    s.stopListening();
+                    for (Player p : copy.getRegisteredPlayers()) {
+                        p.dangerouslySetController(new forge.ai.PlayerControllerAi(copy, p, p.getLobbyPlayer()));
+                    }
+                }
                 ph.mainLoopStep();
                 if (ph.getTurn() > rootTurn && ph.getPlayerTurn() == me) {
                     count("horizon");
