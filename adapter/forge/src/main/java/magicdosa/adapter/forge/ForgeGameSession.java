@@ -248,6 +248,19 @@ public final class ForgeGameSession {
         return quiet;
     }
 
+    /** See {@link #stopListening()}. */
+    private boolean deaf;
+
+    /**
+     * From now on the game's events are ignored (Forge has no way to unsubscribe). For a search copy whose players
+     * were handed to plain Forge AI controllers: nothing asks this session again, so its IDs need not follow the game.
+     * Cannot be undone.
+     */
+    public void stopListening() {
+        quiet = true;
+        deaf = true;
+    }
+
     public ForgeGameSession(Game game, String matchId, int gameNumber, List<Deck> registeredDecks, int[] gamesWon,
                             Set<Integer> agentSeats, DecisionClient client, CardKeys keys, LogSink log, Mode mode,
                             long seed) {
@@ -1476,6 +1489,9 @@ public final class ForgeGameSession {
 
     @Subscribe
     public void onEvent(GameEvent event) {
+        if (deaf) {
+            return;
+        }
         try {
             translate(event);
         } catch (RuntimeException e) {

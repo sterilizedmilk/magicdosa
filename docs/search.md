@@ -52,9 +52,19 @@ This file records how the code does it and what is not done yet. It changes no d
   normalised request without candidates (the deciding seat's observation: public state plus its own cards) plus the
   steps chosen so far in sorted order (order-free multi-selects share nodes). Candidate keys are the candidates'
   text with the copy's entity IDs; the root's are named by Forge card numbers, which a copy keeps.
-- Out of the tree (`ROLLOUT`), the request is delegated: Forge AI answers inside the copy. A multi-select that
-  leaves the tree after its first step is finished at random. Always delegated (item 2): mana payment, damage
-  assignment, trigger order, pre-game decisions.
+- Out of the tree (`ROLLOUT`) the rollout policy plays (`SearchConfig.rollout`, `-Dmagicdosa.search.rollout`,
+  recorded in `SearchRun.rollout` and the shards' `search_rollout` column, protocol 14):
+  - **`plain-forge-ai` (default; a temporary early-stage choice, 2026-11-26 user decision):** at the first loop step
+    after the walk leaves the tree, both seats get plain Forge `PlayerControllerAi` controllers and the copy's
+    session stops listening to the game. Forge plays the rest of the simulation its own way (auto-tapping, its own
+    candidates), much cheaper, but not as the real game's decision layer plays. Allowed for phase 3 and early phase 4
+    only: once the network evaluates leaves, the rollout goes and this choice is reviewed. Data from the two
+    policies is told apart by `search_rollout`.
+  - **`layer`:** the decision layer stays and delegates each request: Forge AI answers inside the copy and its
+    choice is mapped onto the layer's candidates (mana made as priority actions). A multi-select that leaves the
+    tree after its first step is finished at random.
+  - In both, the decisions of the loop step in which the walk left the tree still go through the layer (delegated);
+    always delegated in the tree (item 2): mana payment, damage assignment, trigger order, pre-game decisions.
 - Horizon (item 4): the start of the root seat's next turn, or the game end. Value: 1 / 0 / 0.5 for a result, else
   `1 / (1 + exp(-(score(me) - score(them)) / 400))` with Forge's `GameStateEvaluator` (`-Dmagicdosa.search.evalScale`).
 
@@ -76,8 +86,6 @@ This file records how the code does it and what is not done yet. It changes no d
 - The root seat's library is dealt anew apart from cards Forge shows it; positions the shadow session knows (after
   a scry) are not used yet.
 - A copy shares the shadow's lobby players (mind control inside a simulation would bind to the shadow session).
-- Rollout decisions go through the decision layer (an observation each); first wiring run: about 24 rollout
-  priority requests per simulation, about 12 with the mana-only stop filter. Plain Forge AI controllers for the rollout are an optimisation to measure.
 - Confirmed-kill checker (item 7, `KillCheck`): verifying approximate cases on a copy, and recording differences as
   regression tests, are not done.
 - A stuck Forge thread that cannot be ended marks agent-core for a restart: it refuses further games, and the

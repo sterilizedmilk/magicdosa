@@ -129,7 +129,7 @@ public final class SearchResult {
             .setNodes(nodes).setDeterminizations((int) Math.min(Integer.MAX_VALUE, determinizations))
             .setRootValue(Double.isNaN(rootValue) ? 0f : (float) rootValue)
             .setBudget(budget).setSeed(seed).setSimulations(iterations)
-            .setFailed(noDeterminization + rootMismatches + failures)).build();
+            .setFailed(noDeterminization + rootMismatches + failures).setRollout(config.rollout())).build();
     }
 
     @Override

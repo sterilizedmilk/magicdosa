@@ -56,7 +56,7 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "chosen", "end_reason", "turns", "oov");
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "chosen", "end_reason", "turns", "oov");
     private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio");
     private static final List<String> INT_LISTS = List.of("token_kind", "token_card", "token_key", "rel_src", "rel_dst",
         "rel_kind", "deck_card", "deck_count", "deck_group", "cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key",
@@ -229,6 +229,7 @@ public final class ShardWriter {
         r.put("prior", step.getMethod().getPriorValue());
         r.put("search_ran", step.getMethod().hasRan());
         r.put("search_skip_reason", step.getMethod().getSkippedValue());
+        r.put("search_rollout", step.getMethod().hasRan() ? step.getMethod().getRan().getRolloutValue() : 0);
         r.put("search_nodes", step.getMethod().hasRan() ? step.getMethod().getRan().getNodes() : 0L);
         r.put("search_budget", step.getMethod().hasRan() ? step.getMethod().getRan().getBudget() : 0L);
         r.put("search_seed", step.getMethod().hasRan() ? step.getMethod().getRan().getSeed() : 0L);

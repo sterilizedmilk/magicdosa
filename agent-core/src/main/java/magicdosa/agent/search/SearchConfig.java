@@ -1,5 +1,9 @@
 package magicdosa.agent.search;
 
+import magicdosa.protocol.v1.RolloutPolicy;
+
+import java.util.List;
+
 /**
  * Settings of one IS-MCTS run (3단계 기획 쟁점 1·2·5). The budget is a number of simulations, never time (design:
  * 탐색 "예산은 시간이 아니라 노드 수"): each simulation adds at most one tree node, so the tree never has more nodes
@@ -18,16 +22,21 @@ package magicdosa.agent.search;
  *                        n actions gets {@code n * perCandidate * multiplier} simulations (1x = 12 per candidate, 2x and
  *                        4x multiply it); 0 uses the fixed {@code budget}
  * @param multiplier      see {@code perCandidate}
+ * @param rollout         who plays a simulation once it leaves the tree (2026-11-26 user decision): plain Forge AI
+ *                        controllers ({@link RolloutPolicy#ROLLOUT_POLICY_PLAIN_FORGE_AI}, the default, a temporary
+ *                        early-stage choice until the network evaluates leaves) or the decision layer delegating to
+ *                        Forge AI ({@link RolloutPolicy#ROLLOUT_POLICY_LAYER})
  */
 public record SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
-                           double wideningAlpha, int perCandidate, int multiplier) {
+                           double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout) {
 
     public SearchConfig {
         if (budget < 1) {
             throw new IllegalArgumentException("budget must be at least 1 simulation: " + budget);
         }
         if (exploration < 0 || wideningMin < 0 || wideningC <= 0 || wideningAlpha <= 0 || wideningAlpha > 1
-                || perCandidate < 0 || multiplier < 1) {
+                || perCandidate < 0 || multiplier < 1
+                || (rollout != RolloutPolicy.ROLLOUT_POLICY_LAYER && rollout != RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI)) {
             throw new IllegalArgumentException("bad search settings");
         }
     }
@@ -35,7 +44,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** A fixed budget of {@code budget} simulations per decision. */
     public SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                         double wideningAlpha) {
-        this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1);
+        this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1, DEFAULT_ROLLOUT);
     }
 
     /** Simulations for a root with {@code actions} actions (its first step's candidates and "done"). */
@@ -46,12 +55,36 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** The budget by root: {@code perCandidate} simulations per root action, times {@code multiplier}. */
     public SearchConfig perCandidate(int simulationsPerAction, int times) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha,
-            simulationsPerAction, times);
+            simulationsPerAction, times, rollout);
     }
 
-    /** "12 per candidate x4" or "budget 40". */
+    /** The default rollout policy (2026-11-26 user decision, early stage only). */
+    public static final RolloutPolicy DEFAULT_ROLLOUT = RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI;
+
+    /** "12 per candidate x4" or "budget 40", and the rollout policy. */
     public String describe() {
-        return perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier;
+        return (perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier) + ", rollout "
+            + rolloutName(rollout);
+    }
+
+    /** "layer" or "plain-forge-ai". */
+    public static String rolloutName(RolloutPolicy p) {
+        return p.name().substring("ROLLOUT_POLICY_".length()).toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
+    /** The policy named "layer" or "plain-forge-ai". */
+    public static RolloutPolicy rolloutNamed(String name) {
+        for (RolloutPolicy p : List.of(RolloutPolicy.ROLLOUT_POLICY_LAYER, RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI)) {
+            if (rolloutName(p).equals(name)) {
+                return p;
+            }
+        }
+        throw new IllegalArgumentException("unknown rollout policy " + name + " (layer, plain-forge-ai)");
+    }
+
+    public SearchConfig withRollout(RolloutPolicy p) {
+        return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
+            multiplier, p);
     }
 
     /** Phase-3 defaults with the given budget (UCB constant sqrt(2), opponent in the tree, widening past 20 actions). */
@@ -60,16 +93,17 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     }
 
     public SearchConfig withBudget(long b) {
-        return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier);
+        return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout);
     }
 
     public SearchConfig withOpponentInTree(boolean in) {
-        return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier);
+        return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout);
     }
 
     /**
      * Settings from system properties ({@code magicdosa.search.budget}, {@code .exploration}, {@code .opponentInTree},
-     * {@code .wideningMin}, {@code .wideningC}, {@code .wideningAlpha}) over {@link #of(long)}.
+     * {@code .wideningMin}, {@code .wideningC}, {@code .wideningAlpha}, {@code .rollout}: layer or plain-forge-ai) over
+     * {@link #of(long)}.
      */
     public static SearchConfig fromSystemProperties(long defaultBudget) {
         SearchConfig d = of(Long.getLong("magicdosa.search.budget", defaultBudget));
@@ -78,6 +112,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             Boolean.parseBoolean(System.getProperty("magicdosa.search.opponentInTree", Boolean.toString(d.opponentInTree))),
             Integer.getInteger("magicdosa.search.wideningMin", d.wideningMin),
             Double.parseDouble(System.getProperty("magicdosa.search.wideningC", Double.toString(d.wideningC))),
-            Double.parseDouble(System.getProperty("magicdosa.search.wideningAlpha", Double.toString(d.wideningAlpha))));
+            Double.parseDouble(System.getProperty("magicdosa.search.wideningAlpha", Double.toString(d.wideningAlpha))),
+            0, 1, rolloutNamed(System.getProperty("magicdosa.search.rollout", rolloutName(d.rollout))));
     }
 }

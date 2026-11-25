@@ -258,6 +258,19 @@ message SearchRun {
   uint64 seed = 5;
   uint64 simulations = 6;           // simulations started (= budget)
   uint64 failed = 7;                // started but not backed up: no sample fit, the root decision differed, an error
+  // protocol 14: who plays a simulation once it leaves the tree, so data from both policies can be told apart
+  RolloutPolicy rollout = 8;
+}
+
+// The rollout policy of a search (2026-11-26 user decision): plain Forge AI is a temporary early-stage choice (phase 3
+// and early phase 4, until the network evaluates leaves).
+enum RolloutPolicy {
+  ROLLOUT_POLICY_UNSPECIFIED = 0;
+  // Both seats stay on the decision layer: Forge AI's answers are mapped onto the engine's candidates, mana is made as
+  // priority actions (no auto-tap). Slower; plays as the real game's delegations do.
+  ROLLOUT_POLICY_LAYER = 1;
+  // Both seats get plain Forge AI controllers (Forge's own play, auto-tapping) once the walk leaves the tree.
+  ROLLOUT_POLICY_PLAIN_FORGE_AI = 2;
 }
 
 // No time-based reason for now (Q8); real-time limits come later, after measurement.
