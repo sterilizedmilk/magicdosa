@@ -81,5 +81,8 @@ mvn -pl agent-core exec:exec "-Djvm.args=-Xmx2g --add-opens=java.base/java.nio=A
   enter the search policy targets by accident; an imitation loader selects them by the source tag and the decider.
 - Trial on fin4-layer IzzetProwess mirror (150 games): 23,455 decisions, every answer's steps rebuilt, 636 records
   left out (no request body), 5.3 s on two threads, no vocabulary miss; the Python reader takes the shards.
-- Size: about 1.6 MB per game (247 MB for 150 games), so about 3.7 GB per gate run. E: has 28 GB free (95% used):
-  converting fin3-layer and fin4-layer (about 7.5 GB) is left for the user's go-ahead.
+- Size: shards are zstd-compressed since 2026-11-25 (`-Dmagicdosa.shards.zstdLevel`, default 3). The 150-game
+  sample: uncompressed 1,682 KB/game, LZ4 74, zstd 1 37, zstd 3 38; Java write 24.8 s uncompressed vs 11.7 s zstd 3.
+- Converted (2026-11-25): `E:\magicdosa-runs\imitationin3-layer` (2,273 games, 705,865 decisions, 133 s, 135 MB)
+  and `...in4-layer` (2,273 games, 705,891 decisions, 144 s, 135 MB); no failures, no vocabulary misses; the Python
+  reader takes them (source `imitation:forge-ai`, no row among the search policy targets).
