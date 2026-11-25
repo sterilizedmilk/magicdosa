@@ -114,3 +114,7 @@ the layer are about 35% of what is left (estimate from the profile, not measured
 Sequential determinism harness on this branch (`ParallelDeterminismHarness`, IzzetProwess vs EsperBlink, 10
 matches, seed 5000): `different=0`. Quiet mode is reached only from a search copy, so real games and the shadow are
 unchanged.
+
+After rebasing on main `e0e4631` (a copy deals the library cards the root seat sees where the shadow has them now):
+main plus the bench and this branch again print the same 43 searches (two runs each); all in 71.8 -> 56.3 ms per
+simulation. agent-core tests: 36 run, 0 failures.
