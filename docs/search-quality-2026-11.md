@@ -41,3 +41,28 @@ agent therefore plays far more passively than a uniform policy would, which fits
 The budget is too small for UCB to separate candidates, and the tie-break carries a bias toward candidate 0. Options
 for planning: break ties by mean value (the visit counts stay the policy target), randomise the tie-break from the
 seed, and/or measure the 1x/2x/4x gate with a larger 1x than the 2-minute rule allows. None of these is applied.
+
+## Evaluation signal baseline (gate 1 step 1, 2026-11-26)
+
+User decision (2026-11-26): early turns are hard to predict by nature, so there is no fixed threshold for the root
+value. The step-1 numbers below are the baseline; a later leaf-evaluation change (longer rollout, calibration, value
+network) is judged by whether it beats them on the same read-out.
+
+Run: main `00be112`, 1x search (12 simulations per root candidate, plain Forge AI rollout, protocol 14) in seat 0
+against default Forge AI, Izzet mirror, reproducible mode, 60 matches / 142 games (agent won 48 = 33.8%). Read-out:
+`GateSignal` (runner/forge test sources) over the game logs; root value = the searched root's mean value, the agent's
+expected win rate; label = whether the agent won that game. Run folder: `E:\magicdosa-runs\gate3-step1`.
+
+| Turns | Decisions | AUC | Brier | Mean value, won / lost |
+| --- | --- | --- | --- | --- |
+| all | 12,152 | 0.754 | 0.180 | 0.484 / 0.253 |
+| 1-2 | 1,053 | 0.562 | 0.241 | 0.428 / 0.396 |
+| 3-4 | 1,566 | 0.578 | 0.231 | 0.379 / 0.334 |
+| 5-6 | 1,893 | 0.667 | 0.210 | 0.383 / 0.279 |
+| 7-8 | 1,967 | 0.697 | 0.217 | 0.409 / 0.256 |
+| 9-10 | 1,732 | 0.778 | 0.170 | 0.486 / 0.226 |
+| 11-14 | 2,397 | 0.855 | 0.136 | 0.592 / 0.198 |
+| 15+ | 1,544 | 0.954 | 0.083 | 0.724 / 0.167 |
+
+Compare a change by AUC per turn bucket (the threshold-free measure: the agent loses most games against Forge AI, so
+accuracy at 0.5 mostly rewards predicting a loss), on the same deck pairing and opponent.
