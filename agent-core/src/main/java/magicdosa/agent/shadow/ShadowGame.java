@@ -359,8 +359,12 @@ public final class ShadowGame {
             .withNetworkLeaf(magicdosa.agent.model.LeafNetwork.get());
         long t0 = magicdosa.agent.Timing.start(); // measurement only
         long debugStart = System.nanoTime(); // measurement only (the debug line)
+        long debugCpu = java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime(); // measurement only
+        long debugProcCpu = ((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime(); // measurement only
         magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
         long debugMs = (System.nanoTime() - debugStart) / 1_000_000;
+        long debugCpuMs = (java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime() - debugCpu) / 1_000_000;
+        long debugProcCpuMs = (((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime() - debugProcCpu) / 1_000_000;
         magicdosa.agent.Timing.addHistogram("search.decision", t0);
         live.searched(r, g.counts);
         if (r.searched()) {
@@ -373,7 +377,7 @@ public final class ShadowGame {
             for (magicdosa.agent.search.SearchResult.Step st : r.steps) {
                 answer.add(String.valueOf(g.rootCandidate(st.actions().get(st.chosen()))));
             }
-            d.append(" answer=").append(answer).append(" ms=").append(debugMs);
+            d.append(" answer=").append(answer).append(" ms=").append(debugMs).append(" cpu=").append(debugCpuMs).append(" pcpu=").append(debugProcCpuMs);
             for (int i = 0; i < real.getCandidatesCount(); i++) {
                 d.append(" | [").append(i).append("] ").append(com.google.protobuf.TextFormat.shortDebugString(real.getCandidates(i)));
             }
