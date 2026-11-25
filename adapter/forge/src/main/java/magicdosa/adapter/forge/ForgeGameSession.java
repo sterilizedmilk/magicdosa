@@ -243,6 +243,11 @@ public final class ForgeGameSession {
         quiet = true;
     }
 
+    /** Whether {@link #quiet()} was called. */
+    boolean isQuiet() {
+        return quiet;
+    }
+
     public ForgeGameSession(Game game, String matchId, int gameNumber, List<Deck> registeredDecks, int[] gamesWon,
                             Set<Integer> agentSeats, DecisionClient client, CardKeys keys, LogSink log, Mode mode,
                             long seed) {
