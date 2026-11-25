@@ -242,12 +242,13 @@ public final class ShardWriter {
         r.put("turns", over.getTurns());
         r.put("oov", oov);
         r.put("global", toList(e.global()));
-        float[] feat = e.tokenFeat().clone();
-        int width = Encoder.TOKEN.size();
-        for (int t : selected) {
-            feat[t * width + Encoder.tokenColumn("selected")] = 1;
+        // this step's candidates: the request's candidates still open, plus "done"
+        List<Integer> stepCandidates = new ArrayList<>();
+        for (StepCandidate c : step.getCandidatesList()) {
+            stepCandidates.add(c.hasIndex() ? c.getIndex() : -1);
         }
-        r.put("token_feat", toList(feat));
+        Encoder.Step st = Encoder.step(e, stepCandidates, selected);
+        r.put("token_feat", toList(st.tokenFeat()));
         r.put("token_kind", toList(e.tokenKind()));
         r.put("token_card", toList(e.tokenCard()));
         r.put("token_key", toList(e.tokenKey()));
@@ -257,42 +258,13 @@ public final class ShardWriter {
         r.put("deck_card", toList(e.deckCard()));
         r.put("deck_count", toList(e.deckCount()));
         r.put("deck_group", toList(e.deckGroup()));
-        // this step's candidates: the request's candidates still open, plus "done"
-        List<Integer> kind = new ArrayList<>(), ref0 = new ArrayList<>(), ref1 = new ArrayList<>(), card = new ArrayList<>(),
-            key = new ArrayList<>(), str = new ArrayList<>();
-        List<Float> cf = new ArrayList<>();
-        int cw = Encoder.CANDIDATE.size();
-        for (StepCandidate c : step.getCandidatesList()) {
-            if (c.hasIndex()) {
-                int i = c.getIndex();
-                kind.add(e.candKind()[i]);
-                ref0.add(e.candRef0()[i]);
-                ref1.add(e.candRef1()[i]);
-                card.add(e.candCard()[i]);
-                key.add(e.candKey()[i]);
-                str.add(e.candString()[i]);
-                for (int k = 0; k < cw; k++) {
-                    cf.add(e.candFeat()[i * cw + k]);
-                }
-            } else {
-                kind.add(Encoder.DONE);
-                ref0.add(-1);
-                ref1.add(-1);
-                card.add(Vocab.PAD);
-                key.add(Vocab.PAD);
-                str.add(Vocab.PAD);
-                for (int k = 0; k < cw; k++) {
-                    cf.add(k == Encoder.candidateColumn("done") ? 1f : 0f);
-                }
-            }
-        }
-        r.put("cand_kind", kind);
-        r.put("cand_ref0", ref0);
-        r.put("cand_ref1", ref1);
-        r.put("cand_card", card);
-        r.put("cand_key", key);
-        r.put("cand_string", str);
-        r.put("cand_feat", cf);
+        r.put("cand_kind", toList(st.candKind()));
+        r.put("cand_ref0", toList(st.candRef0()));
+        r.put("cand_ref1", toList(st.candRef1()));
+        r.put("cand_card", toList(st.candCard()));
+        r.put("cand_key", toList(st.candKey()));
+        r.put("cand_string", toList(st.candString()));
+        r.put("cand_feat", toList(st.candFeat()));
         // critic and belief labels (Q11): hidden cards of this decision's moment, by vocabulary index
         List<Integer> oppHand = new ArrayList<>(), myLib = new ArrayList<>(), oppLib = new ArrayList<>();
         if (priv != null) {
