@@ -80,7 +80,8 @@ This file records how the code does it and what is not done yet. It changes no d
   Two more (2026-11-26): a card choice naming its cards as targets (cards dealt at random in a copy) and a
   priority root with a spell on the stack (the copier's stack copy ran the cast triggers again, upstream candidate
   15). Eight 1x Izzet-mirror matches (seed bases 3000 and 4100, 16 games) backed up 97.6-98.5% live before these
-  fixes; `SearchReplay` of all 16 games after them: 29,208 / 29,208 simulations backed up. In the same run the shadow lost step once (a triggered-ability
+  fixes; `SearchReplay` after them: the 8 games of seed base 3000 20,496 / 20,496 backed up, the 3 games of seed
+  base 4100 that had mismatches 8,712 / 8,712 (its other 5 games had none already). In the same run the shadow lost step once (a triggered-ability
   answer that was not a shadow candidate: two decisions "search skipped"); the same command with logs did not
   repeat it (games identical up to that decision), so it depends on timing and is not diagnosed yet.
 - Inner roots whose replay crosses an action of the other seat (it cast or activated something since the anchor)
