@@ -8,7 +8,7 @@ import magicdosa.protocol.Versions;
 /**
  * agent-core entry point: serves adapters over gRPC. Phase 1 answers every decision with the uniform random policy.
  *
- * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--until-stdin-closes]</pre>
+ * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--policy random|shadow-forge-ai|search] [--budget N] [--until-stdin-closes]</pre>
  *
  * The port defaults to 50051; 0 picks a free port. Prints {@code agent-core listening on port N} once it accepts
  * connections. With {@code --shards}, each finished game's training samples are written there as an Arrow file (the
@@ -17,7 +17,7 @@ import magicdosa.protocol.Versions;
  */
 public final class AgentCore {
     /** Layout of the tensors the encoder produces. A model records the encoder version it was trained with. */
-    public static final int ENCODER_VERSION = 4;
+    public static final int ENCODER_VERSION = 5;
 
     public static final int DEFAULT_PORT = 50051;
 
@@ -29,6 +29,7 @@ public final class AgentCore {
         boolean untilStdinCloses = false;
         java.nio.file.Path shardDir = null;
         String policyName = "random";
+        long budget = 0;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 port = Integer.parseInt(args[++i]);
@@ -36,6 +37,8 @@ public final class AgentCore {
                 shardDir = java.nio.file.Path.of(args[++i]);
             } else if (args[i].equals("--policy") && i + 1 < args.length) {
                 policyName = args[++i];
+            } else if (args[i].equals("--budget") && i + 1 < args.length) {
+                budget = Long.parseLong(args[++i]);
             } else if (args[i].equals("--until-stdin-closes")) {
                 untilStdinCloses = true;
             } else {
@@ -46,7 +49,7 @@ public final class AgentCore {
         magicdosa.adapter.forge.CardKeys shadowKeys = null;
         if (policyName.equals("random")) {
             policy = new RandomPolicy();
-        } else if (policyName.equals("shadow-forge-ai")) {
+        } else if (policyName.equals("shadow-forge-ai") || policyName.equals("search")) {
             // the shadow game's Forge AI decides (phase-2 gate): a live shadow per game, Forge in this JVM (run it with
             // forge-gui as the working directory); the random policy answers what the shadow cannot
             System.setProperty("java.awt.headless", "true");
@@ -55,10 +58,11 @@ public final class AgentCore {
             forge.model.FModel.initialize(null, null);
             shadowKeys = magicdosa.adapter.forge.CardKeys.load();
             RandomPolicy random = new RandomPolicy();
+            String name = policyName.equals("search") ? "search-uniform" : policyName;
             policy = new magicdosa.agent.policy.Policy() {
                 @Override
                 public String modelVersion() {
-                    return "shadow-forge-ai";
+                    return name;
                 }
 
                 @Override
@@ -67,11 +71,20 @@ public final class AgentCore {
                 }
             };
         } else {
-            throw new IllegalArgumentException("unknown policy " + policyName + " (random, shadow-forge-ai)");
+            throw new IllegalArgumentException("unknown policy " + policyName + " (random, shadow-forge-ai, search)");
+        }
+        magicdosa.agent.search.SearchConfig search = null;
+        if (policyName.equals("search")) {
+            // phase 3: IS-MCTS on the live shadow; the node budget has no default (3단계 기획 쟁점 5: measured, not set)
+            if (budget < 1) {
+                throw new IllegalArgumentException("--policy search needs --budget N (simulations per decision)");
+            }
+            search = magicdosa.agent.search.SearchConfig.fromSystemProperties(budget);
         }
         Agent agent = new Agent(policy, shardDir == null ? null : new magicdosa.agent.encoder.ShardWriter(
-            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir, policy.modelVersion()),
-            shadowKeys);
+            new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir,
+            magicdosa.agent.encoder.ShardWriter.NO_MODEL, policy.modelVersion()),
+            shadowKeys, search);
         AgentCoreServer server = AgentCoreServer.start(port, agent);
         System.out.println("agent-core: protocol " + Versions.PROTOCOL + ", encoder " + ENCODER_VERSION + ", model "
             + policy.modelVersion());

@@ -47,6 +47,11 @@ same seeds give byte-identical game logs.
 - A delayed trigger without text of its own (Emrakul's extra turn) is keyed by the ability that created it.
 - An ability a copy effect brought (Shifting Woodland as a copy of Urza's Saga) is matched against the copied card's
   text, also after the copy effect ended.
+- When the printed match's paragraph lacks a symbol of the ability's text ({C} against Shifting Woodland's
+  "{T}: Add {G}"), the match against the state that defined the ability wins if its symbols agree: Urza's Saga
+  chapter I's gained "{T}: Add {C}" on Shifting Woodland is keyed as Urza's Saga's chapter I (as on the Saga itself),
+  no longer as Woodland's own mana ability (two candidates under one key before, phase-2 issue 14). No new
+  vocabulary entry.
 
 ## Harnesses (runner/forge test sources, `magicdosa.runner.forge.harness`; not run by mvn install; working directory forge/forge-gui)
 
@@ -177,8 +182,23 @@ Forge's decision methods and their handling is `docs/player-controller-methods.m
 ## Not done / approximate
 
 - Intended delegations kept in phase 1 (2026-11-07, counted by AllPairings, not moved): the order cost parts are paid
-  in (`orderCosts`), new targets for a copy (`chooseNewTargetsFor`), the uncommon
-  forms of non-mana costs (`cost:*`), dividing damage among targets as a spell is cast (`chooseTargetsFor(divided)`).
+  in (`orderCosts`), the uncommon forms of non-mana costs (`cost:*`), dividing damage among targets as a spell is cast
+  (`chooseTargetsFor(divided)`).
+- New targets for a copy or a redirect (`chooseNewTargetsFor`) is a TARGET decision since protocol 11
+  (`DecisionContext.new_targets`, the current targets in `DecisionContext.targets`): min = max = the number of
+  current targets (707.10c), the candidates are the targets legal now, and choosing the current ones keeps them.
+  Delegated, Forge AI keeps them when they are all still legal, else picks new ones as its own copy logic does
+  (`chooseNewTargetsForCopy`). Not asked when fewer legal targets than the count exist (the targets are kept). A
+  divided spell keeps its targets and division (`chooseNewTargetsFor(divided)`, an intended delegation). The
+  `ResolutionChoice` reports the targets the ability has afterwards, kept ones included (before protocol 11: an
+  empty list for kept targets).
+- Mana-only priority stops (3단계 기획 쟁점 3, 2026-11-16): when the potential-cast list is empty (nothing more mana
+  could pay for), mana abilities that only make mana are left out of the priority candidates; a stop left with pass
+  alone is an auto pass. "Only make mana": the only cost is {T} (a filter land's mana cost keeps it), no sub-ability, and the source has no Taps /
+  TapsForMana / ManaAdded trigger (`AgentPlayerController.manaOnly`; painlands, sacrifice, life, tapping another
+  permanent stay candidates; `MANA_WITH_SIDE_EFFECTS` lists exceptions by name, empty for the target decks). Shared
+  code, so the shadow's L3 fingerprint sees the same list. Counted per game (`DecisionStats.manaOnlyFiltered`,
+  `manaOnlyStopsSkipped`, AllPairings line); the runner's candidate check skips these abilities.
 - Castability is a greedy check of the pool and does not run the payment on a copy; the sampled check found no
   omission so far. X and the other values announced while casting (601.2b; March of Otherworldly
   Light: the number of white cards to exile, then X) are offered only where the whole cost can still be paid with

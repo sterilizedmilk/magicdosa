@@ -39,7 +39,7 @@ public final class AllPairings {
     private AllPairings() {}
 
     /** Intended delegations the gate reports by count (2026-11-07 wrap-up): copy retargets, uncommon costs, division. */
-    private static final List<String> WATCHED = List.of("chooseNewTargetsFor", "cost:", "chooseTargetsFor(divided)",
+    private static final List<String> WATCHED = List.of("chooseNewTargetsFor", "chooseNewTargetsFor(divided)", "cost:", "chooseTargetsFor(divided)",
         "orderCosts");
 
     /** Runs one pairing in its own JVM ({@link PairingWorker}) and reads its result. */
@@ -278,6 +278,9 @@ public final class AllPairings {
         gate.add(String.format("priority stops (Q14): %d requests (%.1f per game), %d auto passes, %.0f%% with an action",
             total.priorityAsks(), games == 0 ? 0.0 : (double) total.priorityAsks() / games, total.autoPasses(),
             total.priorityAsks() == 0 ? 0.0 : 100.0 * total.priorityAsksWithAction() / total.priorityAsks()));
+        gate.add(String.format("mana-only filter (3단계 쟁점 3): %d priority lists lost mana-only abilities, %d stops became auto"
+            + " passes (%.1f per game)", total.manaOnlyFiltered(), total.manaOnlyStopsSkipped(),
+            games == 0 ? 0.0 : (double) total.manaOnlyStopsSkipped() / games));
         if (workers > 0) {
             gate.add(String.format("worker JVMs: %d at a time, one per pairing, -Xmx%s; peak heap of the busiest worker %d MB"
                 + " (max %d MB); agent-core: %s per worker", workers, workerXmx, peakHeap, maxHeap, agentSpec));

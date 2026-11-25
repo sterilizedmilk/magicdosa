@@ -199,7 +199,142 @@ public final class ShadowGame {
          * counted by decision type); the record keeps an unknown answer. Waits like {@link #answer}.
          */
         void unmapped(DecisionRequest request, String engineDecision, String why);
+
+        /** The search settings when the policy searches (phase 3), else null (the shadow's Forge AI answers). */
+        default magicdosa.agent.search.SearchConfig search() {
+            return null;
+        }
+
+        /** A search answered the pending request: counted by outcome. */
+        default void searched(magicdosa.agent.search.SearchResult result, java.util.Map<String, Integer> counts) {
+        }
     }
+
+    /**
+     * Phase 3: IS-MCTS on copies of the shadow game at the real request (a priority decision of the viewer), answered
+     * in the real request's candidate order with the visit ratios and the search run. One candidate is not searched; a
+     * search whose simulations all failed answers by the network alone (the random policy), recorded as such.
+     */
+    /** The viewer's last priority point (search): a copy of the shadow there and the record position of that decision. */
+    private Game anchorGame;
+    private int anchorAt = -1;
+    private int anchorRecoveries = -1;
+
+    /** An anchor taken since the last recovery (a recovery may have corrected the state the anchor copied). */
+    private boolean anchorValid() {
+        return anchorGame != null && anchorRecoveries == result.recoveries1 + result.recoveries2;
+    }
+
+    private DecisionResponse searched(DecisionRequest real) {
+        if (real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
+            // the anchor for searches of the decisions inside the action this priority decision may start
+            long ta = magicdosa.agent.Timing.start(); // measurement only
+            anchorGame = magicdosa.agent.search.ForgeSearchGame.anchorCopy(game);
+            anchorAt = rec.decisions.size(); // this decision joins the record there once answered
+            anchorRecoveries = result.recoveries1 + result.recoveries2;
+            magicdosa.agent.Timing.add("search.anchorCopy", ta);
+        }
+        magicdosa.protocol.v1.DecisionStep.Builder step = magicdosa.protocol.v1.DecisionStep.newBuilder()
+            .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL);
+        for (int i = 0; i < real.getCandidatesCount(); i++) {
+            step.addCandidates(magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(i));
+        }
+        DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(real.getGameId())
+            .setDecisionId(real.getDecisionId());
+        if (real.getCandidatesCount() == 1 && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
+            step.setChosen(0).setMethod(magicdosa.protocol.v1.Method.newBuilder()
+                .setPrior(magicdosa.protocol.v1.Prior.PRIOR_UNIFORM)
+                .setSkipped(magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SINGLE_CANDIDATE));
+            live.searched(null, java.util.Map.of("single candidate", 1));
+            return out.addChosen(0).addSteps(step).build();
+        }
+        List<Deck> decks = new ArrayList<>();
+        for (RegisteredPlayer rp : game.getMatch().getPlayers()) {
+            decks.add(rp.getDeck());
+        }
+        magicdosa.agent.search.ForgeSearchGame.Anchor anchor = null;
+        if (magicdosa.agent.search.ForgeSearchGame.INNER_ROOTS.contains(real.getType())) {
+            List<magicdosa.protocol.v1.DecisionRecord> replay = new ArrayList<>();
+            for (int i = anchorAt; i < rec.decisions.size(); i++) {
+                replay.add(rec.decisions.get(i).record());
+            }
+            anchor = new magicdosa.agent.search.ForgeSearchGame.Anchor(anchorGame, replay);
+        }
+        magicdosa.agent.search.ForgeSearchGame g = new magicdosa.agent.search.ForgeSearchGame(game, session, real, keys,
+            decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber(), anchor);
+        long t0 = magicdosa.agent.Timing.start(); // measurement only
+        magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());
+        magicdosa.agent.Timing.addHistogram("search.decision", t0);
+        live.searched(r, g.counts);
+        if (Boolean.getBoolean("magicdosa.search.debug")) {
+            StringBuilder d = new StringBuilder("search debug: decision " + real.getDecisionId() + " " + real.getType() + " turn "
+                + real.getObservation().getGame().getTurn() + " " + real.getObservation().getGame().getStep() + " " + r);
+            for (int i = 0; i < real.getCandidatesCount(); i++) {
+                d.append(" | [").append(i).append("] ").append(com.google.protobuf.TextFormat.shortDebugString(real.getCandidates(i)));
+            }
+            System.out.println(d);
+        }
+        if (!r.searched()) {
+            sample(result.samples, "decision " + real.getDecisionId() + ": " + r);
+            DecisionResponse alone = live.withoutShadow(real, "search failed");
+            DecisionResponse.Builder b = alone.toBuilder();
+            for (int i = 0; i < b.getStepsCount(); i++) {
+                b.setSteps(i, b.getSteps(i).toBuilder().setMethod(b.getSteps(i).getMethod().toBuilder()
+                    .setSkipped(magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SEARCH_FAILED)));
+            }
+            return b.build();
+        }
+        // one protocol step per pick of the root decision (a multi-select's steps; one for a single pick), each with
+        // the visit ratios of its node
+        List<Integer> chosen = new ArrayList<>();
+        boolean done = false;
+        for (magicdosa.agent.search.SearchResult.Step s : r.steps) {
+            magicdosa.protocol.v1.DecisionStep.Builder b = magicdosa.protocol.v1.DecisionStep.newBuilder()
+                .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL).setMethod(r.method());
+            for (String a : s.actions()) {
+                int idx = g.rootCandidate(a);
+                b.addCandidates(idx < 0 ? magicdosa.protocol.v1.StepCandidate.newBuilder().setDone(true)
+                    : magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(idx));
+            }
+            b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios());
+            out.addSteps(b);
+            int idx = g.rootCandidate(s.actions().get(s.chosen()));
+            if (idx < 0) {
+                done = true;
+                break;
+            }
+            chosen.add(idx);
+        }
+        if (!done && chosen.size() < real.getConstraints().getMax()) {
+            // the tree went no deeper: the rest of the selection is finished here (first fitting candidates until it
+            // may stop), recorded as steps without visit ratios
+            List<Integer> remaining = new ArrayList<>();
+            for (int i = 0; i < real.getCandidatesCount(); i++) {
+                if (!chosen.contains(i)) {
+                    remaining.add(i);
+                }
+            }
+            while (!magicdosa.agent.search.ForgeSearchGame.mayStop(real, chosen) && chosen.size() < real.getConstraints().getMax()) {
+                List<Integer> fit = magicdosa.agent.search.ForgeSearchGame.fits(real, remaining, chosen);
+                if (fit.isEmpty()) {
+                    break;
+                }
+                magicdosa.protocol.v1.DecisionStep.Builder b = magicdosa.protocol.v1.DecisionStep.newBuilder()
+                    .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL).setMethod(r.method());
+                for (int i : fit) {
+                    b.addCandidates(magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(i));
+                }
+                out.addSteps(b.setChosen(0));
+                chosen.add(fit.get(0));
+                remaining.remove(fit.get(0));
+            }
+        }
+        return out.addAllChosen(chosen).build();
+    }
+
+    /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
+    static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
+    static final java.util.concurrent.atomic.AtomicBoolean HANG_TEST_FIRED = new java.util.concurrent.atomic.AtomicBoolean();
 
     /** The record marks an answer the shadow does not know (an unintended fallback of the real game) with this ID. */
     static final long UNKNOWN_ANSWER = 0;
@@ -227,6 +362,8 @@ public final class ShadowGame {
 
     private Game game;
     private ForgeGameSession session;
+    /** Games each seat has won in the match, as the rebuilt session has them (for search copies). */
+    private int[] gamesWon = new int[2];
     private final List<StateCopy> controllers = new ArrayList<>();
 
     /** Everything a recovery ① needs to go back to the start of the turn. */
@@ -1582,6 +1719,7 @@ public final class ShadowGame {
         for (MatchPlayer mp : s.getObservation().getMatch().getPlayersList()) {
             won[mp.getSeat()] = mp.getGamesWon();
         }
+        gamesWon = won.clone();
         session = new ForgeGameSession(game, rec.header.getMatchId(), rec.header.getGameNumber(), decks, won, Set.of(viewer),
             new Client(), keys, LogSink.DISCARD, rec.header.getMode(), rec.header.getGameSeed());
         session.recordedTriggerTargets(this::recordedTriggerTargets);
@@ -2013,6 +2151,14 @@ public final class ShadowGame {
 
         @Override
         public DecisionResponse decide(DecisionRequest request) {
+            if (live != null && live.pending() != null && live.pending().getDecisionId() == HANG_TEST_AT
+                    && HANG_TEST_FIRED.compareAndSet(false, true)) {
+                // test of the hang safeguard (-Dmagicdosa.shadowHangTestAt=<decision ID>): this thread spins at the
+                // live decision until it is ended
+                while (true) {
+                    Thread.onSpinWait();
+                }
+            }
             DecisionRequest real;
             DecisionResponse recorded;
             if (decisionIdx < rec.decisions.size()) {
@@ -2123,14 +2269,22 @@ public final class ShadowGame {
             }
             DecisionResponse resp = recorded;
             if (resp == null) {
-                if (stage != 3) {
-                    // live, tracking: the shadow game's Forge AI answers (the decision layer maps its answer back)
+                if (stage != 3 && (live.search() == null
+                        || !(magicdosa.agent.search.ForgeSearchGame.ROOTS.contains(real.getType())
+                            || magicdosa.agent.search.ForgeSearchGame.INNER_ROOTS.contains(real.getType()) && anchorValid()))) {
+                    // live, tracking: the shadow game's Forge AI answers (the decision layer maps its answer back);
+                    // with search, the roots search does not take yet (inside an action) are delegated the same way
                     pendingReal = real;
                     delegateNext = true;
                     return DecisionResponse.getDefaultInstance();
                 }
-                resp = live.withoutShadow(real, "search skipped: " + stageCause);
-                live.answer(resp, "without shadow");
+                if (stage != 3) {
+                    resp = searched(real);
+                    live.answer(resp, "search");
+                } else {
+                    resp = live.withoutShadow(real, "search skipped: " + stageCause);
+                    live.answer(resp, "without shadow");
+                }
                 decisionIdx++;
                 afterAnswer(real);
             } else if (resp.getDecisionId() == UNKNOWN_ANSWER) {

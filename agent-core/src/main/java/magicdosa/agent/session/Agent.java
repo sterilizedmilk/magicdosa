@@ -44,17 +44,25 @@ public final class Agent {
      * whose Forge AI answers its first agent seat's requests; {@code policy} answers what the shadow cannot.
      */
     public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards, magicdosa.adapter.forge.CardKeys shadowKeys) {
+        this(policy, shards, shadowKeys, null);
+    }
+
+    /** {@code search}: with {@code shadowKeys}, the live shadow searches the agent seat's priority decisions (phase 3). */
+    public Agent(Policy policy, magicdosa.agent.encoder.ShardWriter shards, magicdosa.adapter.forge.CardKeys shadowKeys,
+                 magicdosa.agent.search.SearchConfig search) {
+        this.search = search;
         this.policy = policy;
         this.shards = shards;
         this.shadowKeys = shadowKeys;
     }
 
     private final magicdosa.adapter.forge.CardKeys shadowKeys;
+    private final magicdosa.agent.search.SearchConfig search;
 
     /** The live shadow of a new game (shadow Forge AI policy), or null. */
     magicdosa.agent.shadow.LiveShadow liveShadow(Hello hello) {
         return shadowKeys == null ? null
-            : new magicdosa.agent.shadow.LiveShadow(hello, hello.getAgentSeats(0), shadowKeys, policy);
+            : new magicdosa.agent.shadow.LiveShadow(hello, hello.getAgentSeats(0), shadowKeys, policy, search);
     }
 
     magicdosa.agent.encoder.ShardWriter shards() {
@@ -87,6 +95,10 @@ public final class Agent {
             // design (버전): a game does not start when a version differs; the model's tensors are another encoder's
             return "model " + policy.modelVersion() + " was trained with encoder version " + policy.encoderVersion()
                 + ", agent-core has encoder version " + AgentCore.ENCODER_VERSION;
+        }
+        if (shadowKeys != null && magicdosa.agent.shadow.LiveShadow.tainted()) {
+            // the hang safeguard could not end a stuck Forge thread: one Forge thread per JVM no longer holds here
+            return "agent-core must be restarted: a stuck Forge thread of an earlier game is still running";
         }
         if (h.getGameId().isEmpty()) {
             return "no game_id";

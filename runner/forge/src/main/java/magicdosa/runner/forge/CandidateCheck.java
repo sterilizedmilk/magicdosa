@@ -48,7 +48,9 @@ final class CandidateCheck {
         }
         List<SpellAbility> left = new ArrayList<>();
         for (SpellAbility sa : considered) {
-            if (!offered.contains(sa) && !sa.isLandAbility() && sa.getHostCard().getSpellAbilities().contains(sa)) {
+            // mana-only abilities are left out on purpose when nothing more mana could pay for (3단계 기획 쟁점 3)
+            if (!offered.contains(sa) && !sa.isLandAbility() && !magicdosa.adapter.forge.AgentPlayerController.manaOnly(sa)
+                    && sa.getHostCard().getSpellAbilities().contains(sa)) {
                 left.add(sa);
             }
         }

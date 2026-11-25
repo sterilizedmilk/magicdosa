@@ -65,22 +65,36 @@ public final class ShardWriter {
     private final Encoder encoder;
     private final Path dir;
     private final String modelVersion;
+    private final String policy;
 
     public Vocab vocabulary() {
         return encoder.vocab();
     }
 
-    public ShardWriter(Encoder encoder, Path dir, String modelVersion) {
+    /**
+     * {@code modelVersion}: the network the decisions came from, {@value #NO_MODEL} when there is none (phase 3);
+     * {@code policy}: how agent-core decided (random, search-uniform, ...).
+     */
+    public ShardWriter(Encoder encoder, Path dir, String modelVersion, String policy) {
         this.encoder = encoder;
         this.dir = dir;
         this.modelVersion = modelVersion;
+        this.policy = policy;
     }
+
+    /** The model version of shards written without a network. */
+    public static final String NO_MODEL = "none";
 
     /** A decision as agent-core answered it. */
     public record Decided(DecisionRequest request, DecisionResponse response) {}
 
     /** Writes the game's shard; returns its path. */
     public Path write(Hello hello, List<Decided> decided, GameOver over) throws IOException {
+        return write(hello, decided, over, Map.of());
+    }
+
+    /** {@code extra}: more schema metadata (e.g. "reproducible": false where the shadow's hang safeguard fired). */
+    public Path write(Hello hello, List<Decided> decided, GameOver over, Map<String, String> extra) throws IOException {
         Map<String, PrivilegedRecord> privileged = new HashMap<>();
         for (PrivilegedRecord p : over.getPrivilegedList()) {
             privileged.put(p.getDecisionId() + "/" + p.getSeat(), p);
@@ -109,11 +123,24 @@ public final class ShardWriter {
         meta.put("encoder_version", String.valueOf(AgentCore.ENCODER_VERSION));
         meta.put("vocab_version", String.valueOf(encoder.vocab().version()));
         meta.put("model_version", modelVersion);
+        meta.put("policy", policy);
+        // the match this game belongs to (3단계 게임 전 샤드 항목, 2026-11-24): our deck, the opponent's, game number
+        meta.put("match_id", hello.getMatchId());
+        meta.put("game_number", String.valueOf(hello.getGameNumber()));
+        int me = hello.getAgentSeatsCount() > 0 ? hello.getAgentSeats(0) : 0;
+        meta.put("agent_seat", String.valueOf(me));
+        if (!decided.isEmpty()) {
+            for (var mp : decided.get(0).request().getObservation().getMatch().getPlayersList()) {
+                String deck = mp.getDeckName() + (mp.getDeckVersion().isEmpty() ? "" : "@" + mp.getDeckVersion());
+                meta.put(mp.getSeat() == me ? "our_deck" : "opponent_deck", deck);
+            }
+        }
         meta.put("engine", hello.getAdapter() + " " + hello.getEngineVersion());
         meta.put("global_features", String.join(",", Encoder.GLOBAL));
         meta.put("token_features", String.join(",", Encoder.TOKEN));
         meta.put("candidate_features", String.join(",", Encoder.CANDIDATE));
         meta.put("oov", String.valueOf(encoder.vocab().oovCount() - oovBefore));
+        meta.putAll(extra);
         write(file, rows, meta);
         return file;
     }
@@ -138,6 +165,8 @@ public final class ShardWriter {
         r.put("search_ran", step.getMethod().hasRan());
         r.put("search_skip_reason", step.getMethod().getSkippedValue());
         r.put("search_nodes", step.getMethod().hasRan() ? step.getMethod().getRan().getNodes() : 0L);
+        r.put("search_budget", step.getMethod().hasRan() ? step.getMethod().getRan().getBudget() : 0L);
+        r.put("search_seed", step.getMethod().hasRan() ? step.getMethod().getRan().getSeed() : 0L);
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
         boolean draw = !over.hasWinnerSeat();
@@ -203,6 +232,13 @@ public final class ShardWriter {
         if (priv != null) {
             Privileged p = priv.getPrivileged();
             Map<Long, String> identity = new HashMap<>();
+            // a library card the seat can name (revealed on top, put back known) is not hidden from it: its identity is
+            // in the observation, not in the privileged identities
+            for (GameObject g : q.getObservation().getObjectsList()) {
+                if (!g.getOracleId().isEmpty()) {
+                    identity.put(g.getId(), g.getOracleId());
+                }
+            }
             for (HiddenIdentity h : p.getIdentitiesList()) {
                 identity.put(h.getId(), h.getOracleId());
             }
@@ -252,6 +288,8 @@ public final class ShardWriter {
         fields.add(new Field("decision_id", FieldType.notNullable(I64), null));
         fields.add(new Field("bundle_id", FieldType.notNullable(I64), null));
         fields.add(new Field("search_nodes", FieldType.notNullable(I64), null));
+        fields.add(new Field("search_budget", FieldType.notNullable(I64), null));
+        fields.add(new Field("search_seed", FieldType.notNullable(I64), null));
         for (String c : INT_COLS) {
             fields.add(new Field(c, FieldType.notNullable(I32), null));
         }
@@ -276,6 +314,8 @@ public final class ShardWriter {
                 ((BigIntVector) root.getVector("decision_id")).setSafe(i, (Long) r.get("decision_id"));
                 ((BigIntVector) root.getVector("bundle_id")).setSafe(i, (Long) r.get("bundle_id"));
                 ((BigIntVector) root.getVector("search_nodes")).setSafe(i, (Long) r.get("search_nodes"));
+                ((BigIntVector) root.getVector("search_budget")).setSafe(i, (Long) r.get("search_budget"));
+                ((BigIntVector) root.getVector("search_seed")).setSafe(i, (Long) r.get("search_seed"));
                 for (String c : INT_COLS) {
                     ((IntVector) root.getVector(c)).setSafe(i, ((Number) r.get(c)).intValue());
                 }

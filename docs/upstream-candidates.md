@@ -154,3 +154,18 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   and mode delegations during a cast put the announced X back (`keepingX`).
 - **Fix upstream:** weigh X on a copy of the ability, or clear it when the AI decides not to play the spell; never
   overwrite the X of a cast in progress.
+
+## 12. Forge AI decisions have no work budget, only a wall-clock limit on some (2026-11-24)
+
+- **What:** `Game.AI_TIMEOUT` bounds only `AiController.chooseSpellAbilityToPlay` (a `FutureTask` waited on by wall
+  clock). Attack and block declarations (`AiAttackController`, `AiBlockController`) and the other answers have no
+  limit at all, and a wall-clock limit makes a decision depend on machine load (not reproducible).
+- **How we hit it:** phase-2 gate fin4, Broodscale mirror m9-g2: the shadow's Forge AI did not answer an attack
+  declaration with about 18 possible attackers within 10 minutes under the gate's load. Not reproduced: CombatProbe
+  (agent-core bench) measured at most about 1.9 s for 18 attackers and 0.9 s for blocks on copies, growing about
+  quadratically, and LiveReplay of the log answered at once.
+- **Our workaround:** agent-core's hang safeguard (`magicdosa.shadowHangMs`, never a decision input) ends the stuck
+  threads and restarts the shadow; the decision is search skipped and the game marked outside the reproducibility
+  guarantee. A budget inside Forge AI needs a Forge change, deferred (2026-11-24 directive).
+- **Fix upstream:** a deterministic work budget (nodes or steps) for Forge AI's searches and combat weighing, with
+  the wall-clock timeout as an outer safeguard only.

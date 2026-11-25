@@ -298,9 +298,19 @@ public final class CardKeys {
         if (cached != null) {
             return cached;
         }
-        AbilityKey key = matchPrinted(source, text);
+        Match printed = matchPrinted(source, text);
+        AbilityKey key = printed == null ? null : printed.key();
         if (key == null) {
-            key = matchCopiedState(trait, text);
+            Match copiedOnly = matchCopiedState(trait, text);
+            key = copiedOnly == null ? null : copiedOnly.key();
+        } else if (!symbolsAgree(text, printed.paragraph())) {
+            // an ability the card gained from the state that defines it (Urza's Saga chapter I's "{T}: Add {C}" on
+            // Shifting Woodland as a copy, also after the copy ended) is not the card's own "{T}: Add {G}": the key of
+            // the defining state's paragraph wins when its symbols agree (two abilities under one key before)
+            Match copied = matchCopiedState(trait, text);
+            if (copied != null && symbolsAgree(text, copied.paragraph())) {
+                key = copied.key();
+            }
         }
         if (key == null) {
             unmapped.add("ability of " + (source.getName().isEmpty() ? "unnamed " + source + " (" + trait.getClass().getSimpleName() + ")" : source.getName()) + ": " + text);
@@ -409,13 +419,17 @@ public final class CardKeys {
         return s;
     }
 
-    private AbilityKey matchPrinted(Card card, String traitText) {
+    /** A printed key and the oracle paragraph it names. */
+    private record Match(AbilityKey key, String paragraph) {}
+
+    private Match matchPrinted(Card card, String traitText) {
         Row row = row(card);
         if (row == null) {
             return null;
         }
         String norm = normalize(traitText, card.getName());
         AbilityKey best = null;
+        String bestParagraph = null;
         double bestScore = 0;
         int faceNo = 0;
         for (CardStateName stateName : card.getStates()) {
@@ -435,17 +449,18 @@ public final class CardKeys {
                     bestScore = score;
                     best = AbilityKey.newBuilder().setPrinted(PrintedAbility.newBuilder()
                         .setOracleId(row.oracleId()).setFace(face).setIndex(i + 1)).build();
+                    bestParagraph = paragraphs.get(i);
                 }
             }
         }
-        return faceNo > 0 && bestScore >= MIN_SIMILARITY ? best : null;
+        return faceNo > 0 && bestScore >= MIN_SIMILARITY ? new Match(best, bestParagraph) : null;
     }
 
     /**
      * An ability that came with a copy effect (Shifting Woodland as a copy of Urza's Saga) belongs to the copied
      * card's state; it is matched against that card's oracle text even after the copy effect ended.
      */
-    private AbilityKey matchCopiedState(CardTraitBase trait, String text) {
+    private Match matchCopiedState(CardTraitBase trait, String text) {
         CardState own = trait.getCardState();
         if (own == null) {
             return null;
@@ -466,8 +481,25 @@ public final class CardKeys {
                 best = i;
             }
         }
-        return best >= 0 && bestScore >= MIN_SIMILARITY ? AbilityKey.newBuilder().setPrinted(PrintedAbility.newBuilder()
-            .setOracleId(row.oracleId()).setFace(face).setIndex(best + 1)).build() : null;
+        return best >= 0 && bestScore >= MIN_SIMILARITY ? new Match(AbilityKey.newBuilder().setPrinted(PrintedAbility.newBuilder()
+            .setOracleId(row.oracleId()).setFace(face).setIndex(best + 1)).build(), paragraphs.get(best)) : null;
+    }
+
+    /** Whether every symbol ({T}, {C}, {2}, ...) of an ability's text appears in the paragraph it was matched to. */
+    static boolean symbolsAgree(String abilityText, String paragraph) {
+        if (paragraph == null) {
+            return true; // not a printed key: nothing to compare
+        }
+        return symbols(paragraph).containsAll(symbols(abilityText));
+    }
+
+    private static Set<String> symbols(String text) {
+        Set<String> out = new HashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{[^}]+\\}").matcher(text);
+        while (m.find()) {
+            out.add(m.group().toUpperCase(Locale.ROOT));
+        }
+        return out;
     }
 
     /** Non-keyword ability paragraphs of one face's oracle text, reminder text removed (Q1). */

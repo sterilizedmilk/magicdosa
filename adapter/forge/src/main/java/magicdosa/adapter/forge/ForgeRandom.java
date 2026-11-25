@@ -56,4 +56,14 @@ public final class ForgeRandom {
     public static void seed(long seed) {
         CURRENT.set(new Random(seed));
     }
+
+    /** The calling thread's stream, to put back with {@link #restore} (a search seeds its simulations on the shadow thread). */
+    public static Random current() {
+        return CURRENT.get();
+    }
+
+    /** Puts back a stream {@link #current} returned. */
+    public static void restore(Random r) {
+        CURRENT.set(r);
+    }
 }

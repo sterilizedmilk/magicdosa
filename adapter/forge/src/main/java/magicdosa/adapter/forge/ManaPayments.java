@@ -101,20 +101,19 @@ public final class ManaPayments {
         if (!CostPayment.canPayAdditionalCosts(adjusted, sa, false)) {
             return false;
         }
+        // a cost without mana is paid as {0} (Forge's CostPayment adds it): a "set cost" effect may still raise it
+        // (Trinisphere: an evoked Solitude costs {3}; it was offered, its exile paid, then the {3} failed)
         CostPartMana part = adjusted.getCostMana();
-        if (part == null) {
-            return true;
-        }
-        ManaCostBeingPaid m = new ManaCostBeingPaid(part.getManaCostFor(sa));
+        ManaCostBeingPaid m = new ManaCostBeingPaid(part == null ? forge.card.mana.ManaCost.ZERO : part.getManaCostFor(sa));
         if (m.getXcounter() > 0) {
             int minX = Math.max(0, AbilityUtils.getAnnouncementBounds(sa, "X").getMinimum());
             m.setXManaCostPaid(minX, sa.getXColor());
         }
+        CostAdjustment.adjust(m, sa, p, null, true, false);
         Card host = sa.getHostCard();
         if (m.isPaid() && (host == null || !host.hasConverge())) {
             return true;
         }
-        CostAdjustment.adjust(m, sa, p, null, true, false);
         return payable(p, m, sa, List.of(), lifeBudget(p, sa, false));
     }
 

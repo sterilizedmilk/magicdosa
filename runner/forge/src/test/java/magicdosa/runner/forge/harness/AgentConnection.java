@@ -64,8 +64,12 @@ final class AgentConnection implements AutoCloseable {
             // directory, forge-gui)
             cmd.addAll(List.of("--policy", policy));
         }
+        String budget = System.getProperty("magicdosa.agentBudget");
+        if (budget != null) {
+            cmd.addAll(List.of("--budget", budget)); // --policy search: simulations per decision
+        }
         for (String k : System.getProperties().stringPropertyNames()) {
-            if (k.startsWith("magicdosa.shadow") || k.equals("magicdosa.timing")) {
+            if (k.startsWith("magicdosa.shadow") || k.startsWith("magicdosa.search") || k.equals("magicdosa.timing")) {
                 cmd.add(cmd.indexOf("-cp"), "-D" + k + "=" + System.getProperty(k)); // shadowStats, shadowDump, ...
             }
         }
