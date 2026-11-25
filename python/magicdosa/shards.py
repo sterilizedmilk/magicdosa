@@ -60,25 +60,31 @@ def policy_rows(table: pa.Table) -> np.ndarray:
     return (decider == DECIDER_MODEL) & ((prior != PRIOR_UNIFORM) | searched)
 
 
-def _lists(table: pa.Table, name: str, rows: Sequence[int]) -> List[np.ndarray]:
+def list_lengths(table: pa.Table, name: str) -> np.ndarray:
+    """Number of values of a list column in every row."""
+    offsets = table.column(name).combine_chunks().offsets.to_numpy()
+    return np.diff(offsets)
+
+
+def _padded(table: pa.Table, name: str, rows: np.ndarray, width: int, fill, dtype) -> tuple:
+    """[B, N] (width 1) or [B, N, width] padded array of a list column and its [B, N] mask, N >= 1. Vectorized over
+    the column's offsets (no per-row Python loop)."""
     column = table.column(name).combine_chunks()
-    return [np.asarray(column[i].values, dtype=np.float32 if name not in INT_LISTS else np.int64) for i in rows]
-
-
-def _pad(values: List[np.ndarray], width: int, fill: float, dtype) -> tuple:
-    """[B, N] (width 1) or [B, N, width] padded arrays and a [B, N] mask."""
-    counts = [len(v) // width for v in values]
-    n = max(counts + [1])
-    shape = (len(values), n) if width == 1 else (len(values), n, width)
-    out = np.full(shape, fill, dtype=dtype)
-    mask = np.zeros((len(values), n), dtype=bool)
-    for b, (v, c) in enumerate(zip(values, counts)):
-        if width == 1:
-            out[b, :c] = v
-        else:
-            out[b, :c] = v.reshape(c, width)
-        mask[b, :c] = True
-    return out, mask
+    offsets = column.offsets.to_numpy()
+    values = column.values.to_numpy(zero_copy_only=False)
+    starts = offsets[rows]
+    counts = (offsets[rows + 1] - starts) // width
+    n = max(int(counts.max()) if len(rows) else 0, 1)
+    pos = np.arange(n)
+    mask = pos[None, :] < counts[:, None]
+    idx = starts[:, None] + pos[None, :] * width                               # [B, N] first element of each item
+    if width > 1:
+        idx = idx[:, :, None] + np.arange(width)[None, None, :]
+        item_mask = mask[:, :, None]
+    else:
+        item_mask = mask
+    taken = values[np.where(item_mask, idx, 0)] if len(values) else np.zeros(idx.shape, dtype=values.dtype)
+    return np.where(item_mask, taken, fill).astype(dtype), mask
 
 
 def make_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dict[str, np.ndarray]:
@@ -86,34 +92,34 @@ def make_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dict[st
     row's token list (-1 = none); padding is 0 for vocabulary indices and -1 for references."""
     if rows is None:
         rows = range(table.num_rows)
-    rows = list(rows)
+    rows = np.asarray(list(rows), dtype=np.int64)
     t_width = len(feature_names(table, "token"))
     c_width = len(feature_names(table, "candidate"))
     batch: Dict[str, np.ndarray] = {}
-    batch["global"] = np.stack(_lists(table, "global", rows))
-    batch["token_feat"], batch["token_mask"] = _pad(_lists(table, "token_feat", rows), t_width, 0.0, np.float32)
+    batch["global"], _ = _padded(table, "global", rows, len(feature_names(table, "global")), 0.0, np.float32)
+    batch["global"] = batch["global"][:, 0]
+    batch["token_feat"], batch["token_mask"] = _padded(table, "token_feat", rows, t_width, 0.0, np.float32)
     for name in ("token_kind", "token_card", "token_key"):
-        batch[name], _ = _pad(_lists(table, name, rows), 1, 0, np.int64)
-    batch["rel_src"], batch["rel_mask"] = _pad(_lists(table, "rel_src", rows), 1, -1, np.int64)
+        batch[name], _ = _padded(table, name, rows, 1, 0, np.int64)
+    batch["rel_src"], batch["rel_mask"] = _padded(table, "rel_src", rows, 1, -1, np.int64)
     for name in ("rel_dst", "rel_kind"):
-        batch[name], _ = _pad(_lists(table, name, rows), 1, -1 if name == "rel_dst" else 0, np.int64)
-    batch["deck_card"], batch["deck_mask"] = _pad(_lists(table, "deck_card", rows), 1, 0, np.int64)
+        batch[name], _ = _padded(table, name, rows, 1, -1 if name == "rel_dst" else 0, np.int64)
+    batch["deck_card"], batch["deck_mask"] = _padded(table, "deck_card", rows, 1, 0, np.int64)
     for name in ("deck_count", "deck_group"):
-        batch[name], _ = _pad(_lists(table, name, rows), 1, 0, np.int64)
-    batch["cand_feat"], batch["cand_mask"] = _pad(_lists(table, "cand_feat", rows), c_width, 0.0, np.float32)
+        batch[name], _ = _padded(table, name, rows, 1, 0, np.int64)
+    batch["cand_feat"], batch["cand_mask"] = _padded(table, "cand_feat", rows, c_width, 0.0, np.float32)
     for name in ("cand_kind", "cand_card", "cand_key", "cand_string"):
-        batch[name], _ = _pad(_lists(table, name, rows), 1, 0, np.int64)
+        batch[name], _ = _padded(table, name, rows, 1, 0, np.int64)
     for name in ("cand_ref0", "cand_ref1"):
-        batch[name], _ = _pad(_lists(table, name, rows), 1, -1, np.int64)
-    visits = _lists(table, "visit_ratio", rows)
-    batch["visit_ratio"], batch["has_visits"] = _pad(visits, 1, 0.0, np.float32)
+        batch[name], _ = _padded(table, name, rows, 1, -1, np.int64)
+    batch["visit_ratio"], batch["has_visits"] = _padded(table, "visit_ratio", rows, 1, 0.0, np.float32)
     batch["has_visits"] = batch["has_visits"].any(axis=1)
     for name in ("chosen", "decision_type", "seat", "decider", "prior"):
         batch[name] = table.column(name).to_numpy()[rows]
     batch["result"] = table.column("result").to_numpy()[rows]
     batch["is_draw"] = table.column("is_draw").to_numpy(zero_copy_only=False)[rows]
     for name in ("priv_opp_hand", "priv_my_library", "priv_opp_library"):
-        batch[name], batch[name + "_mask"] = _pad(_lists(table, name, rows), 1, 0, np.int64)
+        batch[name], batch[name + "_mask"] = _padded(table, name, rows, 1, 0, np.int64)
     return batch
 
 
@@ -158,7 +164,7 @@ def policy_target_rows(table: pa.Table) -> np.ndarray:
     """Rows with an ExIt policy target: decided by the model, with search visit ratios, of a decision type the play
     module's policy learns. Delegated or fallback rows are never policy samples (design: 폴백 검증 "학습 데이터")."""
     decider = table.column("decider").to_numpy()
-    has_visits = np.array([len(v) > 0 for v in table.column("visit_ratio").to_pylist()], dtype=bool)
+    has_visits = list_lengths(table, "visit_ratio") > 0
     dtype = table.column("decision_type").to_numpy()
     return (decider == DECIDER_MODEL) & has_visits & ~np.isin(dtype, NOT_PLAY_POLICY)
 
