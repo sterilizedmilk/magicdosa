@@ -227,7 +227,9 @@ public class GameCopier {
             Card origHostCard = origSa.getHostCard();
             Card newCard = map.map(origHostCard);
             SpellAbility newSa = null;
-            if (origSa.isSpell()) {
+            if (origSa.isSpell() || (origSa.isActivatedAbility() && !origSa.isTrigger() && !origSa.isCopied())) {
+                // an activated ability on the stack (Mishra's Bauble's, its source sacrificed as a cost) is found on
+                // the copied source by its text, as a spell is; triggered abilities are not copied (stackCopyable)
                 newSa = findSAInCard(origSa, newCard);
             }
             if (newSa != null) {
@@ -568,6 +570,24 @@ public class GameCopier {
         } else {
             zoneOwner.getZone(zone).add(newCard);
         }
+    }
+
+    /**
+     * Whether {@link #withStack} copies every item of this game's stack: spells and activated abilities, not
+     * triggered abilities, triggers waiting to be put on it, or copies of spells and abilities (search does not start
+     * from a stack it cannot hold).
+     */
+    public static boolean stackCopyable(Game game) {
+        if (game.getStack().hasSimultaneousStackEntries()) {
+            return false; // triggers waiting to be put on the stack (the copy would ask their order first)
+        }
+        for (SpellAbilityStackInstance si : game.getStack()) {
+            SpellAbility sa = si.getSpellAbility();
+            if (sa.isTrigger() || sa.isCopied() || !(sa.isSpell() || sa.isActivatedAbility())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static SpellAbility findSAInCard(SpellAbility sa, Card c) {

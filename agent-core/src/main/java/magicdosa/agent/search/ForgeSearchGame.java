@@ -204,6 +204,9 @@ public final class ForgeSearchGame implements SearchGame {
         Game copy = copier.makeCopy();
         copy.AI_TIMEOUT = 600; // Forge AI's wall-clock limit as a safeguard only (as in the shadow), never a budget
         PhaseState.copy(source, copy, copier);
+        if (copy.getStack().size() != source.getStack().size()) {
+            throw new IllegalStateException("stack not copied: " + copy.getStack().size() + " of " + source.getStack().size());
+        }
         if (root.getType() == DecisionType.DECISION_TYPE_DECLARE_ATTACKERS
                 || root.getType() == DecisionType.DECISION_TYPE_DECLARE_BLOCKERS) {
             PhaseState.rewindToDeclaration(copy);
@@ -292,6 +295,9 @@ public final class ForgeSearchGame implements SearchGame {
                 }
             }
             if (!client.askedRoot) {
+                count("no root: " + root.getType().name().replace("DECISION_TYPE_", "") + " at "
+                    + root.getObservation().getGame().getStep() + (copy.isGameOver() ? " (game over)" : " (horizon)")
+                    + (root.getObservation().getStackCount() > 0 ? " stack" : ""));
                 return 0.5; // the walk reports it: the root decision was never asked
             }
             long tv = magicdosa.agent.Timing.start();
@@ -359,6 +365,7 @@ public final class ForgeSearchGame implements SearchGame {
         }
 
         private int replayed;
+        private boolean rootChosen;
 
         /**
          * Before the root of an anchored search: the root seat's recorded answers in order (by candidate index: the
@@ -413,6 +420,13 @@ public final class ForgeSearchGame implements SearchGame {
                     return replayed;
                 }
             }
+            if (!askedRoot && r.getSeat() != rootSeat) {
+                // the other seat is asked before the root (its triggers the copy puts on the stack first): Forge AI
+                count("before the root: " + r.getType().name().replace("DECISION_TYPE_", ""));
+                delegate = true;
+                delegatedAt = magicdosa.agent.Timing.start();
+                return out.build();
+            }
             boolean isRoot = !askedRoot;
             askedRoot = true;
             if (!isRoot && (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0)) {
@@ -454,6 +468,7 @@ public final class ForgeSearchGame implements SearchGame {
                     sorted.sort(Integer::compare);
                     pick = chooser.choose(new Decision(r.getSeat(), chosen.isEmpty() ? info : info + "|" + sorted, actions,
                         !chosen.isEmpty()));
+                    rootChosen |= isRoot;
                     if (pick == Chooser.ROLLOUT) {
                         if (chosen.isEmpty()) {
                             delegate = true; // Forge AI answers the whole request
@@ -472,6 +487,10 @@ public final class ForgeSearchGame implements SearchGame {
                 int idx = fit.get(pick);
                 chosen.add(idx);
                 remaining.remove(Integer.valueOf(idx));
+            }
+            if (isRoot && !rootChosen) {
+                count("root request without a tree decision: " + r.getType().name().replace("DECISION_TYPE_", "") + " seat "
+                    + r.getSeat() + " min " + c.getMin() + " max " + c.getMax() + " candidates " + r.getCandidatesCount());
             }
             return out.addAllChosen(chosen).build();
         }

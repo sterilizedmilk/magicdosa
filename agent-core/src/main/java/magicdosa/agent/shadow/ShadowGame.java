@@ -2269,7 +2269,12 @@ public final class ShadowGame {
             }
             DecisionResponse resp = recorded;
             if (resp == null) {
-                if (stage != 3 && (live.search() == null
+                if (stage != 3 && live.search() != null && !GameCopier.stackCopyable(game)) {
+                    // a triggered ability (or a copy) on the stack: a search copy could not hold it; the shadow's Forge
+                    // AI answers (an intended delegation), counted
+                    live.searched(null, java.util.Map.of("delegated: stack holds what a copy cannot", 1));
+                }
+                if (stage != 3 && (live.search() == null || !GameCopier.stackCopyable(game)
                         || !(magicdosa.agent.search.ForgeSearchGame.ROOTS.contains(real.getType())
                             || magicdosa.agent.search.ForgeSearchGame.INNER_ROOTS.contains(real.getType()) && anchorValid()))) {
                     // live, tracking: the shadow game's Forge AI answers (the decision layer maps its answer back);
