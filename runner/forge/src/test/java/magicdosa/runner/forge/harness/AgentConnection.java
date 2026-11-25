@@ -30,14 +30,80 @@ final class AgentConnection implements AutoCloseable {
     private static final Pattern ERRORS = Pattern.compile("protocolErrors=(\\d+)");
     private static final Pattern SHARDS = Pattern.compile("shards=(\\d+) shardErrors=(\\d+) oov=(\\d+)(.*)");
 
-    private final DecisionClient client;
-    private final Process process;
+    private DecisionClient client;
+    private Process process;
     private Thread output;
     private volatile String summary = "";
+    /** Summaries of agent-core processes stopped by a restart (their counts add up with the last one's). */
+    private final List<String> earlier = new java.util.ArrayList<>();
+    private int restarts;
+    /** What the runner holds: forwards to the current client, so a restart needs no new runner. */
+    private final DecisionClient forwarding = new DecisionClient() {
+        @Override
+        public magicdosa.protocol.v1.HelloReply hello(magicdosa.protocol.v1.Hello hello) throws Exception {
+            return client.hello(hello);
+        }
+
+        @Override
+        public void send(magicdosa.protocol.v1.AdapterMessage message) throws Exception {
+            client.send(message);
+        }
+
+        @Override
+        public magicdosa.protocol.v1.DecisionResponse decide(magicdosa.protocol.v1.DecisionRequest request) throws Exception {
+            return client.decide(request);
+        }
+    };
 
     private AgentConnection(DecisionClient client, Process process) {
         this.client = client;
         this.process = process;
+    }
+
+    /**
+     * Whether agent-core refused a game because it must be restarted (its hang safeguard could not end a stuck Forge
+     * thread: one Forge thread per JVM no longer holds there, 2026-11-24 directive).
+     */
+    static boolean needsRestart(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c.getMessage() != null && c.getMessage().contains("agent-core must be restarted")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A spawned agent-core can be started again; others cannot. */
+    boolean restartable() {
+        return process != null;
+    }
+
+    /** Stops this agent-core and starts a new one with the same settings. */
+    void restart() throws Exception {
+        if (!restartable()) {
+            throw new IllegalStateException("only a spawned agent-core can be restarted");
+        }
+        close();
+        earlier.add(currentSummary());
+        AgentConnection fresh = spawn();
+        client = fresh.client;
+        process = fresh.process;
+        output = fresh.output;
+        summary = "";
+        restarts++;
+        // the new process's output thread writes into the fresh connection's summary: read it from there
+        summarySource = fresh;
+    }
+
+    /** Where the current process's summary is read (itself, or the connection a restart made). */
+    private AgentConnection summarySource = this;
+
+    int restarts() {
+        return restarts;
+    }
+
+    private String currentSummary() {
+        return summarySource == this ? summary : summarySource.summary;
     }
 
     static AgentConnection open(String spec) throws IOException {
@@ -115,7 +181,7 @@ final class AgentConnection implements AutoCloseable {
     }
 
     DecisionClient client() {
-        return client;
+        return forwarding;
     }
 
     /**
@@ -129,19 +195,35 @@ final class AgentConnection implements AutoCloseable {
         if (process == null) {
             return 0; // a running agent-core keeps its own count
         }
-        Matcher m = ERRORS.matcher(summary);
-        return m.find() ? Integer.parseInt(m.group(1)) : -1; // -1: agent-core did not report
+        int total = 0;
+        List<String> all = new java.util.ArrayList<>(earlier);
+        all.add(currentSummary());
+        for (String s : all) {
+            Matcher m = ERRORS.matcher(s);
+            if (!m.find()) {
+                return -1; // -1: agent-core did not report
+            }
+            total += Integer.parseInt(m.group(1));
+        }
+        return total;
     }
 
     /** With shards on (-Dmagicdosa.shards): "written, errors, vocabulary misses [values]", else null. Call after close. */
     String shardReport() {
-        Matcher m = SHARDS.matcher(summary);
+        Matcher m = SHARDS.matcher(currentSummary());
         return m.find() ? m.group(1) + " written, " + m.group(2) + " errors, oov " + m.group(3) + m.group(4) : null;
     }
 
     boolean shardsClean() {
-        Matcher m = SHARDS.matcher(summary);
-        return !m.find() || (m.group(2).equals("0") && m.group(3).equals("0"));
+        List<String> all = new java.util.ArrayList<>(earlier);
+        all.add(currentSummary());
+        for (String s : all) {
+            Matcher m = SHARDS.matcher(s);
+            if (m.find() && !(m.group(2).equals("0") && m.group(3).equals("0"))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     List<String> protocolErrors() {

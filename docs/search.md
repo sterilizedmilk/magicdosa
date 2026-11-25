@@ -65,9 +65,12 @@ This file records how the code does it and what is not done yet. It changes no d
 - A copy shares the shadow's lobby players (mind control inside a simulation would bind to the shadow session).
 - Rollout decisions go through the decision layer (an observation each); first wiring run: about 24 rollout
   priority requests per simulation, about 12 with the mana-only stop filter. Plain Forge AI controllers for the rollout are an optimisation to measure.
-- The confirmed-kill checker (item 7).
-- A stuck Forge thread that cannot be ended marks agent-core for a restart (it refuses further games); restarting
-  it from the runner and rebuilding the game from the turn-start snapshot is not done.
+- Confirmed-kill checker (item 7, `KillCheck`): verifying approximate cases on a copy, and recording differences as
+  regression tests, are not done.
+- A stuck Forge thread that cannot be ended marks agent-core for a restart: it refuses further games, and the
+  harness (RandomGames, AllPairings workers) then starts a new agent-core and plays that match again (once; counted
+  in the report). Rebuilding the game under way in a new agent-core from the turn-start snapshot is not done (its
+  remaining decisions are search skipped, cause shadow stop). The restart path has not been run end to end.
 
 ## Hang safeguard (2026-11-24 directive)
 

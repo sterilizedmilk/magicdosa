@@ -105,6 +105,7 @@ public final class RandomGames {
         Map<String, Integer> reasons = new TreeMap<>();
         Set<String> unmappedBefore = new TreeSet<>(keys.unmapped());
         long start = System.nanoTime();
+        Set<Integer> retried = new java.util.HashSet<>();
         for (int m = 0; m < matches; m++) {
             try {
                 // -Dmagicdosa.agentSeats=none: plain Forge AI in both seats (win-rate reference, no decision layer)
@@ -122,6 +123,14 @@ public final class RandomGames {
                     reasons.merge(o.getReason().name().replace("GAME_END_REASON_", "").toLowerCase(), 1, Integer::sum);
                 }
             } catch (Exception | Error e) {
+                if (AgentConnection.needsRestart(e) && agent.restartable() && !retried.contains(m)) {
+                    // agent-core could not end a stuck Forge thread: a new agent-core, and the match again
+                    System.out.println("MATCH " + m + ": agent-core must be restarted; restarting it and playing the match again");
+                    agent.restart();
+                    retried.add(m);
+                    m--;
+                    continue;
+                }
                 errors++;
                 System.out.println("MATCH " + m + " FAILED: " + e);
                 e.printStackTrace(System.out);
@@ -129,6 +138,10 @@ public final class RandomGames {
         }
         double seconds = (System.nanoTime() - start) / 1e9;
         List<String> out = new ArrayList<>();
+        if (!retried.isEmpty()) {
+            out.add("agent-core restarts (a stuck Forge thread it could not end): " + agent.restarts() + ", matches played again "
+                + retried);
+        }
         out.add(String.format("%s (agent, random) vs %s (Forge AI): matches=%d games=%d errors=%d", deck0Name, deck1Name,
             matches, games, errors));
         out.add(String.format("match wins agent/forge-ai: %d/%d; game wins: %d/%d; end reasons %s; avg turns %.1f",
