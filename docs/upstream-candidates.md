@@ -169,3 +169,16 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   guarantee. A budget inside Forge AI needs a Forge change, deferred (2026-11-24 directive).
 - **Fix upstream:** a deterministic work budget (nodes or steps) for Forge AI's searches and combat weighing, with
   the wall-clock timeout as an outer safeguard only.
+
+## 13. GameCopier puts the original Mana objects into the copy's pool (2026-11-25)
+
+- **What:** `forge.ai.simulation.GameCopier` copies each player's mana pool with
+  `newPlayer.getManaPool().addManaNoEvent(m)` for the original `Mana` objects. Their player and source card stay the
+  original game's. Spending that mana in the copy counts it on the original player: `MagicStack.add` ->
+  `Player.addExpentThisTurn` runs a `ManaExpend` trigger on the original game's `TriggerHandler`, so the original game
+  holds the copy (and the copy's spending changes the original's state).
+- **How we hit it:** agent-core's search (thousands of copies of the shadow game) ran out of heap: copies stayed
+  reachable from the shadow's waiting triggers until it ran them.
+- **Our workaround:** our `GameCopier` copies the pools after the cards, as new `Mana` of the copied player with the
+  copied source card and mana ability; search counts any simulation that still changes the source's waiting triggers.
+- **Fix upstream:** the same in Forge's `GameCopier` (copy the pool once the cards are mapped).
