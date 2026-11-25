@@ -156,7 +156,7 @@ Planning decision 2026-11-25 (decision 3): generation 0's encoder, policy and va
 imitation data. From generation 1 on, policy targets are search visit ratios only and value targets game results
 only; imitation rows never enter the replay buffer.
 
-- Data: `E:\magicdosa-runs\imitationin3-layer` and `fin4-layer`, 2273 games each (decision-layer runs, encoder 5,
+- Data: `E:\magicdosa-runs\imitation\fin3-layer` and `fin4-layer`, 2273 games each (decision-layer runs, encoder 5,
   zstd Arrow, metadata `source=imitation:forge-ai`, the agent's seat only). About 11 KB per decision step
   decompressed, so games are streamed from disk (`imitation.stream`), 48 games per chunk, rows bucketed by token
   count so batches pad little.
@@ -172,7 +172,7 @@ only; imitation rows never enter the replay buffer.
   steps with 2+ candidates, per decision type), value Brier score and accuracy, and the base-rate Brier score.
 - `python -m magicdosa.export --checkpoint <pt> --shard <any encoder-5 shard> --out <onnx> --name <model name>`.
 
-Run 1 (2026-11-26, `E:\magicdosa-runs\gen0un1`): d_model 64, 2 layers, 256k parameters, 1 epoch (5261 steps),
+Run 1 (2026-11-26, `E:\magicdosa-runs\gen0\run1`): d_model 64, 2 layers, 256k parameters, 1 epoch (5261 steps),
 4 threads, 1852 s of training on a CPU shared with game runs.
 
 | Held-out set | Top-1 | Top-1, 2+ candidates | Value Brier (base rate) | Value accuracy |
