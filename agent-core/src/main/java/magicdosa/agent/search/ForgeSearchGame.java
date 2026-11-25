@@ -61,6 +61,20 @@ import java.util.function.LongFunction;
  * trigger order, and the pre-game ones.
  */
 public final class ForgeSearchGame implements SearchGame {
+    /**
+     * The game's waiting triggers (a guard: a simulation must never add to the source game's; Forge's copier once let a
+     * copy's spent mana queue ManaExpend triggers in the shadow, which then held every copy).
+     */
+    static int waiting(Game g) {
+        try {
+            java.lang.reflect.Field f = forge.game.trigger.TriggerHandler.class.getDeclaredField("waitingTriggers");
+            f.setAccessible(true);
+            return ((List<?>) f.get(g.getTriggerHandler())).size();
+        } catch (ReflectiveOperationException e) {
+            return -1;
+        }
+    }
+
     /** Types the rollout policy answers even in the tree (3단계 기획 쟁점 2: delegated, rates recorded). */
     /**
      * Decisions searched at the root: priority (the shadow waits at a priority point) and the combat declarations (the
@@ -200,8 +214,12 @@ public final class ForgeSearchGame implements SearchGame {
     public Simulation determinize(SplittableRandom rng) {
         long t0 = magicdosa.agent.Timing.start(); // measurement only
         Game source = anchor == null ? shadow : anchor.game();
+        int w0 = waiting(source);
         GameCopier copier = new GameCopier(source).withStack(true);
         Game copy = copier.makeCopy();
+        if (waiting(source) != w0) {
+            count("problem: copying changed the source's waiting triggers");
+        }
         copy.AI_TIMEOUT = 600; // Forge AI's wall-clock limit as a safeguard only (as in the shadow), never a budget
         PhaseState.copy(source, copy, copier);
         if (copy.getStack().size() != source.getStack().size()) {
@@ -215,9 +233,13 @@ public final class ForgeSearchGame implements SearchGame {
         magicdosa.agent.Timing.add("search.copy", t0);
         return chooser -> {
             long t1 = magicdosa.agent.Timing.start();
+            int p0 = waiting(source);
             try {
                 return play(copy, chooser, rng);
             } finally {
+                if (waiting(source) != p0) {
+                    count("problem: a simulation changed the source's waiting triggers");
+                }
                 magicdosa.agent.Timing.addHistogram("search.simulation", t1);
             }
         };

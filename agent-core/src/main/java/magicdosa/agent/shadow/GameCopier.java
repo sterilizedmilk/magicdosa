@@ -135,9 +135,7 @@ public class GameCopier {
             newPlayer.setUnlimitedHandSize(origPlayer.isUnlimitedHandSize());
             newPlayer.setCrankCounter(origPlayer.getCrankCounter());
             // TODO creatureAttackedThisTurn
-            for (Mana m : origPlayer.getManaPool()) {
-                newPlayer.getManaPool().addManaNoEvent(m);
-            }
+            // the pool is copied once the cards exist (copyManaPools): its mana must belong to the copy
             playerMap.put(origPlayer, newPlayer);
         }
 
@@ -150,6 +148,7 @@ public class GameCopier {
         }
 
         copyGameState(newGame, aiPlayer);
+        copyManaPools(newGame);
 
         for (Player origPlayer : playerMap.keySet()) {
             Player newPlayer = playerMap.get(origPlayer);
@@ -261,6 +260,37 @@ public class GameCopier {
         }
         clone.setPlayer(lp);
         return clone;
+    }
+
+    /**
+     * Each player's mana pool, in order, as new mana of the copy: its player is the copied player, its source the copied
+     * card (else the original's last known state) and its mana ability the copied card's matching one. Forge's copier
+     * puts the original Mana objects into the copy's pool; spending them there counts the mana on the original player
+     * (Player.addExpentThisTurn queues a ManaExpend trigger in the original game, which then holds the copy until it runs
+     * its waiting triggers: phase-3 search ran out of heap). Upstream candidate.
+     */
+    private void copyManaPools(Game newGame) {
+        for (Map.Entry<Player, Player> e : playerMap.entrySet()) {
+            Player origPlayer = e.getKey();
+            Player newPlayer = e.getValue();
+            for (Mana m : origPlayer.getManaPool()) {
+                Card src = m.getSourceCard();
+                Card copySrc = src == null ? null : newGame.findById(src.getId());
+                forge.game.spellability.AbilityManaPart part = m.getManaAbility();
+                if (copySrc != null && part != null && part.getSourceSA() != null) {
+                    SpellAbility found = findSAInCard(part.getSourceSA(), copySrc);
+                    if (found != null && found.getManaPart() != null) {
+                        part = found.getManaPart();
+                    }
+                }
+                Card source = copySrc != null ? copySrc : src;
+                if (source == null) {
+                    newPlayer.getManaPool().addManaNoEvent(m); // no source to rebuild it from: as Forge's copier does
+                    continue;
+                }
+                newPlayer.getManaPool().addManaNoEvent(new Mana(m.getColor(), source, part, newPlayer));
+            }
+        }
     }
 
     private void copyGameState(Game newGame, Player aiPlayer) {
