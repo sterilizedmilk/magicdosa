@@ -76,7 +76,11 @@ This file records how the code does it and what is not done yet. It changes no d
   anchor (taken at the cast) still had the milled card on top and the copy put the scry's cards there; since
   2026-11-26 the cards that left a library between the anchor and the root (drawn, milled) and that the viewer knows
   now go back on top of the copy's library in the anchor's order, and the cards seen now sit below them
-  (`SearchReplay` of that game: 36 / 36 backed up, was 0). In the same run the shadow lost step once (a triggered-ability
+  (`SearchReplay` of that game: 36 / 36 backed up, was 0).
+  Two more (2026-11-26): a card choice naming its cards as targets (cards dealt at random in a copy) and a
+  priority root with a spell on the stack (the copier's stack copy ran the cast triggers again, upstream candidate
+  15). Eight 1x Izzet-mirror matches (seed bases 3000 and 4100, 16 games) backed up 97.6-98.5% live before these
+  fixes; `SearchReplay` of all 16 games after them: 29,208 / 29,208 simulations backed up. In the same run the shadow lost step once (a triggered-ability
   answer that was not a shadow candidate: two decisions "search skipped"); the same command with logs did not
   repeat it (games identical up to that decision), so it depends on timing and is not diagnosed yet.
 - Inner roots whose replay crosses an action of the other seat (it cast or activated something since the anchor)
