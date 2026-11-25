@@ -156,7 +156,8 @@ Planning decision 2026-11-25 (decision 3): generation 0's encoder, policy and va
 imitation data. From generation 1 on, policy targets are search visit ratios only and value targets game results
 only; imitation rows never enter the replay buffer.
 
-- Data: `E:\magicdosa-runs\imitation\fin3-layer` and `fin4-layer`, 2273 games each (decision-layer runs, encoder 5,
+- Data: `E:\magicdosa-runs\imitation-p14\fin3-layer` and `fin4-layer` (protocol 14; runs 1 and 2 read the
+  protocol-13 conversion in `imitation\`), 2273 games each (decision-layer runs, encoder 5,
   zstd Arrow, metadata `source=imitation:forge-ai`, the agent's seat only). About 11 KB per decision step
   decompressed, so games are streamed from disk (`imitation.stream`), 48 games per chunk, rows bucketed by token
   count so batches pad little.
@@ -183,6 +184,24 @@ Run 1 (2026-11-26, `E:\magicdosa-runs\gen0\run1`): d_model 64, 2 layers, 256k pa
 Top-1 by decision type, 5% set: priority 91.3% (54.1k rows; always picking the most common candidate kind gives
 81.7%), target 92.8%, declare attackers 81.5%, declare blockers 63.1%, choose option 71.3%, choose cards 53.1%,
 mana payment 68.9%, trigger order 91.3%, damage assignment 91.3% (23 rows).
+
+Run 2 (2026-11-26, `E:\magicdosa-runs\gen0\run2`): d_model 128, 3 layers, 2 epochs (10523 steps), 4 threads,
+6521 s of training (protocol-13 shards, same split).
+
+| Held-out set | Top-1 | Top-1, 2+ candidates | Value Brier (base rate) | Value accuracy |
+| --- | --- | --- | --- | --- |
+| 5% of matches | 89.6% | 89.4% | 0.133 (0.250) | 81.6% |
+| fin4 IzzetProwess-vs-EsperBlink | 89.8% | 89.6% | 0.165 (0.247) | 75.3% |
+
+Top-1 by decision type, 5% set (run 1 in brackets): priority 92.4% (91.3), target 93.7% (92.8), declare attackers
+84.1% (81.5), declare blockers 67.3% (63.1), choose option 71.8% (71.3), choose cards 55.8% (53.1), mana payment
+72.0% (68.9), trigger order 91.3% (91.3), damage assignment 91.3% (91.3). The bigger net helps the value head most
+(the unseen pairing's Brier 0.201 → 0.165); policy agreement moves about a point. Its export (`gen0-run2.onnx`,
+4.8 MB, protocol 14 metadata, built against a protocol-14 shard) matches PyTorch to 8e-6 on a held-out game (same
+argmax everywhere); one row takes 1.5 ms median on one thread.
+
+Run 3 (`E:\magicdosa-runs\gen0\run3`, started 2026-11-26): the first run on the protocol-14 conversion, run 2's
+network, 3 epochs (15785 steps).
 
 The ONNX export (`gen0-run1.onnx`, 1.5 MB) under ONNX Runtime 1.31 (Python, CPU) matches PyTorch to 5e-6 on a
 held-out game (336 rows, same argmax everywhere); one row takes 0.7 ms median on one thread.
