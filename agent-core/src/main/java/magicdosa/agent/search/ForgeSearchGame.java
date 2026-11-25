@@ -111,6 +111,10 @@ public final class ForgeSearchGame implements SearchGame {
     }
     /** Forge card numbers of the cards in hands and libraries the root seat can see at the root (kept when dealing). */
     private final Set<Integer> seenNow = new java.util.HashSet<>();
+    /** Per seat, the library positions of the shadow's cards at the root (Forge card number -> index from the top). */
+    private final Map<Integer, Map<Integer, Integer>> libraryPositionsNow = new HashMap<>();
+    /** Per seat, the positions of the library cards the root seat sees at the root. */
+    private final Map<Integer, Map<Integer, Integer>> seenLibraryPositions = new HashMap<>();
 
     static final Set<DecisionType> DELEGATED = Set.of(DecisionType.DECISION_TYPE_MANA_PAYMENT,
         DecisionType.DECISION_TYPE_DAMAGE_ASSIGNMENT, DecisionType.DECISION_TYPE_TRIGGER_ORDER,
@@ -164,6 +168,33 @@ public final class ForgeSearchGame implements SearchGame {
                 }
             }
         }
+        for (Player p : shadow.getRegisteredPlayers()) {
+            Map<Integer, Integer> at = new HashMap<>();
+            List<Card> lib = new ArrayList<>(p.getCardsIn(ZoneType.Library));
+            for (int i = 0; i < lib.size(); i++) {
+                at.put(lib.get(i).getId(), i);
+            }
+            libraryPositionsNow.put(shadow.getRegisteredPlayers().indexOf(p), at);
+        }
+        // the cards the root decision itself shows (a scry's, the top cards to choose from): Forge does not mark them as
+        // visible to the player, yet the root names them, so the copy must deal them where they are
+        for (Candidate c : root.getCandidatesList()) {
+            if (c.getCardId() != 0) {
+                Card card = shadowSession.cardOf(c.getCardId());
+                if (card != null) {
+                    seenNow.add(card.getId());
+                }
+            }
+        }
+        libraryPositionsNow.forEach((seat, at) -> {
+            Map<Integer, Integer> seen = new HashMap<>();
+            at.forEach((id, i) -> {
+                if (seenNow.contains(id)) {
+                    seen.put(id, i);
+                }
+            });
+            seenLibraryPositions.put(seat, seen);
+        });
         this.shadow = shadow;
         this.shadowSession = shadowSession;
         this.root = root;
@@ -254,11 +285,13 @@ public final class ForgeSearchGame implements SearchGame {
         Player viewer = source.getRegisteredPlayers().get(rootSeat);
         for (Player po : source.getRegisteredPlayers()) {
             Player pc = (Player) copier.find(po);
+            int seat = source.getRegisteredPlayers().indexOf(po);
+            Map<Integer, Integer> libraryAt = seenLibraryPositions.getOrDefault(seat, Map.of());
             List<ZoneType> zones = po == viewer ? List.of(ZoneType.Library) : List.of(ZoneType.Hand, ZoneType.Library);
             Map<ZoneType, List<Card>> lists = new EnumMap<>(ZoneType.class);
             List<ZoneType> slotZone = new ArrayList<>();
             List<Integer> slotIndex = new ArrayList<>();
-            List<Card> unseen = new ArrayList<>();
+            List<Card> pool = new ArrayList<>();
             for (ZoneType z : zones) {
                 List<Card> orig = new ArrayList<>(po.getCardsIn(z));
                 List<Card> copied = new ArrayList<>(pc.getCardsIn(z));
@@ -267,22 +300,50 @@ public final class ForgeSearchGame implements SearchGame {
                 }
                 lists.put(z, copied);
                 for (int i = 0; i < orig.size(); i++) {
-                    // the cards the root seat sees at the root stay (an anchor is older: a scry shows them later)
-                    if (!seenNow.contains(orig.get(i).getId()) && !orig.get(i).getView().canBeShownTo(viewer.getView())) {
+                    Card o = orig.get(i);
+                    boolean placedByShadow = libraryAt.containsKey(o.getId());
+                    boolean seenHere = seenNow.contains(o.getId()) || o.getView().canBeShownTo(viewer.getView());
+                    if (placedByShadow || !seenHere) {
+                        // dealt: either to where the shadow has it now (a card seen in a library: the scry's), or at random
                         slotZone.add(z);
                         slotIndex.add(i);
-                        unseen.add(copied.get(i));
+                        pool.add(copied.get(i));
                     }
                 }
             }
-            for (int i = unseen.size() - 1; i > 0; i--) {
-                int j = rng.nextInt(i + 1);
-                Card t = unseen.get(i);
-                unseen.set(i, unseen.get(j));
-                unseen.set(j, t);
+            // cards seen in a library now go where the shadow has them now (an anchor is older: the shadow put the cards a
+            // scry shows on top when they were shown), the rest of the slots are dealt at random
+            List<Card> library = lists.get(ZoneType.Library);
+            Map<Integer, Card> fixedAt = new java.util.TreeMap<>();
+            for (Card c : pool) {
+                Integer at = libraryAt.get(c.getId());
+                if (at != null && at < library.size() && !fixedAt.containsKey(at)) {
+                    fixedAt.put(at, c);
+                }
             }
-            for (int k = 0; k < unseen.size(); k++) {
-                lists.get(slotZone.get(k)).set(slotIndex.get(k), unseen.get(k));
+            pool.removeAll(fixedAt.values());
+            List<ZoneType> freeZone = new ArrayList<>();
+            List<Integer> freeIndex = new ArrayList<>();
+            for (int k = 0; k < slotZone.size(); k++) {
+                boolean taken = slotZone.get(k) == ZoneType.Library && fixedAt.containsKey(slotIndex.get(k));
+                if (!taken) {
+                    freeZone.add(slotZone.get(k));
+                    freeIndex.add(slotIndex.get(k));
+                }
+            }
+            fixedAt.forEach(library::set);
+            // a fixed position that was not a dealt slot (a seen card was there already) leaves one more card than slots
+            while (pool.size() > freeZone.size()) {
+                pool.remove(pool.size() - 1);
+            }
+            for (int i = pool.size() - 1; i > 0; i--) {
+                int j = rng.nextInt(i + 1);
+                Card t = pool.get(i);
+                pool.set(i, pool.get(j));
+                pool.set(j, t);
+            }
+            for (int k = 0; k < pool.size(); k++) {
+                lists.get(freeZone.get(k)).set(freeIndex.get(k), pool.get(k));
             }
             for (ZoneType z : zones) {
                 pc.getZone(z).setCards(lists.get(z));

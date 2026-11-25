@@ -113,6 +113,32 @@ class SearchScenarioTest {
         assertEquals(r.decisions, r.decisionsMatched, why);
     }
 
+    /**
+     * A scry inside Preordain is searched from the anchor: the shadow put the shown cards on top when the real game showed
+     * them, after the anchor was copied, so each copy deals them where the shadow has them at the root (before: every
+     * simulation of such a root missed it, the copies showing other cards).
+     */
+    @Test
+    void aScryIsSearchedWithTheCardsItShows() throws Exception {
+        Scenario s = new Scenario("search-scry-0", 5, 0);
+        s.seat(0).deck("Island", 30).deck("Preordain", 30)
+            .library("Island", "Preordain", "Island", "Preordain", "Island", "Island")
+            .hand("Preordain", "Preordain", "Preordain")
+            .battlefield("Island", "Island");
+        s.seat(1).deck("Forest", 60)
+            .library("Forest", "Forest", "Forest", "Forest")
+            .hand("Forest")
+            .battlefield("Forest");
+        s.search = SearchConfig.of(24);
+        ShadowGame.Result r = s.play(4);
+        LiveShadow.Stats st = s.stats;
+        String why = st.line();
+        System.out.println("search scry scenario: " + why);
+        assertTrue(st.search.getOrDefault("root CHOOSE_CARDS", 0) > 0, why);
+        assertEquals(st.simulations, st.backedUp, why);
+        assertEquals(r.decisions, r.decisionsMatched, why);
+    }
+
     @Test
     void sameSeedSameSearches() throws Exception {
         String[] lines = new String[2];
