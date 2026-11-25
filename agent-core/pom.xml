@@ -49,6 +49,14 @@
       <artifactId>arrow-memory-unsafe</artifactId>
       <version>17.0.0</version>
     </dependency>
+    <!-- network inference (design: "추론 위치": agent-core runs the model with ONNX Runtime, CPU). 1.20.0 is the newest
+         release that runs on this PC's JDKs: later ones need a newer msvcp140.dll than the one the JDK loads at startup
+         (Corretto 17 ships 14.16; 1.31 crashes in it, 1.21 and 1.22 exit at load). Models need IR version 10 or lower. -->
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime</artifactId>
+      <version>1.20.0</version>
+    </dependency>
     <!-- shards' buffer compression (zstd, same format as Arrow's arrow-compression module) -->
     <dependency>
       <groupId>com.github.luben</groupId>
