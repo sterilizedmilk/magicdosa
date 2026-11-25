@@ -66,9 +66,13 @@ class Block(nn.Module):
     def forward(self, x: Tensor, bias: Tensor, key_mask: Tensor) -> Tensor:
         b, n, d = x.shape
         q, k, v = self.qkv(self.norm1(x)).reshape(b, n, 3, self.h, self.dk).permute(2, 0, 3, 1, 4).unbind(0)
-        att = q @ k.transpose(-1, -2) / (self.dk ** 0.5) + bias
-        att = att.masked_fill(~key_mask[:, None, None, :], NEG).softmax(-1)
-        x = x + self.out((att @ v).transpose(1, 2).reshape(b, n, d))
+        mask = bias.masked_fill(~key_mask[:, None, None, :], NEG)               # additive: relations + padding
+        if torch.compiler.is_exporting():
+            # the ONNX exporter cannot decompose the fused kernel with dynamic shapes; same math, written out
+            att = ((q @ k.transpose(-1, -2)) / (self.dk ** 0.5) + mask).softmax(-1) @ v
+        else:
+            att = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        x = x + self.out(att.transpose(1, 2).contiguous().reshape(b, n, d))
         return x + self.ff(self.norm2(x))
 
 
@@ -78,7 +82,9 @@ def _one_hot(ref: Tensor, n: int) -> Tensor:
 
 
 class Encoder(nn.Module):
-    """Shared observation encoder: [global token] + entity tokens + deck tokens -> contextual embeddings."""
+    """Shared observation encoder: [global token] + entity tokens -> contextual embeddings. Deck tokens (about 100 per
+    row, nearly constant within a game) are pooled into the global token instead of attended over (PLACEHOLDER,
+    chosen for CPU cost: attending over them made the sequence 3-4 times longer)."""
 
     def __init__(self, c: ModelConfig):
         super().__init__()
@@ -90,7 +96,8 @@ class Encoder(nn.Module):
         self.global_in = nn.Linear(c.global_width, d)
         self.deck_group = nn.Embedding(N_DECK_GROUPS, d)
         self.deck_count = nn.Linear(1, d)                              # PLACEHOLDER: raw count as one input
-        self.segment = nn.Embedding(3, d)                              # global / entity / deck
+        self.segment = nn.Embedding(2, d)                              # global / entity
+        self.deck_mix = nn.Sequential(nn.Linear(d, d), nn.GELU(), nn.Linear(d, d))
         self.rel_bias = nn.Embedding(N_REL_KINDS, c.n_heads)           # PLACEHOLDER: relations as attention bias
         self.blocks = nn.ModuleList(Block(c) for _ in range(c.n_layers))
         self.norm = nn.LayerNorm(d)
@@ -98,14 +105,16 @@ class Encoder(nn.Module):
     def forward(self, x: Mapping[str, Tensor]):
         tok = (self.card(x["token_card"]) + self.key(x["token_key"]) + self.token_kind(x["token_kind"])
                + self.token_feat(x["token_feat"]) + self.segment.weight[1])
-        glob = (self.global_in(x["global"]) + self.segment.weight[0]).unsqueeze(1)
         deck = (self.card(x["deck_card"]) + self.deck_group(x["deck_group"])
-                + self.deck_count(x["deck_count"].float().unsqueeze(-1)) + self.segment.weight[2])
-        h = torch.cat([glob, tok, deck], dim=1)
+                + self.deck_count(x["deck_count"].float().unsqueeze(-1)))
+        dm = x["deck_mask"].unsqueeze(-1).float()
+        deck = self.deck_mix((deck * dm).sum(1) / dm.sum(1).clamp(min=1.0))
+        glob = (self.global_in(x["global"]) + deck + self.segment.weight[0]).unsqueeze(1)
+        h = torch.cat([glob, tok], dim=1)
         n_tok = tok.shape[1]
         n = h.shape[1]
         ones = torch.ones_like(x["token_mask"][:, :1])
-        key_mask = torch.cat([ones, x["token_mask"], x["deck_mask"]], dim=1)
+        key_mask = torch.cat([ones, x["token_mask"]], dim=1)
         # relation bias between entity tokens: sum over relations of w[kind] at (src, dst); token i is position i+1
         src = _one_hot(x["rel_src"] + 1, n) * x["rel_mask"].unsqueeze(-1).float()
         dst = _one_hot(torch.where(x["rel_dst"] >= 0, x["rel_dst"] + 1, x["rel_dst"]), n)
