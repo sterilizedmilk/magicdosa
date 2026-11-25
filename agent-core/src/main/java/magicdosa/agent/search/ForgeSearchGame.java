@@ -187,8 +187,10 @@ public final class ForgeSearchGame implements SearchGame {
         // the cards the root decision itself shows (a scry's, the top cards to choose from): Forge does not mark them as
         // visible to the player, yet the root names them, so the copy must deal them where they are
         for (Candidate c : root.getCandidatesList()) {
-            if (c.getCardId() != 0) {
-                Card card = shadowSession.cardOf(c.getCardId());
+            // a card choice names its cards by card_id, or as targets (a card from a hand the effect shows)
+            long id = c.getCardId() != 0 ? c.getCardId() : c.hasTarget() && c.getTarget().hasEntityId() ? c.getTarget().getEntityId() : 0;
+            if (id != 0) {
+                Card card = shadowSession.cardOf(id);
                 if (card != null) {
                     seenNow.add(card.getId());
                 }
