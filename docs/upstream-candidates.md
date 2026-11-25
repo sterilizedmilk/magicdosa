@@ -216,3 +216,16 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Fix upstream:** cache the abilities a card can play between state changes; avoid the per-card allocation in
   `getHiddenStaticAbilities` (return an empty view when there is nothing); a card copy that clones the built
   abilities instead of reading the script again.
+
+## 15. GameCopier's stack copy casts the spells again (2026-11-26)
+
+- **What:** `forge.ai.simulation.GameCopier.copyStack` puts each spell on the copy's stack with `MagicStack.add`, which
+  treats it as a new cast: it runs SpellCast / SpellAbilityCast triggers (prowess triggers a second time), adds the
+  spell to the turn's cast list and counts it for its caster. The copy's cast list is otherwise left empty
+  (`// TODO update thisTurnCast`), so "spells cast this turn" in a copy counts only the spells on its stack.
+- **How we hit it:** search priority roots with only a spell on the stack (its prowess triggers already resolved)
+  failed every simulation: the copy first asked to order two new prowess triggers.
+- **Our workaround:** our `GameCopier` suppresses all triggers while it puts the stack back. The cast list is not
+  rebuilt yet (spells cast earlier in the turn are missing in a copy).
+- **Fix upstream:** add the copied stack entries without the cast bookkeeping (or suppress triggers around it), and
+  copy the turn's cast list.

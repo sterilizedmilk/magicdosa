@@ -201,8 +201,15 @@ public class GameCopier {
         newGame.getAction().checkStateEffects(true); //ensure state based effects and triggers are updated
         newGame.getTriggerHandler().resetActiveTriggers();
 
-        if (copyStack)
-            copyStack(origGame, newGame, gameObjectMap);
+        if (copyStack) {
+            // putting a spell back on the stack is no cast: MagicStack.add would run the cast triggers (prowess) again
+            newGame.getTriggerHandler().setSuppressAllTriggers(true);
+            try {
+                copyStack(origGame, newGame, gameObjectMap);
+            } finally {
+                newGame.getTriggerHandler().setSuppressAllTriggers(false);
+            }
+        }
 
         // TODO update thisTurnCast
 
