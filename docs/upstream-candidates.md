@@ -195,3 +195,24 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   (`setPlotted(true)` runs a BecomesPlotted trigger).
 - **Fix upstream:** copy `turnInZone` and the plotted flag (without the trigger) in Forge's `GameCopier`, as
   `CardCopyService` does for LKI copies.
+
+## 15. Where a search simulation's time goes inside Forge (2026-11-25, measurement only)
+
+- **What:** after our own overhead was removed (`docs/search-perf.md`), most of an agent-core search simulation (a
+  copy of the shadow game played to the start of the next own turn) is Forge's work. JFR shares of the search
+  thread (R30 root set, 5857 samples):
+  - `Card.getAllPossibleAbilities` calls `SpellAbility.canPlay` for every ability on every priority check, from both
+    `ComputerUtilAbility.getSpellAbilities` callers (our candidate building and `AiController.getSpellAbilityToPlay`):
+    8.1%; the whole of `getSpellAbilities` 15.5%.
+  - `GameAction.checkStaticAbilities` on every state-based check: 8.9%; within it `Card.getHiddenStaticAbilities`
+    builds a new `FCollection` for every card on every pass (samples land on the inlined `isSuspected`): 4.3%.
+  - `forge.ai.simulation.GameCopier` / our `GameCopier`: `CardFactory.getCard` rebuilds each card from its script
+    (`readCard`, `buildAbilities`) for every card of every copy, libraries included: 9.3%.
+  - `GameStateEvaluator.getScoreForGameState` copies the game and plays the coming combat on every call (one call per
+    seat per leaf): 3.9%.
+- **How we hit it:** search costs about 50 simulations per decision at the 1x budget; each simulation's time is the
+  sum above.
+- **Our workaround:** none (no Forge patches); the parts on our side are done.
+- **Fix upstream:** cache the abilities a card can play between state changes; avoid the per-card allocation in
+  `getHiddenStaticAbilities` (return an empty view when there is nothing); a card copy that clones the built
+  abilities instead of reading the script again.

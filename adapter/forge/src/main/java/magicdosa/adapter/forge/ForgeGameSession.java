@@ -230,6 +230,23 @@ public final class ForgeGameSession {
     private final List<Event.Builder> deferred = new ArrayList<>();
     /** The player who goes first, from the game start on (Forge sets its starting player only after mulligans). */
     private Player firstPlayer;
+    /** See {@link #quiet()}. */
+    private boolean quiet;
+
+    /**
+     * From now on nothing is streamed or observed: no events, reveals, facts, observations or turn-start snapshots
+     * are built, and requests carry no observation. Entity, ability and trigger IDs are still issued as before, so
+     * candidates stay what they were. For a search copy whose remaining decisions all go to Forge AI (a rollout): its
+     * client discards the stream and never reads the observation. Cannot be undone.
+     */
+    public void quiet() {
+        quiet = true;
+    }
+
+    /** Whether {@link #quiet()} was called. */
+    boolean isQuiet() {
+        return quiet;
+    }
 
     public ForgeGameSession(Game game, String matchId, int gameNumber, List<Deck> registeredDecks, int[] gamesWon,
                             Set<Integer> agentSeats, DecisionClient client, CardKeys keys, LogSink log, Mode mode,
@@ -800,6 +817,9 @@ public final class ForgeGameSession {
 
     /** Builds an event body per agent seat ({@code body} may leave the builder untouched to skip that seat). */
     private void emit(boolean engineHandled, BiConsumer<Integer, Event.Builder> body) {
+        if (quiet) {
+            return;
+        }
         for (int viewer : agentSeats) {
             Event.Builder b = Event.newBuilder();
             body.accept(viewer, b);
@@ -837,6 +857,9 @@ public final class ForgeGameSession {
      */
     void showTo(Player p, Collection<? extends Card> cards) {
         syncZones();
+        if (quiet) {
+            return;
+        }
         int viewer = seat(p);
         for (Card c : cards) {
             long id = ids.idOf(c);
@@ -989,6 +1012,9 @@ public final class ForgeGameSession {
             if (actionDepth > 0 && m.prevId() != 0) {
                 idsAtActionStart.putIfAbsent(m.card().getId(), m.prevId());
             }
+            if (quiet) {
+                continue;
+            }
             Card c = m.card();
             if (m.to() == null) {
                 emit(false, (viewer, b) -> b.setZoneMove(ZoneMove.newBuilder().setPrevId(m.prevId())
@@ -1039,6 +1065,11 @@ public final class ForgeGameSession {
                 }
                 b.setZoneMove(z);
             });
+        }
+        if (quiet) {
+            tapBaseline();
+            pollTriggers(); // trigger IDs
+            return;
         }
         // E3: a seat that saw a card before it went into a library knows where it is
         for (int viewer : agentSeats) {
@@ -1430,6 +1461,9 @@ public final class ForgeGameSession {
     private void snapshot() {
         syncZones();
         snapshotTurn = game.getPhaseHandler().getTurn();
+        if (quiet) {
+            return;
+        }
         for (int viewer : agentSeats) {
             TurnStartSnapshot s = TurnStartSnapshot.newBuilder().setGameId(gameId).setSeat(viewer)
                 .setSeq(seq.get(viewer)).setObservation(observation(viewer)).build();
@@ -1865,9 +1899,14 @@ public final class ForgeGameSession {
         DecisionRequest.Builder requestBuilder = DecisionRequest.newBuilder()
             .setProtocolVersion(Versions.PROTOCOL).setGameId(gameId).setDecisionId(decisionId).setSeat(seat)
             .setAppliedSeq(seq.get(seat)).setSeed(seeds.nextLong()).setType(type)
-            .setObservation(observation(seat)).addAllCandidates(candidates).setConstraints(constraints)
+            .addAllCandidates(candidates).setConstraints(constraints)
             .setContext(context == null ? DecisionContext.getDefaultInstance() : context)
             .addAllRejections(rejections);
+        if (!quiet) {
+            requestBuilder.setObservation(observation(seat));
+        } else {
+            withinLibrary.clear(); // kept for the observation only
+        }
         if (acting != decider) {
             requestBuilder.setActingSeat(seat(acting));
         }
@@ -1878,7 +1917,9 @@ public final class ForgeGameSession {
             requestBuilder.setBundle(StepBundle.newBuilder().setId(bundle.id).setStep(++bundle.steps));
         }
         DecisionRequest request = requestBuilder.build();
-        recordPrivileged(decisionId, seat);
+        if (!quiet) {
+            recordPrivileged(decisionId, seat);
+        }
         if (type == DecisionType.DECISION_TYPE_PRIORITY) {
             stats.priorityAsks++;
             if (candidates.stream().anyMatch(c -> !c.hasPass() && !(c.hasActivateAbility() && c.getActivateAbility().getManaAbility()))) {

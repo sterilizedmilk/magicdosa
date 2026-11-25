@@ -56,5 +56,13 @@ public interface SearchGame {
 
         /** An index into {@code d.actions()}, or {@link #ROLLOUT}. */
         int choose(Decision d);
+
+        /**
+         * Whether every later decision of this simulation is answered {@link #ROLLOUT} whatever it is (the walk left the
+         * tree): the game may skip what only a tree lookup reads (information keys, action keys, observations).
+         */
+        default boolean outOfTree() {
+            return false;
+        }
     }
 }

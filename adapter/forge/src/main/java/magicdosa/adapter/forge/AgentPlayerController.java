@@ -189,7 +189,9 @@ public class AgentPlayerController extends ObservedAiController {
                 considered.add(sa);
                 if (ManaPayments.payableNow(player, sa)) {
                     out.add(sa);
-                } else if (!sa.isManaAbility() && payableWithMoreMana(sa)) {
+                } else if (!sa.isManaAbility() && !(session.isQuiet() && !potential.isEmpty()) && payableWithMoreMana(sa)) {
+                    // a quiet session (a search rollout) builds no observation: only whether there is a potential
+                    // cast is read (the mana-only filter), so the check stops at the first
                     potential.add(potentialCast(sa));
                 }
             }

@@ -243,6 +243,11 @@ public final class IsMcts {
         }
 
         @Override
+        public boolean outOfTree() {
+            return outOfTree;
+        }
+
+        @Override
         public int choose(SearchGame.Decision d) {
             Node node;
             if (!started) {
