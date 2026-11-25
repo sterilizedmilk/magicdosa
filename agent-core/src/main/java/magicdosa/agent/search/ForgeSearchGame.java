@@ -103,6 +103,27 @@ public final class ForgeSearchGame implements SearchGame {
     private final Anchor anchor;
     private magicdosa.protocol.v1.RolloutPolicy rollout = SearchConfig.DEFAULT_ROLLOUT;
 
+    /** Null: simulations play on to the horizon; else the network values the node where the walk leaves the tree. */
+    private magicdosa.agent.model.Evaluator leafNetwork;
+
+    /**
+     * Leaf evaluation by a network (an option, off by default; the phase-3 gate is network-free): a simulation stops at
+     * the decision where the walk leaves the tree, and the value is the network's for that request (the deciding seat's
+     * P(win), turned to the root seat's). A simulation that ends or reaches the horizon before leaving the tree is valued
+     * as before. Null turns it off.
+     */
+    public ForgeSearchGame withNetworkLeaf(magicdosa.agent.model.Evaluator network) {
+        this.leafNetwork = network;
+        return this;
+    }
+
+    /** Thrown inside a simulation that reached its network leaf; the value is kept on the client too. */
+    private static final class LeafReached extends RuntimeException {
+        LeafReached() {
+            super("network leaf", null, false, false);
+        }
+    }
+
     /** The rollout policy of this search's simulations (the search's {@link SearchConfig#rollout()}). */
     public ForgeSearchGame withRollout(magicdosa.protocol.v1.RolloutPolicy p) {
         this.rollout = p;
@@ -395,7 +416,7 @@ public final class ForgeSearchGame implements SearchGame {
             int rootTurn = ph.getTurn();
             int steps = 0;
             boolean plain = false;
-            while (!copy.isGameOver()) {
+            while (!copy.isGameOver() && client.leafValue == null) {
                 if (!plain && rollout == magicdosa.protocol.v1.RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI
                         && chooser.outOfTree()) {
                     // the rollout from here on is Forge's own play (between loop steps: no controller call is under way)
@@ -405,7 +426,14 @@ public final class ForgeSearchGame implements SearchGame {
                         p.dangerouslySetController(new forge.ai.PlayerControllerAi(copy, p, p.getLobbyPlayer()));
                     }
                 }
-                ph.mainLoopStep();
+                try {
+                    ph.mainLoopStep();
+                } catch (LeafReached e) {
+                    break;
+                }
+                if (client.leafValue != null) {
+                    break; // Forge's own code caught the exception
+                }
                 if (ph.getTurn() > rootTurn && ph.getPlayerTurn() == me) {
                     count("horizon");
                     break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
@@ -419,6 +447,10 @@ public final class ForgeSearchGame implements SearchGame {
                     + root.getObservation().getGame().getStep() + (copy.isGameOver() ? " (game over)" : " (horizon)")
                     + (root.getObservation().getStackCount() > 0 ? " stack" : ""));
                 return 0.5; // the walk reports it: the root decision was never asked
+            }
+            if (client.leafValue != null) {
+                count("leaf: network");
+                return client.leafValue;
             }
             long tv = magicdosa.agent.Timing.start();
             double v = value(copy, me);
@@ -463,6 +495,8 @@ public final class ForgeSearchGame implements SearchGame {
         ForgeGameSession session;
         boolean askedRoot;
         private boolean delegate;
+        /** The network's value of the leaf, for the root seat; set when the simulation stops there. */
+        Double leafValue;
 
         Client(Chooser chooser, SplittableRandom rng) {
             this.chooser = chooser;
@@ -533,6 +567,9 @@ public final class ForgeSearchGame implements SearchGame {
         @Override
         public DecisionResponse decide(DecisionRequest r) {
             delegate = false;
+            if (leafValue != null) {
+                throw new LeafReached(); // asked again after Forge caught it: keep stopping
+            }
             DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(r.getGameId()).setDecisionId(r.getDecisionId());
             if (anchor != null && !askedRoot) {
                 DecisionResponse replayed = replay(r, out);
@@ -617,6 +654,18 @@ public final class ForgeSearchGame implements SearchGame {
                     pick = chooser.choose(new Decision(r.getSeat(), chosen.isEmpty() ? info : info + "|" + sorted, actions,
                         !chosen.isEmpty()));
                     rootChosen |= isRoot;
+                    if (leafNetwork != null && chooser.outOfTree()) {
+                        // the walk left the tree here: the network values this step instead of a rollout
+                        List<Integer> stepCandidates = new ArrayList<>(fit);
+                        if (doneAllowed) {
+                            stepCandidates.add(-1);
+                        }
+                        long tn = magicdosa.agent.Timing.start();
+                        double v = leafNetwork.evaluate(r, stepCandidates, chosen).value();
+                        magicdosa.agent.Timing.addHistogram("search.leafNetwork", tn);
+                        leafValue = r.getSeat() == rootSeat ? v : 1 - v;
+                        throw new LeafReached();
+                    }
                     if (chooser.outOfTree()) {
                         session.quiet(); // the walk left the tree at this decision
                     }

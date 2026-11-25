@@ -466,4 +466,44 @@ public final class Encoder {
     public static int candidateColumn(String name) {
         return C.get(name);
     }
+    /**
+     * One decision step of an encoded request, as a training row and the network see it: the token features with the
+     * tokens chosen in earlier steps flagged "selected", and the step's candidates ({@code candidates}: indices of the
+     * request's candidates, -1 for "done"). Shards ({@link ShardWriter}) and inference build their rows here.
+     */
+    public record Step(float[] tokenFeat, int[] candKind, int[] candRef0, int[] candRef1, int[] candCard, int[] candKey,
+                       int[] candString, float[] candFeat) {}
+
+    public static Step step(Encoded e, List<Integer> candidates, List<Integer> selectedTokens) {
+        float[] feat = e.tokenFeat().clone();
+        int width = TOKEN.size();
+        for (int t : selectedTokens) {
+            feat[t * width + tokenColumn("selected")] = 1;
+        }
+        int n = candidates.size();
+        int cw = CANDIDATE.size();
+        int[] kind = new int[n], ref0 = new int[n], ref1 = new int[n], card = new int[n], key = new int[n], str = new int[n];
+        float[] cf = new float[n * cw];
+        for (int j = 0; j < n; j++) {
+            int i = candidates.get(j);
+            if (i >= 0) {
+                kind[j] = e.candKind()[i];
+                ref0[j] = e.candRef0()[i];
+                ref1[j] = e.candRef1()[i];
+                card[j] = e.candCard()[i];
+                key[j] = e.candKey()[i];
+                str[j] = e.candString()[i];
+                System.arraycopy(e.candFeat(), i * cw, cf, j * cw, cw);
+            } else {
+                kind[j] = DONE;
+                ref0[j] = -1;
+                ref1[j] = -1;
+                card[j] = Vocab.PAD;
+                key[j] = Vocab.PAD;
+                str[j] = Vocab.PAD;
+                cf[j * cw + candidateColumn("done")] = 1f;
+            }
+        }
+        return new Step(feat, kind, ref0, ref1, card, key, str, cf);
+    }
 }

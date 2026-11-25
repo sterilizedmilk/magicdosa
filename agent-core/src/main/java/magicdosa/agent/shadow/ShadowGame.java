@@ -355,7 +355,8 @@ public final class ShadowGame {
             anchor = new magicdosa.agent.search.ForgeSearchGame.Anchor(anchorGame, replay);
         }
         magicdosa.agent.search.ForgeSearchGame g = new magicdosa.agent.search.ForgeSearchGame(game, session, real, keys,
-            decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber(), anchor).withRollout(live.search().rollout());
+            decks, gamesWon, rec.header.getMatchId(), rec.header.getGameNumber(), anchor).withRollout(live.search().rollout())
+            .withNetworkLeaf(magicdosa.agent.model.LeafNetwork.get());
         long t0 = magicdosa.agent.Timing.start(); // measurement only
         long debugStart = System.nanoTime(); // measurement only (the debug line)
         magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed());

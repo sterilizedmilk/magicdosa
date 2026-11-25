@@ -18,6 +18,11 @@ import magicdosa.protocol.Versions;
 public final class AgentCore {
     /** Layout of the tensors the encoder produces. A model records the encoder version it was trained with. */
     public static final int ENCODER_VERSION = 5;
+    /**
+     * Structure of the play network agent-core can run (inputs, heads, outputs: the ONNX contract of
+     * docs/python-training.md); Python's {@code versions.MODEL_VERSION}. A model of another structure is refused.
+     */
+    public static final int MODEL_VERSION = 1;
 
     public static final int DEFAULT_PORT = 50051;
 
