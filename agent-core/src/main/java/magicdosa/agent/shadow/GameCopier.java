@@ -339,6 +339,30 @@ public class GameCopier {
                 }
                 continue;
             }
+            if (zone == ZoneType.Library) {
+                // a library is filled in one go: Zone.add updates the owner's view of the whole zone (and its flashback
+                // view) after each card, which made copying a library quadratic in its size
+                for (Player op : origGame.getPlayers()) {
+                    Player np = playerMap.get(op);
+                    List<Card> cards = new ArrayList<>();
+                    for (Card card : op.getCardsIn(ZoneType.Library)) {
+                        Card newCard = createCardCopy(newGame, playerMap.get(card.getOwner()), card, aiPlayer);
+                        cardMap.put(card, newCard);
+                        newCard.setTurnInController(np); // as Zone.add does for a card from outside the zone
+                        newCard.setTapped(false);
+                        cards.add(newCard);
+                    }
+                    np.getZone(ZoneType.Library).setCards(cards);
+                    for (Card card : op.getCardsIn(ZoneType.Library)) {
+                        Card newCard = cardMap.get(card);
+                        newCard.setTurnInZone(card.getTurnInZone());
+                        if (card.isPlotted()) {
+                            setPlotted(newCard);
+                        }
+                    }
+                }
+                continue;
+            }
             for (Card card : origGame.getCardsIn(zone)) {
                 addCard(newGame, zone, card, aiPlayer);
             }
