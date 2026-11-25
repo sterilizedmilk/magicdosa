@@ -95,6 +95,40 @@ public final class RandomGames {
     /** {@code matchPrefix} keeps match and game IDs unique when one agent-core serves several runs (shard file names). */
     static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, AgentConnection agent,
                        CardKeys keys, String matchPrefix) throws Exception {
+        // -Dmagicdosa.agentSeats=none: plain Forge AI in both seats (win-rate reference, no decision layer)
+        Set<Integer> seats = "none".equals(System.getProperty("magicdosa.agentSeats")) ? Set.of() : Set.of(0);
+        return run(deckDir, deck0Name, deck1Name, matches, logDir, agent, keys, matchPrefix, new Seating() {
+            @Override
+            public Set<Integer> seats(int match) {
+                return seats;
+            }
+        });
+    }
+
+    /** What agent-core a run talks to: one agent-core, or one per seat ({@link HeadToHead}). */
+    interface Agents {
+        magicdosa.adapter.forge.DecisionClient client();
+
+        boolean restartable();
+
+        void restart() throws Exception;
+
+        int restarts();
+    }
+
+    /** The agent seats of each match, and calls around it (HeadToHead gives each seat its agent-core). */
+    interface Seating {
+        Set<Integer> seats(int match);
+
+        default void beforeMatch(int match) {
+        }
+
+        default void afterMatch(int match, ForgeMatchRunner.Result result) {
+        }
+    }
+
+    static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, Agents agent,
+                       CardKeys keys, String matchPrefix, Seating seating) throws Exception {
         Deck deck0 = DeckFiles.load(new File(deckDir, deck0Name));
         Deck deck1 = DeckFiles.load(new File(deckDir, deck1Name));
         ForgeMatchRunner runner = new ForgeMatchRunner(agent.client(), keys, Mode.MODE_TRAINING, "forge@87cb532",
@@ -111,9 +145,9 @@ public final class RandomGames {
         Set<Integer> retried = new java.util.HashSet<>();
         for (int m = 0; m < matches; m++) {
             try {
-                // -Dmagicdosa.agentSeats=none: plain Forge AI in both seats (win-rate reference, no decision layer)
-                Set<Integer> seats = "none".equals(System.getProperty("magicdosa.agentSeats")) ? Set.of() : Set.of(0);
-                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seats, SEED_BASE + m, logDir);
+                seating.beforeMatch(m);
+                ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seating.seats(m), SEED_BASE + m, logDir);
+                seating.afterMatch(m, r);
                 total.add(r.stats());
                 gameWins[0] += r.gamesWon()[0];
                 gameWins[1] += r.gamesWon()[1];

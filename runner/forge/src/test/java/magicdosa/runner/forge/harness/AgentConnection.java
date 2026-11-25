@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,7 +27,7 @@ import java.util.regex.Pattern;
  *   <li>{@code local}: agent-core's game handling called in-process (one JVM, no gRPC).</li>
  * </ul>
  */
-final class AgentConnection implements AutoCloseable {
+final class AgentConnection implements AutoCloseable, RandomGames.Agents {
     private static final Pattern LISTENING = Pattern.compile("agent-core listening on port (\\d+)");
     private static final Pattern ERRORS = Pattern.compile("protocolErrors=(\\d+)");
     private static final Pattern SHARDS = Pattern.compile("shards=(\\d+) shardErrors=(\\d+) oov=(\\d+)(.*)");
@@ -55,9 +57,16 @@ final class AgentConnection implements AutoCloseable {
         }
     };
 
+    /** Settings that replace the run's system properties for this agent-core (two agent-cores with their own budgets). */
+    private Map<String, String> overrides = Map.of();
+
     private AgentConnection(DecisionClient client, Process process) {
         this.client = client;
         this.process = process;
+    }
+
+    private static String prop(Map<String, String> overrides, String key) {
+        return overrides.containsKey(key) ? overrides.get(key) : System.getProperty(key);
     }
 
     /**
@@ -74,18 +83,20 @@ final class AgentConnection implements AutoCloseable {
     }
 
     /** A spawned agent-core can be started again; others cannot. */
-    boolean restartable() {
+    @Override
+    public boolean restartable() {
         return process != null;
     }
 
     /** Stops this agent-core and starts a new one with the same settings. */
-    void restart() throws Exception {
+    @Override
+    public void restart() throws Exception {
         if (!restartable()) {
             throw new IllegalStateException("only a spawned agent-core can be restarted");
         }
         close();
         earlier.add(currentSummary());
-        AgentConnection fresh = spawn();
+        AgentConnection fresh = spawn(overrides);
         client = fresh.client;
         process = fresh.process;
         output = fresh.output;
@@ -98,7 +109,8 @@ final class AgentConnection implements AutoCloseable {
     /** Where the current process's summary is read (itself, or the connection a restart made). */
     private AgentConnection summarySource = this;
 
-    int restarts() {
+    @Override
+    public int restarts() {
         return restarts;
     }
 
@@ -126,31 +138,35 @@ final class AgentConnection implements AutoCloseable {
             return new AgentConnection(new ForgeAiClient(), null); // baseline: the real game's Forge AI decides
         }
         if (spec.equals("spawn")) {
-            return spawn();
+            return spawn(Map.of());
         }
         int colon = spec.lastIndexOf(':');
         return new AgentConnection(new GrpcDecisionClient(spec.substring(0, colon), Integer.parseInt(spec.substring(colon + 1))), null);
     }
 
-    private static AgentConnection spawn() throws IOException {
+    /**
+     * A spawned agent-core whose {@code overrides} (e.g. {@code magicdosa.agentBudgetMultiplier},
+     * {@code magicdosa.shards}) replace the run's system properties of the same name.
+     */
+    static AgentConnection spawn(Map<String, String> overrides) throws IOException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        List<String> cmd = new ArrayList<>(List.of(java, "-Xmx" + System.getProperty("magicdosa.agentXmx", "1g"), "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        List<String> cmd = new ArrayList<>(List.of(java, "-Xmx" + Objects.requireNonNullElse(prop(overrides, "magicdosa.agentXmx"), "1g"), "--add-opens=java.base/java.nio=ALL-UNNAMED",
             "-cp", System.getProperty("java.class.path"), "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes"));
-        String policy = System.getProperty("magicdosa.agentPolicy");
+        String policy = prop(overrides, "magicdosa.agentPolicy");
         if (policy != null) {
             // e.g. shadow-forge-ai: the shadow game's Forge AI decides (Forge runs in agent-core too: the same working
             // directory, forge-gui)
             cmd.addAll(List.of("--policy", policy));
         }
-        String budget = System.getProperty("magicdosa.agentBudget");
+        String budget = prop(overrides, "magicdosa.agentBudget");
         if (budget != null) {
             cmd.addAll(List.of("--budget", budget)); // --policy search: a fixed number of simulations per decision
         }
-        String perCandidate = System.getProperty("magicdosa.agentBudgetPerCandidate");
+        String perCandidate = prop(overrides, "magicdosa.agentBudgetPerCandidate");
         if (perCandidate != null) {
             // --policy search: simulations per root action (1x = 12), times the multiplier (2x, 4x)
             cmd.addAll(List.of("--budget-per-candidate", perCandidate, "--budget-multiplier",
-                System.getProperty("magicdosa.agentBudgetMultiplier", "1")));
+                Objects.requireNonNullElse(prop(overrides, "magicdosa.agentBudgetMultiplier"), "1")));
         }
         for (String k : System.getProperties().stringPropertyNames()) {
             if (k.startsWith("magicdosa.shadow") || k.startsWith("magicdosa.search") || k.equals("magicdosa.timing")) {
@@ -160,16 +176,18 @@ final class AgentConnection implements AutoCloseable {
         if (policy != null) {
             cmd.add(cmd.indexOf("-cp"), "-Dfile.encoding=UTF-8");
         }
-        String shards = System.getProperty("magicdosa.shards");
+        String shards = prop(overrides, "magicdosa.shards");
         if (shards != null) {
             cmd.addAll(List.of("--shards", shards)); // training samples (Arrow) of every finished game
         }
+        String label = prop(overrides, "magicdosa.agentLabel");
+        String tag = label == null ? "[agent-core] " : "[agent-core " + label + "] ";
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         BufferedReader in = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8));
         String line;
         int port = -1;
         while (port < 0 && (line = in.readLine()) != null) {
-            System.out.println("[agent-core] " + line);
+            System.out.println(tag + line);
             Matcher m = LISTENING.matcher(line);
             if (m.find()) {
                 port = Integer.parseInt(m.group(1));
@@ -180,11 +198,12 @@ final class AgentConnection implements AutoCloseable {
             throw new IOException("agent-core did not start");
         }
         AgentConnection c = new AgentConnection(new GrpcDecisionClient("localhost", port), p);
+        c.overrides = Map.copyOf(overrides);
         c.output = new Thread(() -> {
             try {
                 String l;
                 while ((l = in.readLine()) != null) {
-                    System.out.println("[agent-core] " + l);
+                    System.out.println(tag + l);
                     if (l.startsWith("agent-core: games finished=")) {
                         c.summary = l;
                     }
@@ -198,7 +217,8 @@ final class AgentConnection implements AutoCloseable {
         return c;
     }
 
-    DecisionClient client() {
+    @Override
+    public DecisionClient client() {
         return forwarding;
     }
 
