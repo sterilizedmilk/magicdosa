@@ -1,6 +1,8 @@
 package magicdosa.agent.search;
 
+import magicdosa.protocol.v1.LeafEvaluation;
 import magicdosa.protocol.v1.RolloutPolicy;
+import magicdosa.protocol.v1.SearchHorizon;
 
 import java.util.List;
 
@@ -26,9 +28,16 @@ import java.util.List;
  *                        controllers ({@link RolloutPolicy#ROLLOUT_POLICY_PLAIN_FORGE_AI}, the default, a temporary
  *                        early-stage choice until the network evaluates leaves) or the decision layer delegating to
  *                        Forge AI ({@link RolloutPolicy#ROLLOUT_POLICY_LAYER})
+ * @param horizon         where a simulation stops when the game has not ended (2026-11-26 user decision: the start of
+ *                        the next turn, {@link SearchHorizon#SEARCH_HORIZON_NEXT_TURN}; before it the root seat's next
+ *                        turn)
+ * @param leafEvaluation  how a simulation's last state is valued without a network (2026-11-26 user decision: Forge's
+ *                        score of the board as it stands, {@link LeafEvaluation#LEAF_EVALUATION_FORGE_STATIC}; before it
+ *                        with Forge's simulation of the coming combat)
  */
 public record SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
-                           double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout) {
+                           double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout,
+                           SearchHorizon horizon, LeafEvaluation leafEvaluation) {
 
     public SearchConfig {
         if (budget < 1) {
@@ -36,7 +45,8 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
         }
         if (exploration < 0 || wideningMin < 0 || wideningC <= 0 || wideningAlpha <= 0 || wideningAlpha > 1
                 || perCandidate < 0 || multiplier < 1
-                || (rollout != RolloutPolicy.ROLLOUT_POLICY_LAYER && rollout != RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI)) {
+                || (rollout != RolloutPolicy.ROLLOUT_POLICY_LAYER && rollout != RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI)
+                || !HORIZONS.contains(horizon) || !LEAF_EVALUATIONS.contains(leafEvaluation)) {
             throw new IllegalArgumentException("bad search settings");
         }
     }
@@ -44,7 +54,8 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** A fixed budget of {@code budget} simulations per decision. */
     public SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                         double wideningAlpha) {
-        this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1, DEFAULT_ROLLOUT);
+        this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1, DEFAULT_ROLLOUT, DEFAULT_HORIZON,
+            DEFAULT_LEAF_EVALUATION);
     }
 
     /** Simulations for a root with {@code actions} actions (its first step's candidates and "done"). */
@@ -55,16 +66,55 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** The budget by root: {@code perCandidate} simulations per root action, times {@code multiplier}. */
     public SearchConfig perCandidate(int simulationsPerAction, int times) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha,
-            simulationsPerAction, times, rollout);
+            simulationsPerAction, times, rollout, horizon, leafEvaluation);
     }
 
     /** The default rollout policy (2026-11-26 user decision, early stage only). */
     public static final RolloutPolicy DEFAULT_ROLLOUT = RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI;
+    /** The default horizon (2026-11-26 user decision, after the gate step-1 measurement in docs/search-perf.md). */
+    public static final SearchHorizon DEFAULT_HORIZON = SearchHorizon.SEARCH_HORIZON_NEXT_TURN;
+    /** The default leaf evaluation (2026-11-26 user decision, after the same measurement). */
+    public static final LeafEvaluation DEFAULT_LEAF_EVALUATION = LeafEvaluation.LEAF_EVALUATION_FORGE_STATIC;
 
-    /** "12 per candidate x4" or "budget 40", and the rollout policy. */
+    private static final List<SearchHorizon> HORIZONS = List.of(SearchHorizon.SEARCH_HORIZON_OWN_TURN,
+        SearchHorizon.SEARCH_HORIZON_NEXT_TURN);
+    private static final List<LeafEvaluation> LEAF_EVALUATIONS = List.of(LeafEvaluation.LEAF_EVALUATION_FORGE_COMBAT,
+        LeafEvaluation.LEAF_EVALUATION_FORGE_STATIC);
+
+    /** "12 per candidate x4" or "budget 40", the rollout policy, the horizon and the leaf evaluation. */
     public String describe() {
         return (perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier) + ", rollout "
-            + rolloutName(rollout);
+            + rolloutName(rollout) + ", horizon " + horizonName(horizon) + ", leaf " + leafName(leafEvaluation);
+    }
+
+    /** "own-turn" or "next-turn". */
+    public static String horizonName(SearchHorizon h) {
+        return h.name().substring("SEARCH_HORIZON_".length()).toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
+    /** The horizon named "own-turn" or "next-turn". */
+    public static SearchHorizon horizonNamed(String name) {
+        for (SearchHorizon h : HORIZONS) {
+            if (horizonName(h).equals(name)) {
+                return h;
+            }
+        }
+        throw new IllegalArgumentException("unknown horizon " + name + " (own-turn, next-turn)");
+    }
+
+    /** "forge-combat" or "forge-static". */
+    public static String leafName(LeafEvaluation e) {
+        return e.name().substring("LEAF_EVALUATION_".length()).toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
+    /** The leaf evaluation named "forge-combat" or "forge-static". */
+    public static LeafEvaluation leafNamed(String name) {
+        for (LeafEvaluation e : LEAF_EVALUATIONS) {
+            if (leafName(e).equals(name)) {
+                return e;
+            }
+        }
+        throw new IllegalArgumentException("unknown leaf evaluation " + name + " (forge-combat, forge-static)");
     }
 
     /** "layer" or "plain-forge-ai". */
@@ -84,7 +134,17 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     public SearchConfig withRollout(RolloutPolicy p) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, p);
+            multiplier, p, horizon, leafEvaluation);
+    }
+
+    public SearchConfig withHorizon(SearchHorizon h) {
+        return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
+            multiplier, rollout, h, leafEvaluation);
+    }
+
+    public SearchConfig withLeafEvaluation(LeafEvaluation e) {
+        return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
+            multiplier, rollout, horizon, e);
     }
 
     /** Phase-3 defaults with the given budget (UCB constant sqrt(2), opponent in the tree, widening past 20 actions). */
@@ -93,16 +153,19 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     }
 
     public SearchConfig withBudget(long b) {
-        return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout);
+        return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
+            horizon, leafEvaluation);
     }
 
     public SearchConfig withOpponentInTree(boolean in) {
-        return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout);
+        return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
+            horizon, leafEvaluation);
     }
 
     /**
      * Settings from system properties ({@code magicdosa.search.budget}, {@code .exploration}, {@code .opponentInTree},
-     * {@code .wideningMin}, {@code .wideningC}, {@code .wideningAlpha}, {@code .rollout}: layer or plain-forge-ai) over
+     * {@code .wideningMin}, {@code .wideningC}, {@code .wideningAlpha}, {@code .rollout}: layer or plain-forge-ai, {@code .horizon}: own-turn or next-turn, {@code .leafEval}:
+     * forge-combat or forge-static) over
      * {@link #of(long)}.
      */
     public static SearchConfig fromSystemProperties(long defaultBudget) {
@@ -113,6 +176,8 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             Integer.getInteger("magicdosa.search.wideningMin", d.wideningMin),
             Double.parseDouble(System.getProperty("magicdosa.search.wideningC", Double.toString(d.wideningC))),
             Double.parseDouble(System.getProperty("magicdosa.search.wideningAlpha", Double.toString(d.wideningAlpha))),
-            0, 1, rolloutNamed(System.getProperty("magicdosa.search.rollout", rolloutName(d.rollout))));
+            0, 1, rolloutNamed(System.getProperty("magicdosa.search.rollout", rolloutName(d.rollout))),
+            horizonNamed(System.getProperty("magicdosa.search.horizon", horizonName(d.horizon))),
+            leafNamed(System.getProperty("magicdosa.search.leafEval", leafName(d.leafEvaluation))));
     }
 }

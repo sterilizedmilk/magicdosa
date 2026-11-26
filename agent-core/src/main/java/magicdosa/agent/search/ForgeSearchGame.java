@@ -102,6 +102,8 @@ public final class ForgeSearchGame implements SearchGame {
 
     private final Anchor anchor;
     private magicdosa.protocol.v1.RolloutPolicy rollout = SearchConfig.DEFAULT_ROLLOUT;
+    private magicdosa.protocol.v1.SearchHorizon horizon = SearchConfig.DEFAULT_HORIZON;
+    private magicdosa.protocol.v1.LeafEvaluation leafEvaluation = SearchConfig.DEFAULT_LEAF_EVALUATION;
 
     /** Null: simulations play on to the horizon; else the network values the node where the walk leaves the tree. */
     private magicdosa.agent.model.Evaluator leafNetwork;
@@ -130,6 +132,14 @@ public final class ForgeSearchGame implements SearchGame {
         return this;
     }
 
+    /** The search's rollout policy, horizon and leaf evaluation ({@link SearchConfig}). */
+    public ForgeSearchGame withSettings(SearchConfig c) {
+        this.rollout = c.rollout();
+        this.horizon = c.horizon();
+        this.leafEvaluation = c.leafEvaluation();
+        return this;
+    }
+
     /** A copy of the shadow at the root seat's priority decision, to start anchored searches from. */
     public static Game anchorCopy(Game shadow) {
         GameCopier copier = new GameCopier(shadow).withStack(true);
@@ -154,18 +164,6 @@ public final class ForgeSearchGame implements SearchGame {
     static final double EVAL_SCALE = Double.parseDouble(System.getProperty("magicdosa.search.evalScale", "400"));
     /** Safeguard against a copy that never reaches the horizon (loop steps, never time). */
     static final int MAX_LOOP_STEPS = Integer.getInteger("magicdosa.search.maxLoopSteps", 20_000);
-    /**
-     * Measurement only (2026-11-26, options for the user, not recorded in SearchRun): where a rollout stops.
-     * "own-turn" (the default, 3단계 기획 쟁점 4): the start of the root seat's next turn; "turn": the start of the next
-     * turn, whoever's it is (the end of the root's turn).
-     */
-    static final boolean HORIZON_NEXT_TURN = "turn".equals(System.getProperty("magicdosa.search.horizon", "own-turn"));
-    /**
-     * Measurement only (2026-11-26, options for the user, not recorded in SearchRun): "forge" (the default) values a
-     * leaf with Forge's GameStateEvaluator including its simulation of the coming combat (one game copy per seat);
-     * "static" scores the leaf's board as it stands (the same score without the combat simulation).
-     */
-    static final boolean LEAF_STATIC = "static".equals(System.getProperty("magicdosa.search.leafEval", "forge"));
 
     private final Game shadow;
     private final ForgeGameSession shadowSession;
@@ -446,7 +444,8 @@ public final class ForgeSearchGame implements SearchGame {
                 if (client.leafValue != null) {
                     break; // Forge's own code caught the exception
                 }
-                if (ph.getTurn() > rootTurn && (HORIZON_NEXT_TURN || ph.getPlayerTurn() == me)) {
+                if (ph.getTurn() > rootTurn && (horizon == magicdosa.protocol.v1.SearchHorizon.SEARCH_HORIZON_NEXT_TURN
+                        || ph.getPlayerTurn() == me)) {
                     count("horizon");
                     break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
                 }
@@ -473,22 +472,22 @@ public final class ForgeSearchGame implements SearchGame {
         }
     }
 
+    /**
+     * Forge's score of a board without the combat simulation: {@code GameStateEvaluator} has no public method for it
+     * (docs/upstream-candidates.md 18), so its private one is called; a Forge without it fails here, at class load.
+     */
     private static final java.lang.reflect.Method SCORE_IMPL;
 
     static {
-        java.lang.reflect.Method m = null;
-        if (LEAF_STATIC) {
-            try {
-                m = GameStateEvaluator.class.getDeclaredMethod("getScoreForGameStateImpl", Game.class, Player.class);
-                m.setAccessible(true);
-            } catch (NoSuchMethodException e) {
-                throw new IllegalStateException(e);
-            }
+        try {
+            SCORE_IMPL = GameStateEvaluator.class.getDeclaredMethod("getScoreForGameStateImpl", Game.class, Player.class);
+            SCORE_IMPL.setAccessible(true);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException(e);
         }
-        SCORE_IMPL = m;
     }
 
-    /** Forge's score of the board as it stands, without its combat simulation (measurement option "static"). */
+    /** Forge's score of the board as it stands, without its combat simulation ({@code forge-static}). */
     private static double staticScore(GameStateEvaluator ev, Game copy, Player p) {
         if (!p.isInGame()) {
             return ev.getScoreForGameState(copy, p).value; // the terminal score
@@ -512,8 +511,9 @@ public final class ForgeSearchGame implements SearchGame {
         }
         Player opp = me.getWeakestOpponent();
         GameStateEvaluator ev = new GameStateEvaluator();
-        double mine = LEAF_STATIC ? staticScore(ev, copy, me) : ev.getScoreForGameState(copy, me).value;
-        double theirs = LEAF_STATIC ? staticScore(ev, copy, opp) : ev.getScoreForGameState(copy, opp).value;
+        boolean staticScore = leafEvaluation == magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_FORGE_STATIC;
+        double mine = staticScore ? staticScore(ev, copy, me) : ev.getScoreForGameState(copy, me).value;
+        double theirs = staticScore ? staticScore(ev, copy, opp) : ev.getScoreForGameState(copy, opp).value;
         if (GameStateEvaluator.isWinning((int) mine)) {
             return 1;
         }
