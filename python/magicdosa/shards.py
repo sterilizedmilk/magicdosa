@@ -34,13 +34,18 @@ def metadata(table: pa.Table) -> Dict[str, str]:
     return {k.decode(): v.decode() for k, v in raw.items()}
 
 
-def read_shard(path: Path | str) -> pa.Table:
-    """One game's samples; refuses a shard whose versions differ from versions.py (design: 버전 검증)."""
-    with pa.memory_map(str(path)) as source:
-        table = ipc.open_file(source).read_all()
+def read_shard(path: Path | str, protocols: Optional[Sequence[int]] = None) -> pa.Table:
+    """One game's samples; refuses a shard whose versions differ from versions.py (design: 버전 검증).
+    `protocols` lists further accepted protocol versions, for training on older shards whose tensors are the same:
+    the encoder and vocabulary versions must still match exactly (the encoder version is what fixes the tensors)."""
+    with open(str(path), "rb") as f:          # read fully: a memory map keeps the file locked on Windows
+        table = ipc.open_file(pa.BufferReader(f.read())).read_all()
     meta = metadata(table)
-    expected = {"protocol_version": versions.PROTOCOL_VERSION, "encoder_version": versions.ENCODER_VERSION,
-                "vocab_version": versions.VOCAB_VERSION}
+    accepted = {str(versions.PROTOCOL_VERSION)} | {str(p) for p in (protocols or ())}
+    if meta.get("protocol_version") not in accepted:
+        raise VersionMismatch(f"{path}: protocol_version {meta.get('protocol_version')}, expected one of "
+                              f"{sorted(accepted)}")
+    expected = {"encoder_version": versions.ENCODER_VERSION, "vocab_version": versions.VOCAB_VERSION}
     for key, value in expected.items():
         if meta.get(key) != str(value):
             raise VersionMismatch(f"{path}: {key} {meta.get(key)}, expected {value}")

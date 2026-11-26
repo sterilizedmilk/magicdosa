@@ -28,8 +28,8 @@ class NotImitation(ValueError):
     """A shard without the imitation source tag was given to the imitation loader."""
 
 
-def read_imitation_shard(path: Path | str) -> pa.Table:
-    table = shards.read_shard(path)
+def read_imitation_shard(path: Path | str, protocols: Optional[Sequence[int]] = None) -> pa.Table:
+    table = shards.read_shard(path, protocols)
     source = shards.metadata(table).get("source", "")
     if not source.startswith(IMITATION_PREFIX):
         raise NotImitation(f"{path}: source {source!r}")
