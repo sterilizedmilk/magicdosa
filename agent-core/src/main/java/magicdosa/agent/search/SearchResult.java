@@ -43,7 +43,12 @@ public final class SearchResult {
         /** Equal visits; the higher mean value decided. */
         MEAN_VALUE,
         /** Equal visits and equal mean value; a pick drawn from the search's seed decided. */
-        SEED
+        SEED,
+        /**
+         * Data runs only ({@code -Dmagicdosa.search.sampleTurns}): the played action was drawn in proportion to the visits
+         * from the search's seed; the visit ratios are the search's as always.
+         */
+        SAMPLED
     }
 
     /** An action chosen at a step and how a tie was broken. */

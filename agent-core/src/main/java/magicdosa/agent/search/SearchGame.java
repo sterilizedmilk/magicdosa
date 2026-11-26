@@ -20,6 +20,11 @@ public interface SearchGame {
     /** Keys of the root decision's candidates, in candidate order (the real request's candidates). */
     List<String> rootActions();
 
+    /** The game turn of the root decision (0 when unknown): early-turn sampling of the played move uses it. */
+    default int rootTurn() {
+        return 0;
+    }
+
     /**
      * Prepares one simulation in a new determinization drawn with {@code rng}; null when no determinization fits
      * (counted, not searched). Must be a pure function of the game state and {@code rng}.
