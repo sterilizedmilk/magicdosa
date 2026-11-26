@@ -257,6 +257,26 @@ candidate are flat, gen1 learns that spread (soft CE 2.9 → 1.0), and gen0's pe
 argmax more often. The searches that use it as a leaf read only the value. `gen1-b.onnx` (4.8 MB, SHA-256 6fe26256…)
 matches PyTorch to 9e-6 (logits) and 5e-6 (value) on two gate games.
 
+## Generation 2: first self-play batch
+
+Data (2026-11-27): the 1034 self-play games of `E:\magicdosa-runs\selfplay\b0000`-`b0020` (Izzet mirror, both seats
+1x search, protocol 15, encoder 5; b0000 used the gen0-run2 leaf, b0001-b0020 gen1-b). Turns 1-4 were played by
+sampling, so the played move is not always the most-visited one; the visit-ratio targets are unaffected. No gate
+shards and no imitation rows. Split by match: train 1618 shards (167k rows, 143k policy rows), validation 208,
+test 242. Run C (`E:\magicdosa-runs\gen2\c`): init gen1-b, lr 1e-4, 4 epochs, 1993 s on 4 threads. The value
+overfits after epoch 1 again (validation BCE 0.60 → 0.76, train 0.47 → 0.27); epoch 1 is kept.
+
+| Set | Model | Top-1 vs search | Soft CE | Value Brier (base rate) | AUC | AUC turns 1-2 / 3-4 / 5-6 / 7-8 / 9-10 / 11-14 |
+| --- | --- | --- | --- | --- | --- | --- |
+| validation | gen0-run2 | 72.9% | 3.25 | 0.254 (0.250) | 0.683 | 0.52 / 0.61 / 0.68 / 0.74 / 0.80 / 0.83 |
+| validation | gen1-b | 66.9% | 1.20 | 0.235 | 0.717 | 0.57 / 0.62 / 0.73 / 0.78 / 0.82 / 0.87 |
+| validation | gen2-c | 77.7% | 1.17 | 0.203 | 0.782 | 0.67 / 0.71 / 0.81 / 0.86 / 0.90 / 0.85 |
+| test | gen0-run2 | 73.6% | 3.24 | 0.235 (0.250) | 0.720 | 0.56 / 0.67 / 0.75 / 0.78 / 0.77 / 0.80 |
+| test | gen1-b | 68.0% | 1.18 | 0.215 | 0.761 | 0.61 / 0.70 / 0.77 / 0.83 / 0.83 / 0.87 |
+| test | gen2-c | 78.1% | 1.15 | 0.200 | 0.792 | 0.67 / 0.73 / 0.79 / 0.84 / 0.85 / 0.89 |
+
+`gen2-c.onnx` (SHA-256 669387b3…) matches PyTorch to 3e-6 (logits) and 2e-6 (value) on two self-play games.
+
 ## Placeholders
 
 Everything here exists only to make the pipeline run. None of it is a design decision.
