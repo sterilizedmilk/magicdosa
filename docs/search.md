@@ -106,6 +106,11 @@ This file records how the code does it and what is not done yet. It changes no d
   failed; each failure inspected (3 with the diff printed, 4 more by their recovery counts) rebuilt at the turn-3
   start. Fixed by issuing IDs in Forge's own order (seats' command zones, then
   delayed triggers as registered).
+- Search copies (2026-11-26): `GameCopier` now carries delayed triggers, which Forge's own copier leaves out: the
+  registered ones (this turn's, later turns', a player's next turn) and the ones queued as a cleanup command
+  (Mishra's Bauble's "next turn": a lambda whose captured trigger is read by reflection), each bound to the copy's
+  source card and players. Before, a Bauble activated before the root never drew in a simulation. Other cleanup
+  commands are still left out. Test: `GameCopierDelayedTriggerTest`.
 - A shadow rebuilt from a turn-start snapshot does not recreate delayed triggers (registered, or still queued as a
   phase "until" command): a rebuild in a turn where one is pending loses it. Not fixed.
 - Inner roots whose replay crosses an action of the other seat (it cast or activated something since the anchor)

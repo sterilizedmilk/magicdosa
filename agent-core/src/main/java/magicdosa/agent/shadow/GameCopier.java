@@ -211,6 +211,8 @@ public class GameCopier {
             }
         }
 
+        copyDelayedTriggers(newGame);
+
         // TODO update thisTurnCast
 
         if (advanceToPhase != null) {
@@ -638,6 +640,127 @@ public class GameCopier {
             // the field itself: setPlotted(true) runs a BecomesPlotted trigger
             setPlotted(newCard);
         }
+    }
+
+    private static final java.lang.reflect.Field DELAYED = declared(forge.game.trigger.TriggerHandler.class, "delayedTriggers");
+    private static final java.lang.reflect.Field THIS_TURN_DELAYED = declared(forge.game.trigger.TriggerHandler.class, "thisTurnDelayedTriggers");
+    private static final java.lang.reflect.Field PLAYER_DEFINED_DELAYED = declared(forge.game.trigger.TriggerHandler.class, "playerDefinedDelayedTriggers");
+    private static final java.lang.reflect.Field PHASE_UNTIL = declared(forge.game.phase.Phase.class, "until");
+
+    private static java.lang.reflect.Field declared(Class<?> c, String name) {
+        try {
+            java.lang.reflect.Field f = c.getDeclaredField(name);
+            f.setAccessible(true);
+            return f;
+        } catch (NoSuchFieldException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /** Delayed triggers the copy could not take over (their source has no copy); diagnostics. */
+    private int delayedTriggersLeftOut;
+
+    public int delayedTriggersLeftOut() {
+        return delayedTriggersLeftOut;
+    }
+
+    /**
+     * Delayed triggers (Mishra's Bauble's "draw a card at the beginning of the next turn's upkeep"), which Forge's copier
+     * leaves out (upstream candidate): the registered ones, the ones for a player's next turn, and the ones queued as a
+     * cleanup command until the turn ends (NextTurn, UpcomingTurn: DelayedTriggerEffect registers them at the cleanup).
+     * A cleanup command is an opaque lambda; the trigger it holds is found among its captured fields (read-only
+     * reflection, nothing in Forge is replaced). Other cleanup commands stay left out, as before.
+     */
+    @SuppressWarnings("unchecked")
+    private void copyDelayedTriggers(Game newGame) {
+        forge.game.trigger.TriggerHandler from = origGame.getTriggerHandler();
+        forge.game.trigger.TriggerHandler to = newGame.getTriggerHandler();
+        try {
+            List<forge.game.trigger.Trigger> thisTurn = (List<forge.game.trigger.Trigger>) THIS_TURN_DELAYED.get(from);
+            for (forge.game.trigger.Trigger t : new ArrayList<>((List<forge.game.trigger.Trigger>) DELAYED.get(from))) {
+                forge.game.trigger.Trigger c = copyTrigger(t);
+                if (c == null) {
+                    continue;
+                }
+                if (thisTurn.stream().anyMatch(x -> x == t)) {
+                    to.registerThisTurnDelayedTrigger(c);
+                } else {
+                    to.registerDelayedTrigger(c);
+                }
+            }
+            Multimap<Player, forge.game.trigger.Trigger> byPlayer =
+                (Multimap<Player, forge.game.trigger.Trigger>) PLAYER_DEFINED_DELAYED.get(from);
+            for (Map.Entry<Player, forge.game.trigger.Trigger> e : new ArrayList<>(byPlayer.entries())) {
+                forge.game.trigger.Trigger c = copyTrigger(e.getValue());
+                Player p = playerMap.get(e.getKey());
+                if (c != null && p != null) {
+                    to.registerPlayerDefinedDelayedTrigger(p, c);
+                }
+            }
+            for (forge.GameCommand cmd : new ArrayList<>((List<forge.GameCommand>) PHASE_UNTIL.get(origGame.getCleanup()))) {
+                forge.game.trigger.Trigger t = capturedTrigger(cmd);
+                if (t == null) {
+                    continue;
+                }
+                forge.game.trigger.Trigger c = copyTrigger(t);
+                if (c == null) {
+                    continue;
+                }
+                if (t.hasParam("NextTurn")) {
+                    newGame.getCleanup().addUntil(() -> to.registerThisTurnDelayedTrigger(c));
+                } else if (t.hasParam("UpcomingTurn")) {
+                    newGame.getCleanup().addUntil(() -> to.registerDelayedTrigger(c));
+                }
+            }
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The trigger a cleanup command holds (a DelayedTriggerEffect lambda), or null. */
+    private static forge.game.trigger.Trigger capturedTrigger(forge.GameCommand cmd) {
+        for (java.lang.reflect.Field f : cmd.getClass().getDeclaredFields()) {
+            if (forge.game.trigger.Trigger.class.isAssignableFrom(f.getType())) {
+                try {
+                    f.setAccessible(true);
+                    return (forge.game.trigger.Trigger) f.get(cmd);
+                } catch (IllegalAccessException | RuntimeException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** A copy of a delayed trigger bound to the copy's source card and players; null when its source has no copy. */
+    private forge.game.trigger.Trigger copyTrigger(forge.game.trigger.Trigger t) {
+        Card host = t.getHostCard();
+        Card newHost = host == null ? null : cardMap.get(host);
+        if (newHost == null && host != null) {
+            Card current = origGame.getCardState(host, null);
+            newHost = current == null ? null : cardMap.get(current);
+        }
+        if (newHost == null) {
+            delayedTriggersLeftOut++;
+            return null;
+        }
+        SpellAbility over = t.getOverridingAbility();
+        SpellAbility newOver = null;
+        if (over != null) {
+            Player activator = over.getActivatingPlayer() == null ? null : playerMap.get(over.getActivatingPlayer());
+            newOver = activator == null ? over.copy(newHost, true) : over.copy(newHost, activator, true);
+        }
+        forge.game.trigger.Trigger c = t.copy(newHost, true, false, newOver);
+        if (t.getSpawningAbility() != null) {
+            SpellAbility spawn = t.getSpawningAbility().copy(newHost, true);
+            Player activator = spawn.getActivatingPlayer() == null ? null : playerMap.get(spawn.getActivatingPlayer());
+            if (activator != null) {
+                spawn.setActivatingPlayer(activator);
+            }
+            c.setSpawningAbility(spawn);
+        }
+        c.setActiveZone(null);
+        return c;
     }
 
     private static final java.lang.reflect.Field PLOTTED;
