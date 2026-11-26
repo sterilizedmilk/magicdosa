@@ -97,6 +97,17 @@ This file records how the code does it and what is not done yet. It changes no d
   base 4100 that had mismatches 8,712 / 8,712 (its other 5 games had none already). In the same run the shadow lost step once (a triggered-ability
   answer that was not a shadow candidate: two decisions "search skipped"); the same command with logs did not
   repeat it (games identical up to that decision), so it depends on timing and is not diagnosed yet.
+  Diagnosed 2026-11-26 (gate 1 step 1, w1 `w14-g2`, two Mishra's Bauble activations in one turn): Bauble's "next
+  turn" delayed trigger is queued as a cleanup "until" command and registered at the cleanup, so both triggers
+  appear in the same effect sync. `GameFacts.syncEffects` issued their effect IDs in `IdentityHashMap` order
+  (identity hash codes: a different order each run, in the real game as in the shadow), so the shadow's turn-3 start
+  sometimes swapped the two IDs, the fingerprint differed (L2), recovery 2 rebuilt from the snapshot, and the rebuild
+  has no delayed triggers: the trigger-order request found no shadow candidate. Replaying that log 28 times: 15
+  failed; each failure inspected (3 with the diff printed, 4 more by their recovery counts) rebuilt at the turn-3
+  start. Fixed by issuing IDs in Forge's own order (seats' command zones, then
+  delayed triggers as registered).
+- A shadow rebuilt from a turn-start snapshot does not recreate delayed triggers (registered, or still queued as a
+  phase "until" command): a rebuild in a turn where one is pending loses it. Not fixed.
 - Inner roots whose replay crosses an action of the other seat (it cast or activated something since the anchor)
   fail every simulation and are answered at random (search failed); the rate is to be measured.
 - Scry, surveil and "top X" choices are tree steps like other multi-selects; the >24-combination rule (one card at a

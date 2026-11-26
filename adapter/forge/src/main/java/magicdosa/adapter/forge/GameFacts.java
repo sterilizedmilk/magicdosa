@@ -76,19 +76,25 @@ final class GameFacts {
     /** Effects now: Forge's effect cards (lasting effects, shields) and registered delayed triggers. */
     EffectChanges syncEffects() {
         Game game = session.game();
+        // in Forge's own order (seats, command zone, then delayed triggers as registered): effects that appear in one
+        // sync (two delayed triggers registered by the same cleanup) take their IDs in an order the shadow repeats; an
+        // identity map's iteration order follows identity hash codes and differs between runs
+        List<Object> order = new ArrayList<>();
         Map<Object, Boolean> now = new IdentityHashMap<>();
         for (Player p : game.getRegisteredPlayers()) {
             for (Card c : p.getCardsIn(ZoneType.Command)) {
-                if (c.isImmutable() && !c.isEmblem()) {
-                    now.put(c, true);
+                if (c.isImmutable() && !c.isEmblem() && now.put(c, true) == null) {
+                    order.add(c);
                 }
             }
         }
         for (Trigger t : delayedTriggers(game)) {
-            now.put(t, true);
+            if (now.put(t, true) == null) {
+                order.add(t);
+            }
         }
         List<Effect> created = new ArrayList<>();
-        for (Object o : now.keySet()) {
+        for (Object o : order) {
             if (!effectIds.containsKey(o)) {
                 long id = session.ids().issue();
                 effectIds.put(o, id);
