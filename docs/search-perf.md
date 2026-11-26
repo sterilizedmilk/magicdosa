@@ -194,7 +194,8 @@ sample, early turns). The gen-0 network changes far more (63%; 34 of 62 differ f
 switched: horizon, leaf value and network leaf are the user's decision. These switches are not recorded in
 `SearchRun`; a setting adopted for gates or data needs a protocol field.
 
-**Decision (2026-11-26, user):** horizon at the next turn and the static leaf score become the defaults, recorded in
+**Decision (2026-11-26, user):** horizon at the next turn and the static leaf score become temporary defaults for
+speed, to be switched off later (they weaken play; nothing is to be built on them), recorded in
 `SearchRun.horizon` / `leaf_evaluation` (protocol 15; the switches are now `next-turn`/`own-turn` and
 `forge-static`/`forge-combat`). The network leaf stays off. With the new defaults the two games' 149 searches equal
 the "Both" row's (same visits and root values).

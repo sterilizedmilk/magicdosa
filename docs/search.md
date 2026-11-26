@@ -68,17 +68,20 @@ This file records how the code does it and what is not done yet. It changes no d
 - Optional leaf network (`-Dmagicdosa.search.leafModel`, off by default; docs/inference.md): a simulation stops at the
   expanded node and the network values it instead of the rollout and Forge's evaluator.
 - Horizon (`SearchConfig.horizon`, `-Dmagicdosa.search.horizon`, recorded in `SearchRun.horizon` and the shards'
-  `search_horizon` column, protocol 15): **`next-turn` (default since 2026-11-26, user decision):** the start of the
-  next turn, whoever's it is; `own-turn` (item 4, the default before): the start of the root seat's next turn. Either
+  `search_horizon` column, protocol 15): **`next-turn` (temporary default since 2026-11-26, a speed setting the user
+  will switch off later: it weakens play):** the start of the next turn, whoever's it is; `own-turn` (item 4, the
+  policy setting): the start of the root seat's next turn. Either
   way the game end stops a simulation too.
 - Value: 1 / 0 / 0.5 for a result, else `1 / (1 + exp(-(score(me) - score(them)) / 400))` with Forge's
   `GameStateEvaluator` score (`-Dmagicdosa.search.evalScale`). Which score (`SearchConfig.leafEvaluation`,
   `-Dmagicdosa.search.leafEval`, recorded in `SearchRun.leaf_evaluation` and `search_leaf_evaluation`, protocol 15):
-  **`forge-static` (default since 2026-11-26, user decision):** the board as it stands (Forge's private
+  **`forge-static` (temporary default since 2026-11-26, a speed setting the user will switch off later):** the board
+  as it stands (Forge's private
   `getScoreForGameStateImpl`, called by reflection: no public method, docs/upstream-candidates.md 18);
-  `forge-combat` (the default before): `getScoreForGameState`, which first copies the game and plays the coming
+  `forge-combat` (the policy setting): `getScoreForGameState`, which first copies the game and plays the coming
   combat, once per seat. The 400 scale was set with the combat score and was not re-tuned for the static one.
-- Why these defaults: at the gate's step 1 the two together cut a simulation's search-thread CPU by 49% (116.7 ->
+- Why these temporary defaults: speed only (2026-11-26 user decision; they cost playing strength and nothing should
+  be built on them). At the gate's step 1 the two together cut a simulation's search-thread CPU by 49% (116.7 ->
   59.1 ms), and changed 34 of 149 answers, fewer than reseeding the default search changes (40); docs/search-perf.md.
 
 ## Not done yet
