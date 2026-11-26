@@ -15,7 +15,8 @@ are already there). All shards must carry the current encoder and vocabulary ver
 older protocol versions accepted (their tensors are the same when the encoder version is).
 
 Writes to --out: `log.jsonl`, `best.pt` (lowest validation loss), `last.pt`, `split.json`, `metrics.json` (the init
-checkpoint and the best one on validation and test).
+checkpoint, any `--compare` checkpoints and the best one on validation and test). `--eval-only` evaluates the init
+and `--compare` checkpoints on the same split (it depends only on the runs and fractions) without training.
 """
 
 from __future__ import annotations
@@ -198,6 +199,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     p.add_argument("--imitation", nargs="*", default=[], help="imitation run dirs: value rows only")
     p.add_argument("--imitation-games", type=int, default=0, help="imitation games loaded (a fixed random subset)")
     p.add_argument("--imitation-batch", type=int, default=64, help="imitation rows added to every training batch")
+    p.add_argument("--compare", nargs="*", default=[], help="further checkpoints evaluated on validation and test")
+    p.add_argument("--eval-only", action="store_true", help="evaluate --init and --compare, no training")
     p.add_argument("--seed", type=int, default=1)
     a = p.parse_args(argv)
     from .pretrain import _setup_threads
@@ -243,6 +246,13 @@ def main(argv: Iterable[str] | None = None) -> None:
     init, ck = load_net(a.init)
     metrics = {"init": a.init, "init_eval": {k: evaluate(init, tables[k], all_rows[k]) for k in ("val", "test")}}
     write({"event": "init", **metrics["init_eval"]["val"], "split": "val"})
+    for c in a.compare:
+        other, _ = load_net(c)
+        metrics.setdefault("compare", {})[c] = {k: evaluate(other, tables[k], all_rows[k]) for k in ("val", "test")}
+        write({"event": "compare", "checkpoint": c, **metrics["compare"][c]["val"], "split": "val"})
+    if a.eval_only:
+        (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
+        return
 
     net, _ = load_net(a.init)
     torch.manual_seed(a.seed)
