@@ -152,6 +152,11 @@ final class AgentConnection implements AutoCloseable, RandomGames.Agents {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         List<String> cmd = new ArrayList<>(List.of(java, "-Xmx" + Objects.requireNonNullElse(prop(overrides, "magicdosa.agentXmx"), "1g"), "--add-opens=java.base/java.nio=ALL-UNNAMED",
             "-cp", System.getProperty("java.class.path"), "magicdosa.agent.AgentCore", "--port", "0", "--until-stdin-closes"));
+        String jvmArgs = prop(overrides, "magicdosa.agentJvmArgs");
+        if (jvmArgs != null && !jvmArgs.isBlank()) {
+            // e.g. "-XX:ParallelGCThreads=2 -XX:ConcGCThreads=1": several agent-cores on one machine
+            cmd.addAll(cmd.indexOf("-cp"), List.of(jvmArgs.trim().split("\\s+")));
+        }
         String policy = prop(overrides, "magicdosa.agentPolicy");
         if (policy != null) {
             // e.g. shadow-forge-ai: the shadow game's Forge AI decides (Forge runs in agent-core too: the same working
