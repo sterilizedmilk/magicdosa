@@ -88,6 +88,11 @@ public final class HeadToHead {
         String prefix = args.length > 5 ? args[5] : "h";
         String labelA = label("A", "1");
         String labelB = label("B", "4");
+        if (labelA.equals(labelB)) {
+            // self-play (1x vs 1x): each side keeps its own shards folder and its own name in the report
+            labelA += "-A";
+            labelB += "-B";
+        }
         RandomGames.initForge();
         CardKeys keys = CardKeys.load();
         AgentConnection a = AgentConnection.spawn(settings(logDir, "A", labelA));
