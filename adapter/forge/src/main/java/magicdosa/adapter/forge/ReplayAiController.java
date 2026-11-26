@@ -1409,6 +1409,35 @@ public class ReplayAiController extends ObservedAiController {
         return out;
     }
 
+    /** Puts the library cards named by {@code ids} (in that order) right under {@code top}, which stays on top. */
+    private void placeUnder(CardCollection top, List<Long> ids) {
+        forge.game.zone.PlayerZone lib = player.getZone(ZoneType.Library);
+        List<Card> rest = new ArrayList<>();
+        lib.getCards().forEach(rest::add);
+        rest.removeAll(top);
+        List<Card> next = new ArrayList<>();
+        for (long id : ids) {
+            Card c = id < 0 ? null : card(id);
+            if (c == null || !rest.contains(c)) {
+                break; // a slot whose card is hidden, or one not in this library: the order past it is not known
+            }
+            next.add(c);
+            rest.remove(c);
+        }
+        if (next.isEmpty()) {
+            return;
+        }
+        List<Card> order = new ArrayList<>();
+        lib.getCards().forEach(c -> {
+            if (top.contains(c)) {
+                order.add(c);
+            }
+        });
+        order.addAll(next);
+        order.addAll(rest);
+        lib.setCards(order);
+    }
+
     private static CardCollection byPosition(Iterable<Card> cards, java.util.Map<Card, Integer> pos) {
         List<Card> out = new ArrayList<>();
         cards.forEach(out::add);
@@ -1419,12 +1448,19 @@ public class ReplayAiController extends ObservedAiController {
     @Override
     protected org.apache.commons.lang3.tuple.ImmutablePair<CardCollection, CardCollection> answerArrangeForScry(CardCollection topN) {
         Event e = answering > 1 ? null : source.takeChoice(seat, "arrangeForScry");
-        java.util.Map<Card, Integer> pos = realPositions(e);
-        if (pos == null || e.getResolutionChoice().getValuesCount() < 1) {
+        if (e == null || e.getResolutionChoice().getValuesCount() < 1) {
             return super.answerArrangeForScry(topN);
         }
+        java.util.Map<Card, Integer> pos = realPositions(e);
+        // how many stay on top is public (the recorded choice), which ones is hidden
         int onTop = Math.min((int) e.getResolutionChoice().getValues(0).getNumber(), topN.size());
-        CardCollection ordered = byPosition(topN, pos);
+        CardCollection ordered = pos == null ? new CardCollection(topN) : byPosition(topN, pos);
+        if (source.noRecordMeansNone()) {
+            // verification 2: the cards the record takes from this library after the scry (a draw right after it, with
+            // no decision of the viewer in between to put them on top) go just under the scried cards
+            List<Long> after = source.libraryAfter(seat, e.getSeq());
+            placeUnder(topN, after.size() > topN.size() ? after.subList(topN.size(), after.size()) : List.of());
+        }
         CardCollection top = new CardCollection(ordered.subList(0, onTop));
         CardCollection bottom = new CardCollection(ordered.subList(onTop, ordered.size()));
         return org.apache.commons.lang3.tuple.ImmutablePair.of(top, bottom);
