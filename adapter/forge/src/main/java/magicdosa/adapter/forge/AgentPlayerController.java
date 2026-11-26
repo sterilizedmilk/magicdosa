@@ -2020,6 +2020,7 @@ public class AgentPlayerController extends ObservedAiController {
     protected Card answerChooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
                                               CardCollection fetchList, DelayedReveal delayedReveal, String selectPrompt,
                                               boolean isOptional, Player decider) {
+        declinedZoneChange = false;
         List<Card> options = toList(fetchList);
         if (options.isEmpty()) {
             return null;
@@ -2034,8 +2035,17 @@ public class AgentPlayerController extends ObservedAiController {
             return forgeAi(() -> super.answerChooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal,
                 selectPrompt, isOptional, decider));
         }
+        declinedZoneChange = chosen.isEmpty();
         return chosen.isEmpty() ? null : chosen.get(0);
     }
+
+    /**
+     * The seat just declined to take a card in a library search (answered "done" with none): Forge then asks "Cancel
+     * search?" (ChangeZoneEffect, confirmAction ChangeZoneGeneral), and "no" only asks the same selection again, which
+     * adds no outcome and let a search loop on the pair (gate 1 step 3, 2026-11-26: 168 rounds in one game). The
+     * confirmation takes the seat's own answer: yes.
+     */
+    private boolean declinedZoneChange;
 
     @Override
     protected List<Card> answerChooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa,
@@ -2110,6 +2120,11 @@ public class AgentPlayerController extends ObservedAiController {
     @Override
     protected boolean answerConfirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options,
                                  Card cardToShow, Map<String, Object> params) {
+        boolean declined = declinedZoneChange;
+        declinedZoneChange = false;
+        if (declined && mode == PlayerActionConfirmMode.ChangeZoneGeneral) {
+            return true; // "cancel search?" right after the seat took no card: its own answer
+        }
         try {
             return yesNo("confirmAction", sa, message,
                 () -> forgeAi(() -> super.answerConfirmAction(sa, mode, message, options, cardToShow, params)));
