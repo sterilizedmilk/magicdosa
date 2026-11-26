@@ -64,26 +64,30 @@ public final class SearchReplay {
             throws Exception {
         List<LogRecord> records = GameRecord.read(file);
         LogHeader h = records.get(0).getHeader();
+        // one seat's agent-core, as it was told at the game start (a head-to-head log has both seats as agents, each
+        // played by its own agent-core: -Dmagicdosa.replaySeat picks one, default the first agent seat)
+        int seat = Integer.getInteger("magicdosa.replaySeat", h.getAgentSeats(0));
+        List<Integer> seats = List.of(seat);
         Hello hello = Hello.newBuilder().setGameId(h.getGameId()).setMatchId(h.getMatchId())
-            .setGameNumber(h.getGameNumber()).setMode(h.getMode()).addAllAgentSeats(h.getAgentSeatsList()).build();
+            .setGameNumber(h.getGameNumber()).setMode(h.getMode()).addAllAgentSeats(seats).build();
         LiveShadow shadow = new LiveShadow(hello, hello.getAgentSeats(0), keys, new RandomPolicy(), config);
         // the order agent-core received the game in (as LiveReplay)
         List<Object[]> stream = new ArrayList<>();
         for (LogRecord r : records) {
             switch (r.getRecordCase()) {
                 case EVENT -> {
-                    if (h.getAgentSeatsList().contains(r.getEvent().getViewerSeat())) {
+                    if (seats.contains(r.getEvent().getViewerSeat())) {
                         stream.add(new Object[] {r.getEvent().getSeq(), 0, 0L, r});
                     }
                 }
                 case SNAPSHOT -> {
-                    if (h.getAgentSeatsList().contains(r.getSnapshot().getSeat())) {
+                    if (seats.contains(r.getSnapshot().getSeat())) {
                         stream.add(new Object[] {r.getSnapshot().getSeq(), 1, 0L, r});
                     }
                 }
                 case DECISION -> {
                     if (r.getDecision().hasRequest() && r.getDecision().hasResponse()
-                            && h.getAgentSeatsList().contains(r.getDecision().getRequest().getSeat())) {
+                            && seats.contains(r.getDecision().getRequest().getSeat())) {
                         stream.add(new Object[] {r.getDecision().getRequest().getAppliedSeq(), 2,
                             r.getDecision().getRequest().getDecisionId(), r});
                     }

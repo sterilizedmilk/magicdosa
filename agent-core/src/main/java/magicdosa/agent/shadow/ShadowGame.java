@@ -2239,6 +2239,9 @@ public final class ShadowGame {
                     List<Fingerprint.Diff> diffs = Fingerprint.diff(a, b);
                     for (Fingerprint.Diff d : diffs) {
                         sample(result.samples, "turn " + turn + " start: " + d);
+                        if (Boolean.getBoolean("magicdosa.search.debug")) {
+                            System.out.println("shadow debug: turn " + turn + " start differs: " + d); // diagnosis only
+                        }
                     }
                     boolean critical = diffs.stream().anyMatch(Fingerprint.Diff::critical);
                     if (!critical && !forcedRegeneration) {
