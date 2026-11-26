@@ -222,6 +222,40 @@ agent-core cannot load it yet. Missing on the Java side: an ONNX Runtime Java de
 `Encoder.Encoded` into the contract's tensors (int64 indices, float32 features, bool masks, batch 1, one masked slot
 for an empty list) and reads `policy_logits` / `value`; a check of the ONNX `metadata_props` (protocol, encoder,
 vocabulary and model versions) before a game starts, as `Agent.check` does for the encoder version today.
+(Since then agent-core loads it as the search leaf: `docs/inference.md`.)
+
+## Generation 1: search shards
+
+`python -m magicdosa.finetune --runs <dirs> --init <checkpoint> --out <dir> [--protocols 14] [--imitation <dirs>
+--imitation-games N --imitation-batch M]`.
+
+- Data (2026-11-26): `gate3-step3-net` (1x vs 4x, network leaf gen0-run2, protocol 15, both seats' shards) and
+  `gate3-step1` (1x vs Forge AI, protocol 14; `repro/` skipped, exact re-runs of `w3` games). All encoder 5 with
+  identical feature names; protocol 15 only added search metadata columns, which training drops.
+- Policy target: visit ratios of searched model rows (every one has them). Not policy samples: intended delegations
+  (5954 rows), shadow-recovery failures and failed searches (188 rows; uniform-prior choices). Their chosen action is
+  never used. Value target: the deciding seat's result on every row (no sideboard, no draws).
+- Split by match (both seats and both games together): train 86 matches (206 games, 305 shards, 28.7k rows, 23.8k
+  policy rows), validation 12 matches (28 games; picks the epoch by policy CE + value BCE), test 12 matches (29 games).
+  The holdout sets are small: AUC differences of a few hundredths are noise.
+
+Run A (gate shards only, lr 3e-4, 8 epochs): the value head overfits from epoch 2 (train BCE 0.52 → 0.06,
+validation BCE 0.79 → 2.0); the policy settles after one epoch (validation soft CE 1.047).
+Run B (`E:\magicdosa-runs\gen1\b`, the one exported): plus 300 imitation-p14 games as value-only rows (128 per batch
+next to 128 gate rows), lr 1e-4, 4 epochs, 1532 s on 4 threads. The value still overfits after epoch 1, more slowly
+(validation BCE 0.72 → 0.94); epoch 1 is kept.
+
+| Set | Model | Top-1 vs search | Soft CE | Value Brier (base rate) | AUC | AUC turns 1-2 / 3-4 / 5-6 / 7-8 / 9-10 |
+| --- | --- | --- | --- | --- | --- | --- |
+| validation | gen0-run2 | 65.7% | 2.94 | 0.245 (0.249) | 0.702 | 0.62 / 0.74 / 0.76 / 0.71 / 0.81 |
+| validation | gen1-b | 60.2% | 1.08 | 0.238 | 0.716 | 0.56 / 0.74 / 0.83 / 0.75 / 0.73 |
+| test | gen0-run2 | 73.7% | 2.78 | 0.272 (0.233) | 0.674 | 0.58 / 0.85 / 0.59 / 0.72 / 0.66 |
+| test | gen1-b | 68.4% | 1.03 | 0.197 | 0.765 | 0.60 / 0.84 / 0.76 / 0.88 / 0.92 |
+
+Top-1 against the most-visited candidate drops: the visit ratios of a uniform-prior search at 12 simulations per
+candidate are flat, gen1 learns that spread (soft CE 2.9 → 1.0), and gen0's peaked imitation policy lands on the
+argmax more often. The searches that use it as a leaf read only the value. `gen1-b.onnx` (4.8 MB, SHA-256 6fe26256…)
+matches PyTorch to 9e-6 (logits) and 5e-6 (value) on two gate games.
 
 ## Placeholders
 
