@@ -264,3 +264,15 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Fix upstream:** a pooled or same-thread evaluation for Forge AI's priority decision when no time limit applies;
   LKI copies made only for the cards an effect reads (or copy-on-write); a way to turn off view upkeep for simulation
   copies (`markAsSimulationCopy` games have no UI); the items of 15.
+
+## 18. No public way to score a board without GameStateEvaluator's combat simulation (2026-11-26)
+
+- **What:** `GameStateEvaluator.getScoreForGameState` always copies the game and plays the coming combat
+  (`simulateUpcomingCombatThisTurn`) when the active player has creatures; the board score alone
+  (`getScoreForGameStateImpl`) is private.
+- **How we hit it:** the search's leaf value is Forge's score of the board as it stands since 2026-11-26 (the combat
+  simulation cost 2-49 ms per leaf, item 17); agent-core calls the private method by reflection, so a Forge change
+  there breaks agent-core at class load.
+- **Our workaround:** reflection (`ForgeSearchGame.SCORE_IMPL`), checked when the class loads.
+- **Fix upstream:** a public overload or flag that skips the combat simulation.
+

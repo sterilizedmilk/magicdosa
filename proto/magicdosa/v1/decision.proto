@@ -260,6 +260,30 @@ message SearchRun {
   uint64 failed = 7;                // started but not backed up: no sample fit, the root decision differed, an error
   // protocol 14: who plays a simulation once it leaves the tree, so data from both policies can be told apart
   RolloutPolicy rollout = 8;
+  // protocol 15: where a simulation stops and how its last state is valued (2026-11-26 user decision)
+  SearchHorizon horizon = 9;
+  LeafEvaluation leaf_evaluation = 10;
+}
+
+// Where a simulation stops when the game has not ended (2026-11-26 user decision: the next turn, after measuring both
+// at the gate's step 1; docs/search-perf.md).
+enum SearchHorizon {
+  SEARCH_HORIZON_UNSPECIFIED = 0;
+  // The start of the root seat's next turn (phase-3 planning issue 4; the default until 2026-11-26).
+  SEARCH_HORIZON_OWN_TURN = 1;
+  // The start of the next turn, whoever's it is (the end of the root's turn).
+  SEARCH_HORIZON_NEXT_TURN = 2;
+}
+
+// How a simulation's last state is valued when the game has not ended and no network values it (2026-11-26 user
+// decision: the static score).
+enum LeafEvaluation {
+  LEAF_EVALUATION_UNSPECIFIED = 0;
+  // Forge's GameStateEvaluator with its simulation of the coming combat (one game copy per seat; the default until
+  // 2026-11-26).
+  LEAF_EVALUATION_FORGE_COMBAT = 1;
+  // Forge's GameStateEvaluator score of the board as it stands, without the combat simulation.
+  LEAF_EVALUATION_FORGE_STATIC = 2;
 }
 
 // The rollout policy of a search (2026-11-26 user decision): plain Forge AI is a temporary early-stage choice (phase 3
