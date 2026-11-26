@@ -138,7 +138,9 @@ https://claude.ai/artifact/NRbTKugmT5UTSKjephvyod
 "2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색은 `main`에 있음(2026-11-26 기준 protocol 15 / encoder 5 / vocab 3).
 구현 메모는 `docs/search.md`, 성능은 `docs/search-perf.md`, 신경망 추론은 `docs/inference.md`.
 실행: `--policy search --budget-per-candidate 12 --budget-multiplier 1|2|4`(예산은 시뮬레이션 수, 시간 아님).
-기본 탐색은 다음 턴 시작까지 순수 Forge AI 롤아웃 + 정적 리프 평가(2026-11-26 사용자 결정), 0세대 신경망 리프는 선택 사항.
+지금 기본값(지평선 다음 턴 시작, 정적 리프 평가)은 실행 속도를 위한 임시 설정이다(2026-11-26 사용자 결정).
+플레이 성능을 해치므로 영구 정책으로 삼지 않고 나중에 해제한다. 이 설정을 전제로 한 설계·코드를 늘리지 않는다.
+0세대 신경망 리프는 선택 사항.
 게이트 ① 1단계 신호 기준선(1× 대 Forge AI, 루트 가치 AUC 전체 0.754, 초반 0.56)은 고정 문턱이 아니라 이후 개선 비교용.
 
 - 게이트(AllPairings)는 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
