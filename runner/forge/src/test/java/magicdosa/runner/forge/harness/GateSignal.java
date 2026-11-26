@@ -54,7 +54,11 @@ public final class GateSignal {
         }
         List<Game> games = new ArrayList<>();
         for (Path f : files) {
-            games.add(read(f));
+            try {
+                games.add(read(f));
+            } catch (IllegalStateException | java.io.EOFException e) {
+                System.out.println("left out (unfinished game, a stopped run): " + f.getFileName());
+            }
         }
         report(games);
         if (args.length > 1) {
@@ -71,6 +75,13 @@ public final class GateSignal {
             Files.write(Path.of(args[1]), lines);
         }
     }
+
+    /**
+     * Head-to-head logs: {@code -DgateSignal.side=4} reads the side that searched with 4 times the base budget per
+     * candidate ({@code -DgateSignal.basePerCandidate}, default 12) as the agent; unset, the header's first agent seat.
+     */
+    private static final int SIDE_MULTIPLIER = Integer.getInteger("gateSignal.side", 0);
+    private static final int BASE_PER_CANDIDATE = Integer.getInteger("gateSignal.basePerCandidate", 12);
 
     static Game read(Path f) throws Exception {
         LogHeader header = null;
@@ -122,6 +133,21 @@ public final class GateSignal {
         int seat = header.getAgentSeats(0);
         String match = header.getMatchId();
         int number = header.getGameNumber();
+        if (SIDE_MULTIPLIER > 0) {
+            // a head-to-head log (HeadToHead: both seats searched, each by its own agent-core): keep the side whose
+            // searches ran SIDE_MULTIPLIER times the base budget per candidate; its seat is the agent's in this game
+            List<Row> side = new ArrayList<>();
+            for (Row r : rows) {
+                long perCandidate = r.simulations / Math.max(1, r.candidates);
+                if (Math.round((double) perCandidate / BASE_PER_CANDIDATE) == SIDE_MULTIPLIER) {
+                    side.add(r);
+                }
+            }
+            rows = side;
+            if (!side.isEmpty()) {
+                seat = side.get(0).seat;
+            }
+        }
         List<Row> fixed = new ArrayList<>();
         for (Row r : rows) {
             fixed.add(new Row(r.game, match, number, r.seat, r.turn, r.type, r.value, r.simulations, r.candidates, r.pass,
