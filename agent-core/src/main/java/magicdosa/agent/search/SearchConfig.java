@@ -28,12 +28,13 @@ import java.util.List;
  *                        controllers ({@link RolloutPolicy#ROLLOUT_POLICY_PLAIN_FORGE_AI}, the default, a temporary
  *                        early-stage choice until the network evaluates leaves) or the decision layer delegating to
  *                        Forge AI ({@link RolloutPolicy#ROLLOUT_POLICY_LAYER})
- * @param horizon         where a simulation stops when the game has not ended (2026-11-26 user decision: the start of
- *                        the next turn, {@link SearchHorizon#SEARCH_HORIZON_NEXT_TURN}; before it the root seat's next
- *                        turn)
- * @param leafEvaluation  how a simulation's last state is valued without a network (2026-11-26 user decision: Forge's
- *                        score of the board as it stands, {@link LeafEvaluation#LEAF_EVALUATION_FORGE_STATIC}; before it
- *                        with Forge's simulation of the coming combat)
+ * @param horizon         where a simulation stops when the game has not ended (temporary default for speed, 2026-11-26 user
+ *                        decision, to be switched off later: the start of the next turn,
+ *                        {@link SearchHorizon#SEARCH_HORIZON_NEXT_TURN}; the policy setting is the root seat's next turn)
+ * @param leafEvaluation  how a simulation's last state is valued without a network (temporary default for speed, 2026-11-26
+ *                        user decision, to be switched off later: Forge's score of the board as it stands,
+ *                        {@link LeafEvaluation#LEAF_EVALUATION_FORGE_STATIC}; the policy setting adds Forge's simulation of
+ *                        the coming combat)
  */
 public record SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                            double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout,
@@ -71,9 +72,9 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     /** The default rollout policy (2026-11-26 user decision, early stage only). */
     public static final RolloutPolicy DEFAULT_ROLLOUT = RolloutPolicy.ROLLOUT_POLICY_PLAIN_FORGE_AI;
-    /** The default horizon (2026-11-26 user decision, after the gate step-1 measurement in docs/search-perf.md). */
+    /** The temporary default horizon, for speed (2026-11-26 user decision; to be switched off later). */
     public static final SearchHorizon DEFAULT_HORIZON = SearchHorizon.SEARCH_HORIZON_NEXT_TURN;
-    /** The default leaf evaluation (2026-11-26 user decision, after the same measurement). */
+    /** The temporary default leaf evaluation, for speed (2026-11-26 user decision; to be switched off later). */
     public static final LeafEvaluation DEFAULT_LEAF_EVALUATION = LeafEvaluation.LEAF_EVALUATION_FORGE_STATIC;
 
     private static final List<SearchHorizon> HORIZONS = List.of(SearchHorizon.SEARCH_HORIZON_OWN_TURN,
