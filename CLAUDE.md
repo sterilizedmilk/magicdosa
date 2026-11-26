@@ -135,8 +135,11 @@ vocab 3). 최종 게이트 fin4: 16조합×60 네 가지(순수 Forge AI, 결정
 https://claude.ai/artifact/NRbTKugmT5UTSKjephvyod
 
 **3단계: 탐색(IS-MCTS).** 목표와 게이트는 설계 문서 개요 탭의 "3단계 목표" 단락, 방침은 작업 대화 구성 문서의
-"2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색 골격은 `main`에 병합됨(2026-11-25, ab87b4a, protocol 13 / encoder 5 /
-vocab 3). 구현 메모는 `docs/search.md`. 실행: `--policy search --budget N`(예산은 시뮬레이션 수, 시간 아님).
+"2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색은 `main`에 있음(2026-11-26 기준 protocol 15 / encoder 5 / vocab 3).
+구현 메모는 `docs/search.md`, 성능은 `docs/search-perf.md`, 신경망 추론은 `docs/inference.md`.
+실행: `--policy search --budget-per-candidate 12 --budget-multiplier 1|2|4`(예산은 시뮬레이션 수, 시간 아님).
+기본 탐색은 다음 턴 시작까지 순수 Forge AI 롤아웃 + 정적 리프 평가(2026-11-26 사용자 결정), 0세대 신경망 리프는 선택 사항.
+게이트 ① 1단계 신호 기준선(1× 대 Forge AI, 루트 가치 AUC 전체 0.754, 초반 0.56)은 고정 문턱이 아니라 이후 개선 비교용.
 
 - 게이트(AllPairings)는 병렬로 돌린다. 재현 하네스와 로그 재연만 순차로 돌린다.
 - **병렬은 프로세스 단위 (2026-11-11 결정):** 한 JVM에서 Forge 게임을 여러 스레드로 동시에 돌리면 게임끼리 간섭한다
