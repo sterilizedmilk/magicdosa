@@ -164,6 +164,12 @@ public final class HeadToHead {
             100.0 * gamesWon[1] / Math.max(1, gamesWon[0] + gamesWon[1]), 100 * ci[0], 100 * ci[1]));
         lines.add(String.format("seat 0 won %d of %d games with %s in it, %d of %d with %s in it", wonAsSeat0[0],
             gamesAsSeat0[0], labelA, wonAsSeat0[1], gamesAsSeat0[1], labelB));
+        for (String side : List.of("A", "B")) {
+            String leaf = System.getProperty("magicdosa.search.leafModel" + side, System.getProperty("magicdosa.search.leafModel"));
+            if (leaf != null) {
+                lines.add("leaf " + (side.equals("A") ? labelA : labelB) + ": " + leaf);
+            }
+        }
         lines.addAll(s.lines());
         boolean pass = s.pass();
         for (AgentConnection c : List.of(a, b)) {
@@ -198,6 +204,10 @@ public final class HeadToHead {
         String policy = System.getProperty("magicdosa.agentPolicy" + side);
         if (policy != null) {
             m.put("magicdosa.agentPolicy", policy);
+        }
+        String leaf = System.getProperty("magicdosa.search.leafModel" + side);
+        if (leaf != null) {
+            m.put("magicdosa.search.leafModel", leaf); // one model against another (evaluation)
         }
         if (!Boolean.getBoolean("magicdosa.noShards")) {
             Path dir = logDir.resolve("shards-" + label);
