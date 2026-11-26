@@ -14,6 +14,9 @@ import java.nio.file.Path;
 public final class LeafNetwork {
     private static Evaluator loaded;
     private static boolean tried;
+    /** The loaded model's file name and the first 16 hex digits of its SHA-256 (recorded in each SearchRun). */
+    private static String fileName = "";
+    private static String sha256 = "";
 
     private LeafNetwork() {
     }
@@ -26,11 +29,32 @@ public final class LeafNetwork {
             if (path != null && !path.isEmpty()) {
                 try {
                     loaded = new OnnxEvaluator(Path.of(path), new Encoder(Vocab.load()));
+                    fileName = Path.of(path).getFileName().toString();
+                    sha256 = sha256(Path.of(path)).substring(0, 16);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
             }
         }
         return loaded;
+    }
+
+    /** The loaded model's file name, empty when none is loaded. */
+    public static synchronized String fileName() {
+        return fileName;
+    }
+
+    /** The first 16 hex digits of the loaded model's SHA-256, empty when none is loaded. */
+    public static synchronized String sha256() {
+        return sha256;
+    }
+
+    private static String sha256(Path file) throws IOException {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            return java.util.HexFormat.of().formatHex(md.digest(java.nio.file.Files.readAllBytes(file)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

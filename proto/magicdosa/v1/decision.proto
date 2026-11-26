@@ -263,6 +263,10 @@ message SearchRun {
   // protocol 15: where a simulation stops and how its last state is valued (2026-11-26 user decision)
   SearchHorizon horizon = 9;
   LeafEvaluation leaf_evaluation = 10;
+  // protocol 15: the leaf network, when one values the simulations that leave the tree (they stop there): the model's
+  // file name and the first 16 hex digits of its SHA-256; empty without a network (leaf_evaluation values them all)
+  string leaf_model = 11;
+  string leaf_model_sha256 = 12;
 }
 
 // Where a simulation stops when the game has not ended (2026-11-26 user decision: the next turn, after measuring both

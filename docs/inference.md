@@ -33,8 +33,9 @@ read the model (IR version 10, it reads up to 9). A JDK that ships a 14.40+ runt
 `ForgeSearchGame.withNetworkLeaf`: a simulation stops at the decision where the walk leaves the tree (the expanded
 node), and the network values that request; the value is turned to the root seat's (1 - v for the other seat). A
 simulation that ends or reaches the horizon while still in the tree is valued as before. The priors are not used by
-the search yet (it keeps the uniform prior). `SearchRun` does not record the leaf evaluator yet (only the rollout
-policy): before searches with a network feed training, the run record needs a field for it (a protocol change).
+the search yet (it keeps the uniform prior). Since protocol 15 `SearchRun` records the leaf network by the model's
+file name and the first 16 hex digits of its SHA-256 (`leaf_model`, `leaf_model_sha256`; empty without one), next to
+`horizon` and `leaf_evaluation`, which value the simulations that end in the tree.
 
 ## Checks with the gen-0 model (`E:/magicdosa-runs/gen0/run1/gen0-run1.onnx`)
 

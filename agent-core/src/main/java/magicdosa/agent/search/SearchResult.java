@@ -130,7 +130,9 @@ public final class SearchResult {
             .setRootValue(Double.isNaN(rootValue) ? 0f : (float) rootValue)
             .setBudget(budget).setSeed(seed).setSimulations(iterations)
             .setFailed(noDeterminization + rootMismatches + failures).setRollout(config.rollout())
-            .setHorizon(config.horizon()).setLeafEvaluation(config.leafEvaluation())).build();
+            .setHorizon(config.horizon()).setLeafEvaluation(config.leafEvaluation())
+            .setLeafModel(magicdosa.agent.model.LeafNetwork.fileName())
+            .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())).build();
     }
 
     @Override
