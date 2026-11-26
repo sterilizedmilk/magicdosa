@@ -131,6 +131,10 @@ public final class SearchReplay {
             System.out.println("  shadow: decisions " + result.decisions + " matched " + result.decisionsMatched
                 + " after recovery " + result.decisionsMatchedAfterRecovery + " searchSkipped " + result.searchSkipped
                 + " recoveries " + result.recoveries1 + "/" + result.recoveries2 + "/" + result.recoveries3);
+            if (Boolean.getBoolean("magicdosa.search.debug")) {
+                result.replayMismatches.forEach(m -> System.out.println("  replay mismatch: " + m));
+                result.samples.forEach(m -> System.out.println("  sample: " + m));
+            }
         }
     }
 }
