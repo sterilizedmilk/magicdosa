@@ -86,8 +86,10 @@ public final class HeadToHead {
         int matches = Integer.parseInt(args[3]);
         Path logDir = Path.of(args[4]);
         String prefix = args.length > 5 ? args[5] : "h";
-        String labelA = label("A", "1");
-        String labelB = label("B", "4");
+        boolean same = label("A", "1").equals(label("B", "4"));
+        // self-play (1x vs 1x): each side keeps its own shards folder and its own name in the report
+        String labelA = label("A", "1") + (same ? "-A" : "");
+        String labelB = label("B", "4") + (same ? "-B" : "");
         RandomGames.initForge();
         CardKeys keys = CardKeys.load();
         AgentConnection a = AgentConnection.spawn(settings(logDir, "A", labelA));

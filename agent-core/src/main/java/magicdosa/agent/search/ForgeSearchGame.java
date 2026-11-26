@@ -282,6 +282,11 @@ public final class ForgeSearchGame implements SearchGame {
     }
 
     @Override
+    public int rootTurn() {
+        return root.getObservation().getGame().getTurn();
+    }
+
+    @Override
     public List<String> rootActions() {
         return rootActions;
     }

@@ -200,4 +200,22 @@ class IsMctsTest {
         assertEquals(r.rootMismatches, r.method().getRan().getFailed());
         assertEquals(0, r.chosen(), r.toString());
     }
+
+    /** Data-run sampling of the played move: drawn in proportion to visits, never an unvisited action, same seed same pick. */
+    @Test
+    void sampledPlayedMoveFollowsVisitsAndSeed() {
+        long[] visits = {30, 0, 10, 60};
+        SearchResult.Choice fallback = new SearchResult.Choice(3, SearchResult.Tie.NONE);
+        int[] counts = new int[4];
+        for (long seed = 0; seed < 20_000; seed++) {
+            SearchResult.Choice c = IsMcts.sampled(visits, new SplittableRandom(seed), fallback);
+            counts[c.index()]++;
+            assertEquals(SearchResult.Tie.SAMPLED, c.tie());
+            assertEquals(c.index(), IsMcts.sampled(visits, new SplittableRandom(seed), fallback).index());
+        }
+        assertEquals(0, counts[1]);
+        assertTrue(Math.abs(counts[0] / 20_000.0 - 0.3) < 0.02, java.util.Arrays.toString(counts));
+        assertTrue(Math.abs(counts[3] / 20_000.0 - 0.6) < 0.02, java.util.Arrays.toString(counts));
+        assertEquals(3, IsMcts.sampled(new long[] {0, 0}, new SplittableRandom(1), fallback).index());
+    }
 }

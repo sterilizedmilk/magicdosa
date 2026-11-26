@@ -141,7 +141,9 @@ public final class IsMcts {
         // ties the visits and the mean values leave are drawn from the seed (its own stream: the simulations' draws
         // above do not depend on it)
         return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits,
-            steps(root, new SplittableRandom(seed ^ 0x5DEECE66DL)));
+            steps(root, new SplittableRandom(seed ^ 0x5DEECE66DL),
+                SAMPLE_TURNS > 0 && game.rootTurn() > 0 && game.rootTurn() <= SAMPLE_TURNS
+                    ? new SplittableRandom(seed ^ 0x9E3779B97F4A7C15L) : null));
     }
 
     /**
@@ -186,7 +188,14 @@ public final class IsMcts {
      * The root decision's steps as the search answers them: at each step the action {@link #choose} picks, then the
      * most visited continuation node under it, until "done" or no further step was searched.
      */
-    private static List<SearchResult.Step> steps(Node root, SplittableRandom tieRng) {
+    /**
+     * Data runs only (2026-11-26 user decision, off by default and in gates): up to this game turn the root's played
+     * action is drawn in proportion to its visits from the search's seed (deterministic, no clock), so self-play
+     * visits more lines; the visit ratios, the policy target, are unchanged. {@code -Dmagicdosa.search.sampleTurns=N}.
+     */
+    static final int SAMPLE_TURNS = Integer.getInteger("magicdosa.search.sampleTurns", 0);
+
+    private static List<SearchResult.Step> steps(Node root, SplittableRandom tieRng, SplittableRandom sampleRng) {
         List<SearchResult.Step> out = new ArrayList<>();
         Node node = root;
         while (node != null && node.visits > 0) {
@@ -204,6 +213,9 @@ public final class IsMcts {
             if (c == null) {
                 break;
             }
+            if (sampleRng != null && node == root) {
+                c = sampled(v, sampleRng, c);
+            }
             int best = c.index();
             out.add(new SearchResult.Step(actions, v, mean, best, c.tie()));
             Edge chosen = node.edges.get(actions.get(best));
@@ -216,6 +228,25 @@ public final class IsMcts {
             node = next;
         }
         return out;
+    }
+
+    /** An action drawn in proportion to its visits; {@code fallback} when nothing was visited. */
+    static SearchResult.Choice sampled(long[] visits, SplittableRandom rng, SearchResult.Choice fallback) {
+        long total = 0;
+        for (long x : visits) {
+            total += x;
+        }
+        if (total <= 0) {
+            return fallback;
+        }
+        long r = rng.nextLong(total);
+        for (int i = 0; i < visits.length; i++) {
+            r -= visits[i];
+            if (r < 0) {
+                return new SearchResult.Choice(i, SearchResult.Tie.SAMPLED);
+            }
+        }
+        return fallback;
     }
 
     private static String abbreviate(String s) {
