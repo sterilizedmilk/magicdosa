@@ -91,6 +91,11 @@ public final class RandomGames {
      * ({@code -Dmagicdosa.seedBase}).
      */
     private static final long SEED_BASE = Long.getLong("magicdosa.seedBase", 1000);
+    /**
+     * Index of the first match (default 0): {@code -Dmagicdosa.firstMatch=4} with one match plays match 4 of a run
+     * again (its ID and seed), to regenerate one game of an earlier run.
+     */
+    private static final int FIRST_MATCH = Integer.getInteger("magicdosa.firstMatch", 0);
 
     /** {@code matchPrefix} keeps match and game IDs unique when one agent-core serves several runs (shard file names). */
     static Summary run(String deckDir, String deck0Name, String deck1Name, int matches, Path logDir, AgentConnection agent,
@@ -143,7 +148,7 @@ public final class RandomGames {
         Set<String> unmappedBefore = new TreeSet<>(keys.unmapped());
         long start = System.nanoTime();
         Set<Integer> retried = new java.util.HashSet<>();
-        for (int m = 0; m < matches; m++) {
+        for (int m = FIRST_MATCH; m < FIRST_MATCH + matches; m++) {
             try {
                 seating.beforeMatch(m);
                 ForgeMatchRunner.Result r = runner.playMatch(matchPrefix + m, deck0, deck1, seating.seats(m), SEED_BASE + m, logDir);
