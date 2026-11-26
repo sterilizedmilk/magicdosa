@@ -86,8 +86,8 @@ public final class HeadToHead {
         int matches = Integer.parseInt(args[3]);
         Path logDir = Path.of(args[4]);
         String prefix = args.length > 5 ? args[5] : "h";
-        String labelA = "x" + System.getProperty("magicdosa.agentBudgetMultiplierA", "1");
-        String labelB = "x" + System.getProperty("magicdosa.agentBudgetMultiplierB", "4");
+        String labelA = label("A", "1");
+        String labelB = label("B", "4");
         RandomGames.initForge();
         CardKeys keys = CardKeys.load();
         AgentConnection a = AgentConnection.spawn(settings(logDir, "A", labelA));
@@ -177,6 +177,13 @@ public final class HeadToHead {
         lines.forEach(System.out::println);
         Files.write(logDir.resolve("summary.txt"), lines);
         System.exit(pass ? 0 : 1);
+    }
+
+    /** "random" for a side on the random policy (gate 2), else its budget multiplier ("x4"). */
+    private static String label(String side, String multiplier) {
+        String policy = System.getProperty("magicdosa.agentPolicy" + side, System.getProperty("magicdosa.agentPolicy", "random"));
+        return policy.equals("random") ? "random"
+            : "x" + System.getProperty("magicdosa.agentBudgetMultiplier" + side, multiplier);
     }
 
     private static Map<String, String> settings(Path logDir, String side, String label) throws Exception {
