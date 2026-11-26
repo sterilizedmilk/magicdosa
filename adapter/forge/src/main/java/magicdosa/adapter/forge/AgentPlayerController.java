@@ -1814,10 +1814,16 @@ public class AgentPlayerController extends ObservedAiController {
             return forgeAi(() -> super.orderSimultaneousSa(new ArrayList<>(activePlayerSAs)));
         }
         List<SpellAbility> out = new ArrayList<>();
-        TriggerOrderChoice.Builder t = TriggerOrderChoice.newBuilder().setSeat(session.seat(player));
         for (int i : chosen) {
             out.add(activePlayerSAs.get(i));
-            t.addAbilityIds(candidates.get(i).getTriggeredAbilityId());
+        }
+        // the event lists them in the order they go on the stack (TriggerOrderChoice: first = put on the stack first);
+        // orderAndPlaySimultaneousSa puts this list on the stack from its last entry to its first (the first chosen ends
+        // on top), so the event is the chosen order reversed (it was the chosen order: a shadow replaying this seat as
+        // the other seat stacked them the other way round, gate 1 step 3 n30-g1)
+        TriggerOrderChoice.Builder t = TriggerOrderChoice.newBuilder().setSeat(session.seat(player));
+        for (int k = chosen.size() - 1; k >= 0; k--) {
+            t.addAbilityIds(candidates.get(chosen.get(k)).getTriggeredAbilityId());
         }
         session.reportAction(b -> b.setTriggerOrder(t));
         return out;
