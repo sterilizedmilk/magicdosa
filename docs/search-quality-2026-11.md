@@ -66,3 +66,27 @@ expected win rate; label = whether the agent won that game. Run folder: `E:\magi
 
 Compare a change by AUC per turn bucket (the threshold-free measure: the agent loses most games against Forge AI, so
 accuracy at 0.5 mostly rewards predicting a loss), on the same deck pairing and opponent.
+
+## Tree depth and the information key (2026-11-27)
+
+Measured with `SearchReplay` (recorded answers followed, `-Dmagicdosa.search.depthStats=true`) on the first game of
+each unit of `gate3-step3-gen2` (5 logs, 30 decisions each, 117 searched roots, gen2-c leaf, 12 per candidate,
+next-turn horizon, static Forge leaf for what reaches it). "Decisions" counts tree steps from the root, the root's
+own step included; "phase steps" counts Forge phase positions from the root to where the simulation stopped.
+
+| | simulations | nodes | network leaf at decisions (share) | max | ended at the horizon |
+| --- | --- | --- | --- | --- | --- |
+| 1x, before | 3,972 | ~ simulations | 2 (100%) | 3 | 11% |
+| 4x, before | 15,888 | ~ simulations | 2 (100%) | 3 | 11% |
+| 1x, after | 3,972 | 2,882 | 2: 28%, 3: 34%, 4: 32%, 5: 6% | 5 | 30% |
+| 4x, after | 15,888 | 9,128 | 2: 23%, 3: 21%, 4: 24%, 5: 23%, 6+: 9% | 8 | 43% |
+
+- Before: every network leaf was the first decision after the root's step, at any budget, and 85% of those were the
+  root seat's own next decision. The tree key hashed the request's observation, which lists the cards a seat cannot
+  identify (a hand, a library) by entity ID; a copy keeps Forge's card numbers, so those IDs followed the cards each
+  determinization dealt, and the same information set got a new key in every simulation. `ForgeSearchGame.infoKey`
+  now leaves those objects out (the zone sizes stay in the player states).
+- Game time stays short either way: network leaves are in the root's turn (0 turns), median 1 phase step after; the
+  simulations that cross into the next turn stop at the temporary next-turn horizon with Forge's static score.
+- Same roots, 1x against 4x answers: 27 of 117 differ (23.1%) after the fix; before it, 1 of 46 at the gate's
+  same-state check.

@@ -762,8 +762,7 @@ public final class ForgeSearchGame implements SearchGame {
                 names.add(isRoot ? rootKey(k, id -> forgeIdOf(session.cardOf(id), id))
                     : com.google.protobuf.TextFormat.shortDebugString(k));
             }
-            String info = isRoot ? "root" : magicdosa.agent.shadow.Fingerprint.hash(magicdosa.agent.shadow.Fingerprint.normalise(
-                r.toBuilder().clearCandidates().clearConstraints().build()));
+            String info = isRoot ? "root" : infoKey(r);
             List<Integer> remaining = new ArrayList<>();
             for (int i = 0; i < r.getCandidatesCount(); i++) {
                 remaining.add(i);
@@ -837,6 +836,26 @@ public final class ForgeSearchGame implements SearchGame {
             }
             return out.addAllChosen(chosen).build();
         }
+    }
+
+    /**
+     * A decision's information set in the tree: the request without its candidates and constraints, and without the
+     * objects whose identity the deciding seat does not know in a hand or a library. A copy keeps Forge's card numbers,
+     * so a hidden card's entity ID follows the card a determinization dealt there: with those objects in the key, the
+     * same information set got a new key in every determinization and the tree never grew below the root's children
+     * (depth measurement, 2026-11-27). The zone sizes stay in the player states.
+     */
+    static String infoKey(DecisionRequest r) {
+        DecisionRequest n = magicdosa.agent.shadow.Fingerprint.normalise(r.toBuilder().clearCandidates().clearConstraints().build());
+        magicdosa.protocol.v1.Observation.Builder o = n.getObservation().toBuilder().clearObjects();
+        for (magicdosa.protocol.v1.GameObject g : n.getObservation().getObjectsList()) {
+            boolean hiddenZone = g.getZone() == magicdosa.protocol.v1.Zone.ZONE_HAND
+                || g.getZone() == magicdosa.protocol.v1.Zone.ZONE_LIBRARY;
+            if (!(hiddenZone && g.getOracleId().isEmpty() && !g.getToken())) {
+                o.addObjects(g);
+            }
+        }
+        return magicdosa.agent.shadow.Fingerprint.hash(n.toBuilder().setObservation(o).build());
     }
 
     /** A step's actions: the fitting candidates' names, then "done" where the selection may stop. */
