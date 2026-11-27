@@ -169,6 +169,7 @@ public final class RandomGames {
                     // agent-core could not end a stuck Forge thread: a new agent-core, and the match again
                     System.out.println("MATCH " + m + ": agent-core must be restarted; restarting it and playing the match again");
                     agent.restart();
+                    abandon(logDir, matchPrefix + m);
                     retried.add(m);
                     m--;
                     continue;
@@ -231,6 +232,42 @@ public final class RandomGames {
         boolean pass = logProblems.isEmpty() && errors == 0 && total.fallbacks().isEmpty() && ignored == 0
             && unmapped.isEmpty() && total.errors() == 0 && total.unclassified().isEmpty() && total.copyFailures() == 0;
         return new Summary(out, pass, total, matches, games, errors, seconds, logProblems.size(), unmapped);
+    }
+
+    /**
+     * The match played again after an agent-core restart writes the same game logs and shards: the abandoned attempt's
+     * files for it (logs {@code <match>-g*.pb.gz}, shards {@code <match>-g*.arrow}) are moved to an {@code abandoned}
+     * folder beside them, kept for diagnosis (before, the new shard of game 1 failed on the old one's name).
+     */
+    static void abandon(Path logDir, String matchId) throws java.io.IOException {
+        List<Path> dirs = new ArrayList<>();
+        if (logDir != null) {
+            dirs.add(logDir);
+        }
+        String shards = System.getProperty("magicdosa.shards");
+        if (shards != null) {
+            dirs.add(Path.of(shards));
+        }
+        if (logDir != null) {
+            try (var s = Files.list(logDir)) {
+                s.filter(Files::isDirectory).filter(d -> d.getFileName().toString().startsWith("shards"))
+                    .filter(d -> !dirs.contains(d)).forEach(dirs::add);
+            }
+        }
+        for (Path dir : dirs) {
+            if (!Files.isDirectory(dir)) {
+                continue;
+            }
+            List<Path> old;
+            try (var s = Files.list(dir)) {
+                old = s.filter(f -> f.getFileName().toString().startsWith(matchId + "-g")).toList();
+            }
+            for (Path f : old) {
+                Path to = dir.resolve("abandoned");
+                Files.createDirectories(to);
+                Files.move(f, to.resolve(f.getFileName()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
     }
 
     /** chooseSingleStaticAbility (601.2f reduction order): where the calls came from and whether the order mattered. */
