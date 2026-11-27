@@ -592,7 +592,67 @@ public final class ForgeSearchGame implements SearchGame {
                     + rec.getRequest().getType() + "/" + rec.getRequest().getCandidatesCount() + ", asked " + r.getType()
                     + "/" + r.getCandidatesCount());
             }
-            return out.addAllChosen(rec.getResponse().getChosenList()).build();
+            return out.addAllChosen(sameCards(rec.getRequest(), rec.getResponse().getChosenList(), r)).build();
+        }
+
+        /**
+         * The recorded answer in the copy's candidate order: a candidate that names a card (a card choice, a target) is
+         * matched by the card (the copier keeps Forge card numbers), since the copy may deal hidden library cards in
+         * another order than the real game had them (Expressive Iteration's "put one on the bottom" after "one into
+         * your hand": the hand pick replayed by index took another card, gate 1 step 3); any other answer by its index.
+         */
+        private List<Integer> sameCards(DecisionRequest recorded, List<Integer> chosen, DecisionRequest asked) {
+            int n = recorded.getCandidatesCount();
+            if (session == null || n != asked.getCandidatesCount()) {
+                return chosen;
+            }
+            // recorded index -> asked index: by card where the shadow still knows the recorded card (a card that has moved
+            // since, such as the one put into the hand, has a new ID), the rest by elimination in their order
+            int[] map = new int[n];
+            java.util.Arrays.fill(map, -1);
+            boolean[] taken = new boolean[n];
+            boolean anyCard = false;
+            for (int i = 0; i < n; i++) {
+                int card = forgeCard(shadowSession, recorded.getCandidates(i));
+                if (card < 0) {
+                    continue;
+                }
+                for (int j = 0; j < n; j++) {
+                    if (!taken[j] && forgeCard(session, asked.getCandidates(j)) == card) {
+                        map[i] = j;
+                        taken[j] = true;
+                        anyCard = true;
+                        break;
+                    }
+                }
+            }
+            if (!anyCard) {
+                return chosen; // nothing names a card: by index, as recorded
+            }
+            int next = 0;
+            for (int i = 0; i < n; i++) {
+                if (map[i] < 0) {
+                    while (next < n && taken[next]) {
+                        next++;
+                    }
+                    if (next < n) {
+                        map[i] = next;
+                        taken[next] = true;
+                    }
+                }
+            }
+            List<Integer> out = new ArrayList<>();
+            for (int i : chosen) {
+                out.add(map[i] >= 0 ? map[i] : i);
+            }
+            return out;
+        }
+
+        /** The Forge card number a candidate names (a card choice's or a target's), -1 when it names none or is unknown. */
+        private int forgeCard(ForgeGameSession s, Candidate c) {
+            long id = c.getCardId() != 0 ? c.getCardId() : c.hasTarget() && c.getTarget().hasEntityId() ? c.getTarget().getEntityId() : 0;
+            Card card = id == 0 ? null : s.cardOf(id);
+            return card == null ? -1 : card.getId();
         }
 
         /** When the last delegated request went to Forge AI (measurement only: rollout decision times). */
