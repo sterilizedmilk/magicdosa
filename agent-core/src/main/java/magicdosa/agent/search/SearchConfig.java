@@ -35,10 +35,13 @@ import java.util.List;
  *                        user decision, to be switched off later: Forge's score of the board as it stands,
  *                        {@link LeafEvaluation#LEAF_EVALUATION_FORGE_STATIC}; the policy setting adds Forge's simulation of
  *                        the coming combat)
+ * @param networkAlone    gate 1 since 2026-11-27 ("does search beat the net"): a decision the search would take is answered
+ *                        by the leaf network's policy head instead (its most probable action, no simulation); everything
+ *                        else (the shadow, what goes to Forge AI) stays as with search, so only the root answer differs
  */
 public record SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                            double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout,
-                           SearchHorizon horizon, LeafEvaluation leafEvaluation) {
+                           SearchHorizon horizon, LeafEvaluation leafEvaluation, boolean networkAlone) {
 
     public SearchConfig {
         if (budget < 1) {
@@ -56,7 +59,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     public SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                         double wideningAlpha) {
         this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1, DEFAULT_ROLLOUT, DEFAULT_HORIZON,
-            DEFAULT_LEAF_EVALUATION);
+            DEFAULT_LEAF_EVALUATION, false);
     }
 
     /** Simulations for a root with {@code actions} actions (its first step's candidates and "done"). */
@@ -67,7 +70,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** The budget by root: {@code perCandidate} simulations per root action, times {@code multiplier}. */
     public SearchConfig perCandidate(int simulationsPerAction, int times) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha,
-            simulationsPerAction, times, rollout, horizon, leafEvaluation);
+            simulationsPerAction, times, rollout, horizon, leafEvaluation, networkAlone);
     }
 
     /** The default rollout policy (2026-11-26 user decision, early stage only). */
@@ -84,6 +87,9 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     /** "12 per candidate x4" or "budget 40", the rollout policy, the horizon and the leaf evaluation. */
     public String describe() {
+        if (networkAlone) {
+            return "network alone (the leaf network's policy head at every search root)";
+        }
         return (perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier) + ", rollout "
             + rolloutName(rollout) + ", horizon " + horizonName(horizon) + ", leaf " + leafName(leafEvaluation);
     }
@@ -135,17 +141,22 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     public SearchConfig withRollout(RolloutPolicy p) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, p, horizon, leafEvaluation);
+            multiplier, p, horizon, leafEvaluation, networkAlone);
     }
 
     public SearchConfig withHorizon(SearchHorizon h) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, rollout, h, leafEvaluation);
+            multiplier, rollout, h, leafEvaluation, networkAlone);
+    }
+
+    public SearchConfig withNetworkAlone(boolean alone) {
+        return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
+            multiplier, rollout, horizon, leafEvaluation, alone);
     }
 
     public SearchConfig withLeafEvaluation(LeafEvaluation e) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, rollout, horizon, e);
+            multiplier, rollout, horizon, e, networkAlone);
     }
 
     /** Phase-3 defaults with the given budget (UCB constant sqrt(2), opponent in the tree, widening past 20 actions). */
@@ -155,12 +166,12 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     public SearchConfig withBudget(long b) {
         return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
-            horizon, leafEvaluation);
+            horizon, leafEvaluation, networkAlone);
     }
 
     public SearchConfig withOpponentInTree(boolean in) {
         return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
-            horizon, leafEvaluation);
+            horizon, leafEvaluation, networkAlone);
     }
 
     /**
@@ -179,6 +190,6 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             Double.parseDouble(System.getProperty("magicdosa.search.wideningAlpha", Double.toString(d.wideningAlpha))),
             0, 1, rolloutNamed(System.getProperty("magicdosa.search.rollout", rolloutName(d.rollout))),
             horizonNamed(System.getProperty("magicdosa.search.horizon", horizonName(d.horizon))),
-            leafNamed(System.getProperty("magicdosa.search.leafEval", leafName(d.leafEvaluation))));
+            leafNamed(System.getProperty("magicdosa.search.leafEval", leafName(d.leafEvaluation))), false);
     }
 }

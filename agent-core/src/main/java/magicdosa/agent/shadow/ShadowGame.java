@@ -368,6 +368,19 @@ public final class ShadowGame {
             live.searched(null, java.util.Map.of("single candidate", 1));
             return out.addChosen(0).addSteps(step).build();
         }
+        if (live.search().networkAlone()) {
+            // gate 1 (2026-11-27): the policy head answers where the search would run, nothing else changes
+            magicdosa.agent.model.Evaluator net = magicdosa.agent.model.LeafNetwork.get();
+            if (net == null) {
+                throw new IllegalStateException("network alone without a model (-Dmagicdosa.search.leafModel)");
+            }
+            long t0 = magicdosa.agent.Timing.start(); // measurement only
+            DecisionResponse resp = new magicdosa.agent.policy.NetworkPolicy(net, magicdosa.agent.model.LeafNetwork.fileName())
+                .decide(real);
+            magicdosa.agent.Timing.addHistogram("network.decision", t0);
+            live.searched(null, java.util.Map.of("network alone " + real.getType().name().replace("DECISION_TYPE_", ""), 1));
+            return resp;
+        }
         List<Deck> decks = new ArrayList<>();
         for (RegisteredPlayer rp : game.getMatch().getPlayers()) {
             decks.add(rp.getDeck());

@@ -8,7 +8,7 @@ import magicdosa.protocol.Versions;
 /**
  * agent-core entry point: serves adapters over gRPC. Phase 1 answers every decision with the uniform random policy.
  *
- * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--policy random|shadow-forge-ai|search] [--budget N | --budget-per-candidate N [--budget-multiplier M]] [--until-stdin-closes]</pre>
+ * <pre>java magicdosa.agent.AgentCore [--port N] [--shards DIR] [--policy random|network|shadow-forge-ai|search] [--budget N | --budget-per-candidate N [--budget-multiplier M]] [--until-stdin-closes]</pre>
  *
  * The port defaults to 50051; 0 picks a free port. Prints {@code agent-core listening on port N} once it accepts
  * connections. With {@code --shards}, each finished game's training samples are written there as an Arrow file (the
@@ -60,7 +60,8 @@ public final class AgentCore {
         magicdosa.adapter.forge.CardKeys shadowKeys = null;
         if (policyName.equals("random")) {
             policy = new RandomPolicy();
-        } else if (policyName.equals("shadow-forge-ai") || policyName.equals("search")) {
+        } else if (policyName.equals("shadow-forge-ai") || policyName.equals("search")
+                || policyName.equals("network")) {
             // the shadow game's Forge AI decides (phase-2 gate): a live shadow per game, Forge in this JVM (run it with
             // forge-gui as the working directory); the random policy answers what the shadow cannot
             System.setProperty("java.awt.headless", "true");
@@ -69,7 +70,9 @@ public final class AgentCore {
             forge.model.FModel.initialize(null, null);
             shadowKeys = magicdosa.adapter.forge.CardKeys.load();
             RandomPolicy random = new RandomPolicy();
-            String name = policyName.equals("search") ? "search-uniform" : policyName;
+            String name = policyName.equals("search") ? "search-uniform"
+                : policyName.equals("network") ? "network:" + (magicdosa.agent.model.LeafNetwork.get() == null ? ""
+                    : magicdosa.agent.model.LeafNetwork.fileName()) : policyName;
             policy = new magicdosa.agent.policy.Policy() {
                 @Override
                 public String modelVersion() {
@@ -82,20 +85,30 @@ public final class AgentCore {
                 }
             };
         } else {
-            throw new IllegalArgumentException("unknown policy " + policyName + " (random, shadow-forge-ai, search)");
+            throw new IllegalArgumentException("unknown policy " + policyName + " (random, network, shadow-forge-ai, search)");
         }
         magicdosa.agent.search.SearchConfig search = null;
-        if (policyName.equals("search")) {
+        if (policyName.equals("search") || policyName.equals("network")) {
             // phase 3: IS-MCTS on the live shadow; the node budget has no default (3단계 기획 쟁점 5: measured, not set)
             // 2026-11-25 planning decision: the budget by root, simulations per root action (1x = 12) times a multiplier
             if (perCandidate > 0) {
                 search = magicdosa.agent.search.SearchConfig.fromSystemProperties(1).perCandidate(perCandidate, multiplier);
             } else if (budget >= 1) {
                 search = magicdosa.agent.search.SearchConfig.fromSystemProperties(budget);
+            } else if (policyName.equals("network")) {
+                search = magicdosa.agent.search.SearchConfig.fromSystemProperties(1);
             } else {
                 throw new IllegalArgumentException("--policy search needs --budget-per-candidate N [--budget-multiplier M]"
                     + " or --budget N");
             }
+        }
+        if (policyName.equals("network")) {
+            // gate 1 (2026-11-27, "does search beat the net"): as the search policy, with the leaf model's policy head
+            // answering each search root (-Dmagicdosa.search.leafModel)
+            if (magicdosa.agent.model.LeafNetwork.get() == null) {
+                throw new IllegalArgumentException("--policy network needs -Dmagicdosa.search.leafModel=<model.onnx>");
+            }
+            search = search.withNetworkAlone(true);
         }
         Agent agent = new Agent(policy, shardDir == null ? null : new magicdosa.agent.encoder.ShardWriter(
             new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load()), shardDir,

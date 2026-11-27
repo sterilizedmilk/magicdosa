@@ -67,6 +67,13 @@ This file records how the code does it and what is not done yet. It changes no d
     always delegated in the tree (item 2): mana payment, damage assignment, trigger order, pre-game decisions.
 - Optional leaf network (`-Dmagicdosa.search.leafModel`, off by default; docs/inference.md): a simulation stops at the
   expanded node and the network values it instead of the rollout and Forge's evaluator.
+- Network alone (`--policy network`, `SearchConfig.networkAlone`, 2026-11-27, gate 1 "does search beat the net"):
+  everything as with `--policy search` (the live shadow, what goes to the shadow's Forge AI: mulligans, mana payment,
+  roots a copy cannot hold), except that a decision the search would take is answered by `NetworkPolicy`: the policy
+  head's most probable candidate of the leaf model (`-Dmagicdosa.search.leafModel`) at each step, no simulation;
+  recorded as the model with the learned prior and search not available. Pair limits and "done" as the search walks a
+  selection; ties to the earlier candidate. In `HeadToHead` its side is labelled `network`. A first version without
+  the shadow answered every request with the head and kept taking mulligans (39,623 in one game, smoke 11-27).
 - Horizon (`SearchConfig.horizon`, `-Dmagicdosa.search.horizon`, recorded in `SearchRun.horizon` and the shards'
   `search_horizon` column, protocol 15): **`next-turn` (temporary default since 2026-11-26, a speed setting the user
   will switch off later: it weakens play):** the start of the next turn, whoever's it is; `own-turn` (item 4, the

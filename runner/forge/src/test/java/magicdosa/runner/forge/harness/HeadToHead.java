@@ -187,10 +187,10 @@ public final class HeadToHead {
         System.exit(pass ? 0 : 1);
     }
 
-    /** "random" for a side on the random policy (gate 2), else its budget multiplier ("x4"). */
+    /** "random" or "network" for a side on that policy (gates 2 and 1), else its budget multiplier ("x4"). */
     private static String label(String side, String multiplier) {
         String policy = System.getProperty("magicdosa.agentPolicy" + side, System.getProperty("magicdosa.agentPolicy", "random"));
-        return policy.equals("random") ? "random"
+        return policy.equals("random") || policy.equals("network") ? policy
             : "x" + System.getProperty("magicdosa.agentBudgetMultiplier" + side, multiplier);
     }
 
