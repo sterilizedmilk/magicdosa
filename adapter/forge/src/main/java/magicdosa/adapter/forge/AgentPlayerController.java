@@ -2389,14 +2389,35 @@ public class AgentPlayerController extends ObservedAiController {
         }
         List<Card> stay = new ArrayList<>(cards);
         stay.removeAll(leave);
-        List<Card> top = order(method + ":top", stay, () -> ai.get().getLeft());
-        List<Card> bottom = order(method + ":" + away + " order", leave, () -> ai.get().getRight());
+        // a delegated order is Forge AI's, narrowed to the cards this seat actually kept or set apart: when the first step
+        // was not Forge AI's (a search tree's), its whole arrangement names other cards and matched no candidate (every
+        // "rollout answer matched no candidate: CHOOSE_CARDS" in gate 1 step 1)
+        List<Card> top = order(method + ":top", stay, () -> inOrderOf(stay, ai.get().getLeft(), ai.get().getRight()));
+        List<Card> bottom = order(method + ":" + away + " order", leave, () -> inOrderOf(leave, ai.get().getRight(), ai.get().getLeft()));
         if (top == null || bottom == null) {
             return forgeAi(forgeAi);
         }
         // E3: the deciding seat knows where these cards are (surveil's pile goes to the graveyard instead)
         session.arranged(decider, top, away.equals("bottom") ? bottom : List.of());
         return ImmutablePair.of(new CardCollection(top), new CardCollection(bottom));
+    }
+
+    /** {@code cards} in the order the {@code preferred} lists give them (first list first), the rest after in their own order. */
+    private static List<Card> inOrderOf(List<Card> cards, java.util.Collection<Card> first, java.util.Collection<Card> second) {
+        List<Card> out = new ArrayList<>();
+        for (java.util.Collection<Card> list : List.of(first, second)) {
+            for (Card c : list) {
+                if (cards.contains(c) && !out.contains(c)) {
+                    out.add(c);
+                }
+            }
+        }
+        for (Card c : cards) {
+            if (!out.contains(c)) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 
     /** The order of {@code cards}, asked when there is more than one; null when agent-core gave no usable answer. */
