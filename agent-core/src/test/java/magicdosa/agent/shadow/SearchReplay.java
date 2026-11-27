@@ -136,5 +136,8 @@ public final class SearchReplay {
                 result.samples.forEach(m -> System.out.println("  sample: " + m));
             }
         }
+        // what the searches counted (depth stats with -Dmagicdosa.search.depthStats, root kinds, leaf ends), for
+        // summing over logs
+        shadow.stats().search.forEach((k, v) -> System.out.println("  count " + k + " = " + v));
     }
 }
