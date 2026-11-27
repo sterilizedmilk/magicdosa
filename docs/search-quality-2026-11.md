@@ -90,3 +90,19 @@ own step included; "phase steps" counts Forge phase positions from the root to w
   simulations that cross into the next turn stop at the temporary next-turn horizon with Forge's static score.
 - Same roots, 1x against 4x answers: 27 of 117 differ (23.1%) after the fix; before it, 1 of 46 at the gate's
   same-state check.
+
+## Leaf horizon experiment (2026-11-28, `-Dmagicdosa.search.leafPlayout`)
+
+Same 117 roots, 1x, after the key fix. With a playout, a simulation that leaves the tree plays on (the policy head's
+most probable action at each step, or Forge AI on the decision layer) until the opponent's next turn has ended, and
+the value network values the first request there; the in-tree walk stops at that boundary too, in place of the
+next-turn horizon.
+
+| leaf | search time, 117 roots | per simulation | ends 2 turns ahead | answers differ from plain 1x |
+| --- | --- | --- | --- | --- |
+| network at the tree exit (now) | 79 s | 13.5 ms | 0% (30% at the horizon, static score) | - |
+| plain 4x, for cost | 415 s | 18.5 ms | 0% (43% at the horizon) | 27 / 117 |
+| playout, policy head | 471 s | 110 ms (49,399 policy calls, 108 s) | 95% (5% 3 turns, 11 game ends) | 71 / 117 |
+| playout, Forge AI | 423 s | 98 ms | 95% (15 game ends) | 58 / 117 |
+
+No simulation failed. A playout costs about what 4x costs; whether it plays better is for games (after gate 1).
