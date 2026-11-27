@@ -204,9 +204,14 @@ public class GameCopier {
         if (copyStack) {
             // putting a spell back on the stack is no cast: MagicStack.add would run the cast triggers (prowess) again
             newGame.getTriggerHandler().setSuppressAllTriggers(true);
+            // a frozen stack (the copy's, while it is set up) holds additions back in its frozen part, which
+            // copyStack would then lose ("stack not copied: 0 of 1"): the entries go on the stack itself
+            boolean frozen = newGame.getStack().isFrozen();
+            newGame.getStack().setFrozen(false);
             try {
                 copyStack(origGame, newGame, gameObjectMap);
             } finally {
+                newGame.getStack().setFrozen(frozen);
                 newGame.getTriggerHandler().setSuppressAllTriggers(false);
             }
         }
@@ -238,7 +243,14 @@ public class GameCopier {
             if (origSa.isSpell() || (origSa.isActivatedAbility() && !origSa.isTrigger() && !origSa.isCopied())) {
                 // an activated ability on the stack (Mishra's Bauble's, its source sacrificed as a cost) is found on
                 // the copied source by its text, as a spell is; triggered abilities are not copied (stackCopyable)
-                newSa = findSAInCard(origSa, newCard);
+                newSa = origSa.getAlternativeCost() != null ? null : findSAInCard(origSa, newCard);
+                if (newSa == null && newCard != null) {
+                    // cast for an alternative cost (Lava Dart's flashback reads as the card's own spell but is exiled
+                    // as it resolves), or no ability of the card reads as it: the spell itself is copied onto the
+                    // copy's card for the copy's player
+                    newSa = origSa.copy(newCard, map.map(origSa.getActivatingPlayer()), false);
+                    newSa.resetTargets(); // the original's targets: mapped to the copy below
+                }
             }
             if (newSa != null) {
                 newSa.setActivatingPlayer(map.map(origSa.getActivatingPlayer()));
