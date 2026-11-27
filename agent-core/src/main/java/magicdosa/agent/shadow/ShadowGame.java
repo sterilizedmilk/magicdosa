@@ -483,6 +483,23 @@ public final class ShadowGame {
 
     /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
     static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
+
+    /**
+     * With {@code -Dmagicdosa.shadowHangTestOnce=<file>} the test hang fires in one agent-core only (the first that
+     * creates the file), so the agent-core a harness starts after it plays the match again without hanging.
+     */
+    private static boolean hangTestFirstTime() {
+        String once = System.getProperty("magicdosa.shadowHangTestOnce");
+        if (once == null) {
+            return true;
+        }
+        try {
+            java.nio.file.Files.createFile(java.nio.file.Path.of(once));
+            return true;
+        } catch (java.io.IOException e) {
+            return false; // already fired in an earlier agent-core
+        }
+    }
     static final java.util.concurrent.atomic.AtomicBoolean HANG_TEST_FIRED = new java.util.concurrent.atomic.AtomicBoolean();
 
     /** The record marks an answer the shadow does not know (an unintended fallback of the real game) with this ID. */
@@ -2306,11 +2323,20 @@ public final class ShadowGame {
         @Override
         public DecisionResponse decide(DecisionRequest request) {
             if (live != null && live.pending() != null && live.pending().getDecisionId() == HANG_TEST_AT
-                    && HANG_TEST_FIRED.compareAndSet(false, true)) {
+                    && HANG_TEST_FIRED.compareAndSet(false, true) && hangTestFirstTime()) {
                 // test of the hang safeguard (-Dmagicdosa.shadowHangTestAt=<decision ID>): this thread spins at the
-                // live decision until it is ended
+                // live decision until it is ended; with -Dmagicdosa.shadowHangTestStubborn=true it cannot be ended (it
+                // keeps spinning through ThreadDeath), so agent-core is marked for a restart and the harness's restart
+                // path runs end to end
+                boolean stubborn = Boolean.getBoolean("magicdosa.shadowHangTestStubborn");
                 while (true) {
-                    Thread.onSpinWait();
+                    try {
+                        Thread.onSpinWait();
+                    } catch (Throwable t) {
+                        if (!stubborn) {
+                            throw t;
+                        }
+                    }
                 }
             }
             DecisionRequest real;
