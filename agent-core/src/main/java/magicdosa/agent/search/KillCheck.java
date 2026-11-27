@@ -36,7 +36,7 @@ public final class KillCheck {
     }
 
     /** The least and most damage the defender takes from these attackers, and the factors left out. */
-    public record Outcome(int minDamage, int maxDamage, Set<String> factors) {
+    public record Outcome(int minDamage, int maxDamage, Set<String> factors, Map<Card, Card> bestBlocks) {
         public boolean lethal(int life) {
             return minDamage >= life;
         }
@@ -105,7 +105,15 @@ public final class KillCheck {
             combatTriggers(bl, factors);
         }
         int kept = (int) Math.round(maxWeightMatching(w, m, n));
-        return new Outcome(total - kept, total, factors);
+        // the defender's blocks that keep that damage off (attacker -> blocker), for checking the number on a copy
+        Map<Card, Card> best = new java.util.LinkedHashMap<>();
+        int[] rowOf = assignment(w, m, n);
+        for (int a = 0; a < n; a++) {
+            if (rowOf[a] >= 0 && w[rowOf[a]][a] > 0) {
+                best.put(attackers.get(a), blockers.get(rowOf[a]));
+            }
+        }
+        return new Outcome(total - kept, total, factors, best);
     }
 
     /** Damage the defender takes with these blocks (attacker -> its blocker; unblocked attackers are absent). */
@@ -137,9 +145,23 @@ public final class KillCheck {
      * padded with zeros; weights are not negative).
      */
     static double maxWeightMatching(double[][] w, int rows, int cols) {
+        int[] rowOf = assignment(w, rows, cols);
+        double total = 0;
+        for (int j = 0; j < cols; j++) {
+            if (rowOf[j] >= 0) {
+                total += w[rowOf[j]][j];
+            }
+        }
+        return total;
+    }
+
+    /** For each column, the row a maximum-weight matching gives it, or -1 (Hungarian method, square padding). */
+    static int[] assignment(double[][] w, int rows, int cols) {
         int size = Math.max(rows, cols);
+        int[] rowOf = new int[cols];
+        java.util.Arrays.fill(rowOf, -1);
         if (size == 0) {
-            return 0;
+            return rowOf;
         }
         double max = 0;
         for (int i = 0; i < rows; i++) {
@@ -198,13 +220,12 @@ public final class KillCheck {
                 j0 = j1;
             } while (j0 != 0);
         }
-        double total = 0;
         for (int j = 1; j <= size; j++) {
             int i = p[j];
             if (i >= 1 && i <= rows && j <= cols) {
-                total += w[i - 1][j - 1];
+                rowOf[j - 1] = i - 1;
             }
         }
-        return total;
+        return rowOf;
     }
 }

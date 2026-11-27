@@ -251,6 +251,7 @@ public final class ShadowGame {
                 }
                 magicdosa.agent.search.KillCheck.Outcome all = magicdosa.agent.search.KillCheck.evaluate(possible, opp);
                 int life = opp.getLife();
+                verifyKillCheck(out, "attack", possible, opp, all);
                 if (all.lethal(life)) {
                     out.put("kill: available", 1);
                     if (!magicdosa.agent.search.KillCheck.evaluate(chosen, opp).lethal(life)) {
@@ -284,6 +285,7 @@ public final class ShadowGame {
                 }
                 magicdosa.agent.search.KillCheck.Outcome best = magicdosa.agent.search.KillCheck.evaluate(attackers, me);
                 int life = me.getLife();
+                verifyKillCheck(out, "block", attackers, me, best);
                 int took = magicdosa.agent.search.KillCheck.damageWith(attackers, blockOf);
                 if (best.lethal(life)) {
                     out.put("kill: lethal attack unpreventable", 1);
@@ -300,6 +302,30 @@ public final class ShadowGame {
         if (!out.isEmpty()) {
             live.searched(null, out);
         }
+    }
+
+    /**
+     * Measurement only ({@code -Dmagicdosa.killVerify=true}): the checker's least damage, with the blocks it found, dealt
+     * by Forge on a copy (KillCheckCopy); counted as agreeing or differing, exact and approximate cases apart, so the
+     * checker's own error rate can be read from replays of existing logs.
+     */
+    private void verifyKillCheck(Map<String, Integer> out, String where, List<forge.game.card.Card> attackers,
+                                 Player defender, magicdosa.agent.search.KillCheck.Outcome o) {
+        if (!Boolean.getBoolean("magicdosa.killVerify") || attackers.isEmpty()) {
+            return;
+        }
+        String kind = o.approximate() ? "approximate" : "exact";
+        Integer copy;
+        try {
+            copy = magicdosa.agent.search.KillCheckCopy.damageOnCopy(game, attackers, defender, o.bestBlocks());
+        } catch (RuntimeException e) {
+            copy = null;
+        }
+        String verdict = copy == null ? "copy failed" : copy == o.minDamage() ? "agree" : "differ";
+        out.merge("kill verify: " + verdict + " (" + kind + ")", 1, Integer::sum);
+        System.out.println("KILLVERIFY " + where + " " + kind + " " + verdict + " checker=" + o.minDamage() + " copy=" + copy
+            + " life=" + defender.getLife() + " attackers=" + attackers.size() + " blocks=" + o.bestBlocks().size()
+            + (o.approximate() ? " factors=" + o.factors() : "") + " turn=" + game.getPhaseHandler().getTurn());
     }
 
     /** The viewer's last priority point (search): a copy of the shadow there and the record position of that decision. */
