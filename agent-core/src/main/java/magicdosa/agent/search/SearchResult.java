@@ -135,9 +135,18 @@ public final class SearchResult {
             .setRootValue(Double.isNaN(rootValue) ? 0f : (float) rootValue)
             .setBudget(budget).setSeed(seed).setSimulations(iterations)
             .setFailed(noDeterminization + rootMismatches + failures).setRollout(config.rollout())
-            .setHorizon(config.horizon()).setLeafEvaluation(config.leafEvaluation())
+            .setHorizon(config.horizon()).setLeafEvaluation(recordedLeafEvaluation(config))
             .setLeafModel(magicdosa.agent.model.LeafNetwork.fileName())
             .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())).build();
+    }
+
+    /**
+     * How the run's leaves were valued: by the leaf network whenever one is loaded (protocol 16: at the tree exit and at
+     * the horizon), else by Forge's score as the settings say.
+     */
+    public static magicdosa.protocol.v1.LeafEvaluation recordedLeafEvaluation(SearchConfig config) {
+        return magicdosa.agent.model.LeafNetwork.fileName().isEmpty() ? config.leafEvaluation()
+            : magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK;
     }
 
     @Override

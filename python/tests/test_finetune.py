@@ -47,14 +47,23 @@ def test_split_keeps_matches_and_seats_together(run):
 
 
 def test_older_protocol_only_when_listed(table, tmp_path):
-    old = write(table, tmp_path / "old.arrow", protocol_version=str(versions.PROTOCOL_VERSION - 1))
+    older = min(versions.COMPATIBLE_PROTOCOLS + (versions.PROTOCOL_VERSION,)) - 1  # neither current nor compatible
+    old = write(table, tmp_path / "old.arrow", protocol_version=str(older))
     with pytest.raises(shards.VersionMismatch):
         shards.read_shard(old)
-    assert shards.read_shard(old, [versions.PROTOCOL_VERSION - 1]).num_rows == table.num_rows
-    other_encoder = write(table, tmp_path / "enc.arrow", protocol_version=str(versions.PROTOCOL_VERSION - 1),
+    assert shards.read_shard(old, [older]).num_rows == table.num_rows
+    other_encoder = write(table, tmp_path / "enc.arrow", protocol_version=str(older),
                           encoder_version=str(versions.ENCODER_VERSION - 1))
     with pytest.raises(shards.VersionMismatch):
-        shards.read_shard(other_encoder, [versions.PROTOCOL_VERSION - 1])
+        shards.read_shard(other_encoder, [older])
+
+
+def test_compatible_protocols_read_without_asking(table, tmp_path):
+    # protocol 15 shards (gen2-c self-play b0021-b0033) train together with protocol 16 ones
+    assert 15 in versions.COMPATIBLE_PROTOCOLS
+    p15 = write(table, tmp_path / "p15.arrow", protocol_version="15")
+    assert shards.read_shard(p15).num_rows == table.num_rows
+    assert shards.read_shards([p15]).num_rows == table.num_rows
 
 
 def test_load_drops_columns_only_some_shards_carry(table, tmp_path):

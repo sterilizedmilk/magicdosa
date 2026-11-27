@@ -36,12 +36,14 @@ def metadata(table: pa.Table) -> Dict[str, str]:
 
 def read_shard(path: Path | str, protocols: Optional[Sequence[int]] = None) -> pa.Table:
     """One game's samples; refuses a shard whose versions differ from versions.py (design: 버전 검증).
-    `protocols` lists further accepted protocol versions, for training on older shards whose tensors are the same:
-    the encoder and vocabulary versions must still match exactly (the encoder version is what fixes the tensors)."""
+    `protocols` lists further accepted protocol versions, for training on older shards whose tensors are the same
+    (versions.COMPATIBLE_PROTOCOLS are always accepted): the encoder and vocabulary versions must still match exactly
+    (the encoder version is what fixes the tensors)."""
     with open(str(path), "rb") as f:          # read fully: a memory map keeps the file locked on Windows
         table = ipc.open_file(pa.BufferReader(f.read())).read_all()
     meta = metadata(table)
-    accepted = {str(versions.PROTOCOL_VERSION)} | {str(p) for p in (protocols or ())}
+    accepted = ({str(versions.PROTOCOL_VERSION)} | {str(p) for p in versions.COMPATIBLE_PROTOCOLS}
+                | {str(p) for p in (protocols or ())})
     if meta.get("protocol_version") not in accepted:
         raise VersionMismatch(f"{path}: protocol_version {meta.get('protocol_version')}, expected one of "
                               f"{sorted(accepted)}")

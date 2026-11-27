@@ -490,15 +490,23 @@ public final class ForgeSearchGame implements SearchGame {
                     }
                 } else if (ph.getTurn() > rootTurn && (horizon == magicdosa.protocol.v1.SearchHorizon.SEARCH_HORIZON_NEXT_TURN
                         || ph.getPlayerTurn() == me)) {
-                    count("horizon");
-                    break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
+                    if (leafNetwork == null) {
+                        count("horizon");
+                        break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
+                    }
+                    if (!client.valueNext) {
+                        // 2026-11-28 user decision (one evaluator for every leaf): with a leaf network the horizon is
+                        // valued by it too, at the first request asked there, never by Forge's score
+                        client.valueNext = true;
+                        count("horizon: network");
+                    }
                 }
                 if (++steps > MAX_LOOP_STEPS) {
                     throw new IllegalStateException("no horizon after " + MAX_LOOP_STEPS + " loop steps");
                 }
             }
             if (DEPTH_STATS && client.askedRoot) {
-                String end = client.leafValue != null ? (client.valueNext ? "playout" : "network")
+                String end = client.leafValue != null ? (client.valueNext ? (playout() ? "playout" : "horizon network") : "network")
                     : copy.isGameOver() ? "game over" : "horizon";
                 int steps0 = PhaseType.values().length;
                 int phase = ph.getPhase() == null ? 0 : ph.getPhase().ordinal();

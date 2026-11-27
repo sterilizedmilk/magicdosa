@@ -66,7 +66,11 @@ This file records how the code does it and what is not done yet. It changes no d
   - In both, the decisions of the loop step in which the walk left the tree still go through the layer (delegated);
     always delegated in the tree (item 2): mana payment, damage assignment, trigger order, pre-game decisions.
 - Optional leaf network (`-Dmagicdosa.search.leafModel`, off by default; docs/inference.md): a simulation stops at the
-  expanded node and the network values it instead of the rollout and Forge's evaluator.
+  expanded node and the network values it instead of the rollout and Forge's evaluator. Since protocol 16
+  (2026-11-28 user decision, one evaluator for every leaf) the network also values a walk that reaches the horizon
+  inside the tree, at the first request asked there, and the run records `LEAF_EVALUATION_NETWORK`; Forge's static
+  and combat scores remain only for runs without a model (protocol 15 runs with a model recorded `FORGE_STATIC`, and
+  their horizon leaves had that score).
 - Network alone (`--policy network`, `SearchConfig.networkAlone`, 2026-11-27, gate 1 "does search beat the net"):
   everything as with `--policy search` (the live shadow, what goes to the shadow's Forge AI: mulligans, mana payment,
   roots a copy cannot hold), except that a decision the search would take is answered by `NetworkPolicy`: the policy

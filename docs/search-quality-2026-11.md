@@ -106,3 +106,18 @@ next-turn horizon.
 | playout, Forge AI | 423 s | 98 ms | 95% (15 game ends) | 58 / 117 |
 
 No simulation failed. A playout costs about what 4x costs; whether it plays better is for games (after gate 1).
+
+## The value network at the horizon (2026-11-28, protocol 16)
+
+Same 117 roots (key fix included, gen2-c leaf, search debug and timing on in both runs). Before: a walk that reached
+the next-turn horizon inside the tree had Forge's static score; after: the network values the first request there.
+
+| | ms / simulation | ms / decision | ends at the horizon | valued by the network | answers changed |
+| --- | --- | --- | --- | --- | --- |
+| 1x before | 25.1 | 1,181 | 30.4% | 70% (2,765 / 3,972) | |
+| 1x after | 30.0 | 1,355 | 30.5% | 100% | 42 / 117 (35.9%) |
+| 4x before | 21.2 | 4,058 | 43.3% | 57% (9,011 / 15,888) | |
+| 4x after | 28.7 | 5,123 | 42.7% | 100% | 47 / 117 (40.2%) |
+
+A horizon walk now plays on to the first request of the new turn (an untap-upkeep-draw step or two) and runs the
+network once more: +20% per simulation at 1x, +35% at 4x (more of its walks reach the horizon).

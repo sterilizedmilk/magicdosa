@@ -39,6 +39,17 @@ public final class LeafNetwork {
         return loaded;
     }
 
+    /**
+     * Tests: this network in place of the property's ({@code null} turns it off again), named {@code name} in the
+     * search's record.
+     */
+    public static synchronized void use(Evaluator network, String name) {
+        tried = true;
+        loaded = network;
+        fileName = network == null ? "" : name;
+        sha256 = network == null ? "" : "test";
+    }
+
     /** The loaded model's file name, empty when none is loaded. */
     public static synchronized String fileName() {
         return fileName;
