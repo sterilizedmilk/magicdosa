@@ -212,6 +212,7 @@ public class GameCopier {
         }
 
         copyDelayedTriggers(newGame);
+        copyPhaseCommands(newGame);
         copyCastLists(newGame);
 
         if (advanceToPhase != null) {
@@ -664,11 +665,9 @@ public class GameCopier {
     }
 
     /**
-     * Delayed triggers (Mishra's Bauble's "draw a card at the beginning of the next turn's upkeep"), which Forge's copier
-     * leaves out (upstream candidate): the registered ones, the ones for a player's next turn, and the ones queued as a
-     * cleanup command until the turn ends (NextTurn, UpcomingTurn: DelayedTriggerEffect registers them at the cleanup).
-     * A cleanup command is an opaque lambda; the trigger it holds is found among its captured fields (read-only
-     * reflection, nothing in Forge is replaced). Other cleanup commands stay left out, as before.
+     * Registered delayed triggers (this turn's, later turns', a player's next turn), which Forge's copier leaves out
+     * (upstream candidate), each bound to the copy's source card and players. The ones still queued as a phase command
+     * (Mishra's Bauble's "next turn") are carried by {@link #copyPhaseCommands}.
      */
     @SuppressWarnings("unchecked")
     private void copyDelayedTriggers(Game newGame) {
@@ -694,21 +693,6 @@ public class GameCopier {
                 Player p = playerMap.get(e.getKey());
                 if (c != null && p != null) {
                     to.registerPlayerDefinedDelayedTrigger(p, c);
-                }
-            }
-            for (forge.GameCommand cmd : new ArrayList<>((List<forge.GameCommand>) PHASE_UNTIL.get(origGame.getCleanup()))) {
-                forge.game.trigger.Trigger t = capturedTrigger(cmd);
-                if (t == null) {
-                    continue;
-                }
-                forge.game.trigger.Trigger c = copyTrigger(t);
-                if (c == null) {
-                    continue;
-                }
-                if (t.hasParam("NextTurn")) {
-                    newGame.getCleanup().addUntil(() -> to.registerThisTurnDelayedTrigger(c));
-                } else if (t.hasParam("UpcomingTurn")) {
-                    newGame.getCleanup().addUntil(() -> to.registerDelayedTrigger(c));
                 }
             }
         } catch (IllegalAccessException e) {
@@ -778,19 +762,182 @@ public class GameCopier {
         return mapped;
     }
 
-    /** The trigger a cleanup command holds (a DelayedTriggerEffect lambda), or null. */
-    private static forge.game.trigger.Trigger capturedTrigger(forge.GameCommand cmd) {
-        for (java.lang.reflect.Field f : cmd.getClass().getDeclaredFields()) {
-            if (forge.game.trigger.Trigger.class.isAssignableFrom(f.getType())) {
-                try {
-                    f.setAccessible(true);
-                    return (forge.game.trigger.Trigger) f.get(cmd);
-                } catch (IllegalAccessException | RuntimeException e) {
-                    return null;
+    private static final java.lang.reflect.Field PHASE_AT = declared(forge.game.phase.Phase.class, "at");
+    private static final java.lang.reflect.Field[] PHASE_MAPS = {declared(forge.game.phase.Phase.class, "untilMap"),
+        declared(forge.game.phase.Phase.class, "untilEndMap"), declared(forge.game.phase.Phase.class, "registerMap")};
+
+    /** Phase commands the copy could not take over, by command class and the value it could not map (diagnostics). */
+    private final Map<String, Integer> phaseCommandsLeftOut = new java.util.TreeMap<>();
+
+    public Map<String, Integer> phaseCommandsLeftOut() {
+        return phaseCommandsLeftOut;
+    }
+
+    /**
+     * The commands queued on the phases ("until end of turn": a pump's revert; a delayed trigger registered at the
+     * cleanup; "until your next turn"), which Forge's copier leaves out, so a copied creature kept an end-of-turn pump
+     * into the next turn. A command is an opaque object (a lambda or an anonymous class): a new one of the same class is
+     * made with each captured value mapped to the copy ({@link #mapCaptured}); a command holding something the copy
+     * cannot map is left out and counted. Read-only reflection over Forge's fields; nothing in Forge is replaced.
+     */
+    @SuppressWarnings("unchecked")
+    private void copyPhaseCommands(Game newGame) {
+        java.util.function.Function<Game, List<forge.game.phase.Phase>> phases = g -> List.of(g.getUntap(), g.getUpkeep(),
+            g.getBeginOfCombat(), g.getEndOfCombat(), g.getEndOfTurn(), g.getCleanup());
+        List<forge.game.phase.Phase> from = phases.apply(origGame);
+        List<forge.game.phase.Phase> to = phases.apply(newGame);
+        try {
+            for (int i = 0; i < from.size(); i++) {
+                for (java.lang.reflect.Field list : new java.lang.reflect.Field[] {PHASE_UNTIL, PHASE_AT}) {
+                    List<forge.GameCommand> src = (List<forge.GameCommand>) list.get(from.get(i));
+                    List<forge.GameCommand> dst = (List<forge.GameCommand>) list.get(to.get(i));
+                    for (forge.GameCommand cmd : new ArrayList<>(src)) {
+                        forge.GameCommand c = remapCommand(cmd, newGame);
+                        if (c != null) {
+                            dst.add(c);
+                        }
+                    }
+                }
+                for (java.lang.reflect.Field map : PHASE_MAPS) {
+                    Multimap<Player, forge.GameCommand> src = (Multimap<Player, forge.GameCommand>) map.get(from.get(i));
+                    Multimap<Player, forge.GameCommand> dst = (Multimap<Player, forge.GameCommand>) map.get(to.get(i));
+                    for (Map.Entry<Player, forge.GameCommand> e : new ArrayList<>(src.entries())) {
+                        Player p = playerMap.get(e.getKey());
+                        forge.GameCommand c = p == null ? null : remapCommand(e.getValue(), newGame);
+                        if (c != null) {
+                            dst.put(p, c);
+                        }
+                    }
                 }
             }
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
         }
+    }
+
+    /** A value with no counterpart in the copy. */
+    private static final Object UNMAPPED = new Object();
+
+    /** A command of the same class with its captured values mapped to the copy; null (counted) when one cannot be. */
+    private forge.GameCommand remapCommand(forge.GameCommand cmd, Game newGame) {
+        Class<?> k = cmd.getClass();
+        List<java.lang.reflect.Field> fields = new ArrayList<>();
+        for (java.lang.reflect.Field f : k.getDeclaredFields()) {
+            if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+                fields.add(f);
+            }
+        }
+        Object[] values = new Object[fields.size()];
+        try {
+            for (int i = 0; i < fields.size(); i++) {
+                fields.get(i).setAccessible(true);
+                Object v = mapCaptured(fields.get(i).get(cmd), newGame);
+                if (v == UNMAPPED) {
+                    leftOut(k, fields.get(i).getType().getSimpleName());
+                    return null;
+                }
+                values[i] = v;
+            }
+            for (java.lang.reflect.Constructor<?> c : k.getDeclaredConstructors()) {
+                if (fits(c.getParameterTypes(), values)) {
+                    c.setAccessible(true);
+                    return (forge.GameCommand) c.newInstance(values);
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            leftOut(k, e.getClass().getSimpleName());
+            return null;
+        }
+        leftOut(k, "no constructor");
         return null;
+    }
+
+    private void leftOut(Class<?> k, String why) {
+        String name = k.getName();
+        int lambda = name.indexOf("$$Lambda");
+        if (lambda >= 0) {
+            name = name.substring(0, lambda) + "$$Lambda";
+        }
+        phaseCommandsLeftOut.merge(name + " (" + why + ")", 1, Integer::sum);
+    }
+
+    private static boolean fits(Class<?>[] types, Object[] values) {
+        if (types.length != values.length) {
+            return false;
+        }
+        for (int i = 0; i < types.length; i++) {
+            Class<?> t = types[i];
+            if (values[i] == null) {
+                if (t.isPrimitive()) {
+                    return false;
+                }
+                continue;
+            }
+            if (t.isPrimitive()) {
+                t = java.lang.invoke.MethodType.methodType(t).wrap().returnType();
+            }
+            if (!t.isAssignableFrom(values[i].getClass())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A command's captured value in the copy: cards and players to their copies, the game and its trigger handler to the
+     * copy's, a delayed trigger to its copy, collections element by element, commands recursively, plain values (numbers,
+     * text, enums, effect singletons) as they are; anything else is {@link #UNMAPPED}.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object mapCaptured(Object v, Game newGame) {
+        if (v == null || v instanceof Number || v instanceof String || v instanceof Boolean || v instanceof Character
+                || v instanceof Enum) {
+            return v;
+        }
+        if (v instanceof Card c) {
+            Card m = currentCopy(c);
+            return m == null ? UNMAPPED : m;
+        }
+        if (v instanceof Player p) {
+            Player m = playerMap.get(p);
+            return m == null ? UNMAPPED : m;
+        }
+        if (v instanceof Game) {
+            return v == origGame ? newGame : UNMAPPED;
+        }
+        if (v instanceof forge.game.trigger.TriggerHandler) {
+            return v == origGame.getTriggerHandler() ? newGame.getTriggerHandler() : UNMAPPED;
+        }
+        if (v instanceof forge.game.trigger.Trigger t) {
+            forge.game.trigger.Trigger m = copyTrigger(t);
+            return m == null ? UNMAPPED : m;
+        }
+        if (v instanceof forge.GameCommand g) {
+            forge.GameCommand m = remapCommand(g, newGame);
+            return m == null ? UNMAPPED : m;
+        }
+        if (v instanceof forge.game.ability.SpellAbilityEffect) {
+            return v; // effect classes hold no game state
+        }
+        if (v instanceof java.util.Collection<?> col) {
+            java.util.Collection out;
+            if (v instanceof forge.game.card.CardCollection) {
+                out = new forge.game.card.CardCollection();
+            } else if (v instanceof java.util.Set) {
+                out = new java.util.LinkedHashSet<>();
+            } else {
+                out = new ArrayList<>();
+            }
+            for (Object o : col) {
+                Object m = mapCaptured(o, newGame);
+                if (m == UNMAPPED) {
+                    return UNMAPPED;
+                }
+                out.add(m);
+            }
+            return out;
+        }
+        return UNMAPPED;
     }
 
     /** A copy of a delayed trigger bound to the copy's source card and players; null when its source has no copy. */
