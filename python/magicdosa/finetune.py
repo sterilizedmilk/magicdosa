@@ -140,7 +140,9 @@ def auc(score: np.ndarray, label: np.ndarray) -> float:
     return float((ranks[pos].sum() - pos.sum() * (pos.sum() + 1) / 2) / (pos.sum() * neg.sum()))
 
 
-TURN_BUCKETS = ((1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 14), (15, 999))
+DECISION_PRIORITY = 1
+CAND_PASS = 4      # cand_kind of a pass candidate (Candidate.ActionCase PASS; Encoder.java)
+TURN_BUCKETS =((1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 14), (15, 999))
 
 
 def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
@@ -150,6 +152,8 @@ def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
     import torch
     net.eval()
     ce, hit, n, per_type = 0.0, 0, 0, {}
+    pri = {k: [] for k in ("top", "pass_prior", "pass_argmax", "pass_vr", "pass_vr_argmax", "pass_vr_unique", "tied",
+                           "uniform", "n")}
     v_all, r_all, t_all, bce, nv = [], [], [], 0.0, 0
     with torch.no_grad():
         for b in batches(table, rows, 512, None, shuffle=False):
@@ -167,6 +171,22 @@ def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
                     d = per_type.setdefault(int(t), [0, 0])
                     d[0] += 1
                     d[1] += int(k)
+                sel = pm & (b["inputs"]["decision_type"] == DECISION_PRIORITY)
+                if sel.any():
+                    prob = torch.softmax(out["logits"], -1).numpy()[sel]
+                    is_pass = (b["inputs"]["cand_kind"][sel] == CAND_PASS) & b["inputs"]["cand_mask"][sel]
+                    vr = y["visit_ratio"][sel]
+                    count = b["inputs"]["cand_mask"][sel].sum(-1)
+                    pri["top"].append(prob.max(-1))
+                    pri["pass_prior"].append((prob * is_pass).sum(-1))
+                    pri["pass_argmax"].append(is_pass[np.arange(len(prob)), prob.argmax(-1)])
+                    pri["pass_vr"].append((vr * is_pass).sum(-1))
+                    top = (vr >= vr.max(-1, keepdims=True) - 1e-6) & b["inputs"]["cand_mask"][sel]
+                    pri["pass_vr_argmax"].append((top & is_pass).any(-1))         # pass among the most visited
+                    pri["pass_vr_unique"].append((top & is_pass).any(-1) & (top.sum(-1) == 1))
+                    pri["tied"].append(top.sum(-1) > 1)
+                    pri["uniform"].append(1.0 / count)
+                    pri["n"].append(count)
             vm = y["value_mask"]
             bce += float(out["value"]) * int(vm.sum())
             nv += int(vm.sum())
@@ -181,7 +201,20 @@ def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
         by_turn[f"{lo}-{hi}" if hi < 999 else f"{lo}+"] = {"rows": int(sel.sum()), "auc": auc(v[sel], r[sel]),
                                                           "brier": float(((v[sel] - r[sel]) ** 2).mean())
                                                           if sel.any() else float("nan")}
-    return {"policy_rows": n, "policy_ce": ce / max(n, 1), "top1_vs_search": hit / max(n, 1),
+    priority = {}
+    if pri["top"]:
+        p = {k: np.concatenate(v) for k, v in pri.items()}
+        priority = {"rows": int(len(p["top"])), "candidates_mean": float(p["n"].mean()),
+                    "top_prior_mean": float(p["top"].mean()),
+                    "top_prior_quantiles": {q: float(np.quantile(p["top"], q)) for q in (0.1, 0.25, 0.5, 0.75, 0.9)},
+                    "pass_argmax_share": float(p["pass_argmax"].mean()),
+                    "pass_prior_mean": float(p["pass_prior"].mean()),
+                    "search_pass_among_most_visited": float(p["pass_vr_argmax"].mean()),
+                    "search_pass_unique_most_visited": float(p["pass_vr_unique"].mean()),
+                    "search_tied_most_visited": float(p["tied"].mean()),
+                    "search_pass_visit_mean": float(p["pass_vr"].mean()),
+                    "uniform_share_mean": float(p["uniform"].mean())}
+    return {"policy_rows": n, "policy_ce": ce / max(n, 1), "top1_vs_search": hit / max(n, 1), "priority": priority,
             "per_type": {k: {"rows": a, "top1": h / a} for k, (a, h) in sorted(per_type.items())},
             "value_rows": nv, "value_bce": bce / max(nv, 1), "brier": float(((v - r) ** 2).mean()),
             "brier_base_rate": base * (1 - base), "value_accuracy": float(((v > 0.5) == (r > 0.5)).mean()),
