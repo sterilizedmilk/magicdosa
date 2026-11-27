@@ -299,3 +299,20 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
   under the plain-Forge-AI rollout; the network leaf does not roll out).
 - **Fix upstream:** a cheaper `notNeededAsBlockers` on large boards (cap the predicted combats, or reuse one block
   assignment), or a step budget for the AI's combat prediction.
+
+## 20. A game copy rebuilds every card from its script (2026-11-28, measurement)
+
+- **What:** `forge.ai.simulation.GameCopier` (and our copy of it) makes each card of the copy with
+  `CardFactory.getCard`, which reads the card's script again and builds its abilities, triggers and statics
+  (`readCard`), its keyword traits (`setupKeywordedAbilities`), and then the card's view (`updateStateForView`:
+  keywords and mana colours, which also create the land-play, permanent-spell and basic-land mana abilities on first
+  use). For a search that copies the game once per simulation this is 75% of the copy; the copy is 20-23% of the
+  search thread with the network leaf (docs/search-perf.md, "Copy cost").
+- **How we hit it:** agent-core's search copies the shadow game for every simulation (8-9 ms per copy on Izzet-mirror
+  boards, about 120 cards after leaving out the sideboard cards that do nothing there).
+- **Our workaround:** copy fewer cards (sideboard cards that do nothing from the sideboard). The rest cannot be cut
+  from outside: the view update has side effects (lazily created abilities with IDs from the global counter), so a
+  copy that skips or reorders it plays differently.
+- **Fix upstream:** a card copy that clones the built state of an existing card (or of a per-name prototype) instead of
+  reading the script; or, for a no-GUI game (`DummyCardView`), skip the view's keyword and mana-colour work and create
+  the lazily built abilities where the rules first need them, independent of the view.

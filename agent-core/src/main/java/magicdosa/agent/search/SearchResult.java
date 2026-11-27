@@ -28,6 +28,9 @@ public final class SearchResult {
     public final long failures;
     /** Tree nodes, the root included. */
     public final long nodes;
+    /** Tree reuse: root visits and nodes taken over from the previous search's tree (0 for a fresh tree). */
+    public final long inheritedVisits;
+    public final long inheritedNodes;
     /** Value of the root seat's position, the visit-weighted mean reward; NaN when nothing was backed up. */
     public final double rootValue;
     private final long[] visits;
@@ -84,6 +87,8 @@ public final class SearchResult {
         this.rootMismatches = b.rootMismatches;
         this.failures = b.failures;
         this.nodes = b.nodes;
+        this.inheritedVisits = b.inheritedVisits;
+        this.inheritedNodes = b.inheritedNodes;
         this.rootValue = rootValue;
         this.visits = visits.clone();
         this.problems = Collections.unmodifiableMap(new TreeMap<>(b.problems));
@@ -153,6 +158,7 @@ public final class SearchResult {
     public String toString() {
         return "search budget=" + budget + " (" + config.describe() + ") seed=" + seed + " backedUp=" + determinizations + " noSample="
             + noDeterminization + " rootMismatch=" + rootMismatches + " failures=" + failures + " nodes=" + nodes
+            + (inheritedVisits > 0 || inheritedNodes > 0 ? " inherited=" + inheritedVisits + "/" + inheritedNodes : "")
             + " value=" + rootValue + " visits=" + java.util.Arrays.toString(visits) + " tie=" + rootTie() + (problems.isEmpty() ? "" : " " + problems);
     }
 
@@ -160,6 +166,7 @@ public final class SearchResult {
         final SearchConfig config;
         final long seed;
         long budget, iterations, determinizations, noDeterminization, rootMismatches, failures, nodes;
+        long inheritedVisits, inheritedNodes;
         final Map<String, Integer> problems = new TreeMap<>();
 
         Builder(SearchConfig config, long seed, int candidates) {

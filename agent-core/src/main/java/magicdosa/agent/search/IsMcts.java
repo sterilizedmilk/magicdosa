@@ -69,7 +69,34 @@ public final class IsMcts {
         }
     }
 
+    /** A finished search's tree, kept for {@link TreeReuse}. */
+    public static final class Tree {
+        final Node root;
+        final List<String> rootActions;
+
+        Tree(Node root, List<String> rootActions) {
+            this.root = root;
+            this.rootActions = rootActions;
+        }
+    }
+
+    private Tree last;
+
+    /** The tree of the last search of this instance. */
+    public Tree lastTree() {
+        return last;
+    }
+
     public SearchResult search(SearchGame game, long seed) {
+        return search(game, seed, null);
+    }
+
+    /**
+     * {@code inherited}: the root built from the previous search's subtree ({@link TreeReuse#inherit}), its edges named by
+     * {@code game.rootActions()}; null for a fresh tree. Inherited visits count toward the budget: the search plays
+     * budget - inherited root visits new simulations, at least one per root action.
+     */
+    public SearchResult search(SearchGame game, long seed, TreeReuse.Inherited inherited) {
         List<String> rootActions = List.copyOf(game.rootActions());
         int n = rootActions.size();
         SearchResult.Builder out = new SearchResult.Builder(config, seed, n);
@@ -84,7 +111,14 @@ public final class IsMcts {
         long[] nodes = {1};
         long budget = config.budgetFor(n);
         out.budget = budget;
-        for (long it = 0; it < budget; it++) {
+        long simulations = budget;
+        if (inherited != null) {
+            root = inherited.root(root);
+            out.inheritedVisits = root.visits;
+            out.inheritedNodes = inherited.nodes();
+            simulations = Math.max(budget - root.visits, n);
+        }
+        for (long it = 0; it < simulations; it++) {
             SplittableRandom simRng = rng.split();
             out.iterations++;
             SearchGame.Simulation sim;
@@ -138,6 +172,7 @@ public final class IsMcts {
             reward += e.reward;
         }
         out.nodes = nodes[0];
+        last = new Tree(root, rootActions);
         // ties the visits and the mean values leave are drawn from the seed (its own stream: the simulations' draws
         // above do not depend on it)
         return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits,
