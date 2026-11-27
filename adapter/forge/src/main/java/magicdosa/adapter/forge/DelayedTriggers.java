@@ -65,7 +65,17 @@ final class DelayedTriggers {
                     t.setOverridingAbility(over);
                 }
                 TriggerHandler h = game.getTriggerHandler();
-                if (params.containsKey("ThisTurn") || params.containsKey("NextTurn")) {
+                if ((params.containsKey("ThisTurn") || params.containsKey("NextTurn"))
+                        && game.getPhaseHandler().is(forge.game.phase.PhaseType.CLEANUP)) {
+                    // a rebuilt turn start sits in the cleanup before the turn change, whose first act clears this
+                    // turn's delayed triggers (PhaseHandler.handleNextTurn): registered for "this turn" now, the trigger
+                    // was gone before the turn it belongs to (every Mishra's Bauble draw after a rebuild). It is
+                    // registered as a plain delayed trigger, so it lives through that change, and joins this turn's
+                    // list by a cleanup command, which runs right after the change (as Forge's own NextTurn
+                    // registration does), so it still ends with the turn
+                    h.registerDelayedTrigger(t);
+                    game.getCleanup().addUntil(() -> thisTurnTriggers(h).add(t));
+                } else if (params.containsKey("ThisTurn") || params.containsKey("NextTurn")) {
                     h.registerThisTurnDelayedTrigger(t);
                 } else {
                     h.registerDelayedTrigger(t);
@@ -74,6 +84,27 @@ final class DelayedTriggers {
             }
         }
         return null;
+    }
+
+    private static final java.lang.reflect.Field THIS_TURN;
+
+    static {
+        try {
+            THIS_TURN = TriggerHandler.class.getDeclaredField("thisTurnDelayedTriggers");
+            THIS_TURN.setAccessible(true);
+        } catch (NoSuchFieldException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /** The handler's list of this turn's delayed triggers (cleared at the next turn change). */
+    @SuppressWarnings("unchecked")
+    private static List<Trigger> thisTurnTriggers(TriggerHandler h) {
+        try {
+            return (List<Trigger>) THIS_TURN.get(h);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** Spell and activated abilities, and the abilities of the card's replacement effects and triggers (rebound). */
