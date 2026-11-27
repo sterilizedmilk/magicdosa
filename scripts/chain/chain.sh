@@ -6,8 +6,8 @@
 #   2. 1x vs 1x self-play on gen2-c until 1,000 games on the gen2-c leaf (batches whose leaf.txt carries its SHA; the
 #      b0021+ batches count), then chain/selfplay-gen2-1000.done (the batches) and a pause
 #   3. wait for chain/eval-model-gen3.txt (gen-3 ONNX path), evaluate gen2-c (A) vs gen-3 (B) in eval-gen2-vs-gen3
-#      (both 1x, sampling off, eval seeds 7,100,000+), then self-play on gen-3 unless it is significantly worse
-#      (Wilson upper bound of its win rate under 50%), else on gen2-c; the choice goes to chain/selfplay-leaf.txt
+#      (both 1x, sampling off, eval seeds 7,100,000+), then self-play on gen-3 if its point-estimate win rate is at
+#      least 50% (games won / games played), else on gen2-c; the choice goes to chain/selfplay-leaf.txt
 # Stop: create chain/STOP (it finishes the units under way, then exits). Status: chain/status.txt (now), status.log.
 # Resumable: a unit whose folder has summary.txt is done and skipped; a unit that ended without one is moved to
 # <unit>.crashed.N and run again (3 tries). Disk: checked before each phase and batch; stops under 15 GB free on E:.
@@ -123,11 +123,11 @@ while true; do
         -Dmagicdosa.search.leafModelA=$CUR -Dmagicdosa.search.leafModelB=$NEW || { status "stopped (STOP) during the evaluation"; exit 0; }
       python "$(cygpath -w $C/eval_summary.py)" "$(cygpath -w $E)" > $E/eval-summary.txt 2>&1
       if [ "$(ls $E/n*/summary.txt 2>/dev/null | wc -l)" -ge 5 ]; then
-        # gen-3 unless significantly worse: the upper end of its 95% Wilson interval under 50%
-        if python -c "import re,sys; t=open(sys.argv[1]).read(); m=re.search(r'Wilson [\d.]+-([\d.]+)%',t); sys.exit(0 if m and float(m.group(1))<50 else 1)" "$(cygpath -w $E/eval-summary.txt)"; then
-          echo "$CUR" > $C/selfplay-leaf.txt
-        else
+        # 2026-11-27 user decision: gen-3 only if its point-estimate win rate against gen2-c is at least 50%
+        if python -c "import re,sys; t=open(sys.argv[1]).read(); m=re.search(r'won (\d+) of (\d+) games',t); sys.exit(0 if m and int(m.group(2)) > 0 and 2 * int(m.group(1)) >= int(m.group(2)) else 1)" "$(cygpath -w $E/eval-summary.txt)"; then
           echo "$NEW" > $C/selfplay-leaf.txt
+        else
+          echo "$CUR" > $C/selfplay-leaf.txt
         fi
         touch $E/EVAL-DONE
       fi
