@@ -156,3 +156,55 @@ board size: at most about 1.9 s for 18 attackers, no blowup.
 
 21 searches, 126 simulations, 126 backed up, 145 tree nodes, every simulation reached the horizon, every shadow
 decision matched. No games or gates were run (the phase-2 final gate held the machine).
+
+## Tree reuse (2026-11-28 directive, `-Dmagicdosa.search.treeReuse`, off by default)
+
+The next search of a seat can start from the subtree of its previous tree that holds the next real decision, instead
+of a fresh tree.
+
+- **Modes:** `false` (default: fresh trees, nothing computed for reuse; searches identical to before), `measure` (fresh
+  trees keyed as before, the canonical keys kept beside them to count hits; searches identical to `false`), `true`
+  (reuse).
+- **Finding the node:** the tree's information keys are hashes of a copy session's request, whose entity IDs a copy
+  numbers from 1 at the search root; the real session numbers them over the whole game. `CanonicalKey` replaces every
+  entity ID (fields `id`, `ids`, `*_id`, `*_ids`) by the object's place in an order of the objects' contents (game
+  objects, stack items, effects, their IDs cleared; ties by ID) and leaves out what only the real session knows: the
+  mulligans taken and the library cards the seat knows (a mulligan's bottom cards, a scry's; the library's size
+  stays). The node is the most visited node of the seat, below the action the seat played (with a multi-select
+  answered by one candidate: through its "done" steps), whose canonical key equals the real request's. With reuse on,
+  the whole tree is keyed canonically (keys and in-tree action names), so the inherited subtree's own children match
+  the next copies' decisions too; the root's actions keep their names (Forge card numbers) and inherited edges are
+  matched to them by canonical candidate name.
+- **Fresh tree instead** (counted as `tree reuse: <why>` in the search counts): no previous search of the seat, another
+  turn (the turn-start memento and any rebuild happen there), a shadow recovery since the previous search, an answer
+  of more than one candidate, no matching node. Continuation nodes (a multi-select's later steps, keyed by the old
+  request's candidate indices) are not taken over.
+- **Budget:** inherited root visits count toward the budget: a search plays budget - inherited visits new simulations,
+  at least one per root action. `SearchResult.inheritedVisits` / `inheritedNodes` and the debug line
+  (`inherited=visits/nodes`, `reuse=found(...)`) report it.
+- **Policy target:** with reuse the root visit counts (the ExIt target in the shards) include the inherited visits,
+  which were grown under the previous root. `SearchRun` does not record reuse yet (needs a protocol field: asked, not
+  added); keep reuse off for data runs until it does.
+
+**Measurement** (same root set as docs/search-perf.md "Copy cost": `gate3-step3-gen2` `n00-g1` + `n10-g1`, first 30
+agent decisions each, 52 searches, gen2-c network leaf, `-Dfollow=true` so every setting searches the same roots and
+the next root follows the recorded answer). The machine ran a 15-JVM chain at the same time.
+
+| | 1x | 4x |
+| --- | --- | --- |
+| Next decision found in the previous tree (`measure`) | 44 of 52 (the other 8: 3 first searches of a game or seat, 5 the first in a new turn) | 44 of 52 |
+| Depth below the played action | 1 in every case | 1 |
+| Visits of the found node / the next search's budget | 0.35 | 0.37 |
+| Simulations per decision, off -> on | 31.6 -> 22.5 (-28.8%) | 126.5 -> 88.2 (-30.3%) |
+| ms per decision (search), off -> on | 893 -> 684 (-23%; two alternating runs each) | 2908 -> 2338 (-20%; one run each) |
+| Answers that differ from reuse off | 9 of 52 (17%) | 9 of 52 (17%) |
+
+For scale: at 1x a reseed alone changes 27% of the answers (docs/search-perf.md, 2026-11-26), so 17% is within what
+1x answers move by anyway; this does not say whether reuse plays better or worse. The answer changes include the
+change of tree key (canonical instead of the copy session's), not only the inherited visits.
+
+Determinism: sequential harness (20 matches, seed 5000) `different=0`; with reuse off the 52 searches equal the baseline (two runs) and `measure` equals off (1x and 4x); two
+runs with reuse on print the same 52 searches. Tests: `CanonicalKeyTest` (another session's numbering gives the same key
+and names; another state another key; mulligans and known library cards left out), `TreeReuseTest` (toy games: the
+node found past the other seat's node, inherited visits count toward the budget with one simulation per action at
+least, the same inputs give the same search).
