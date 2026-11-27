@@ -377,7 +377,12 @@ public class GameCopier {
                 }
                 continue;
             }
+            boolean allSideboard = zone == ZoneType.Sideboard && sideboardRead(origGame);
             for (Card card : origGame.getCardsIn(zone)) {
+                if (zone == ZoneType.Sideboard && !allSideboard && !actsFromSideboard(card)) {
+                    sideboardLeftOut++;
+                    continue;
+                }
                 addCard(newGame, zone, card, aiPlayer);
             }
             // TODO CardsAddedThisTurn is now messed up
@@ -426,6 +431,124 @@ public class GameCopier {
         }
 
         copyLeftThisTurn(newGame, aiPlayer);
+    }
+
+    /** Sideboard cards the last copy left out ({@link #actsFromSideboard}); diagnostics and tests. */
+    private int sideboardLeftOut;
+
+    public int sideboardLeftOut() {
+        return sideboardLeftOut;
+    }
+
+    /** Words in a card script that read or move cards outside the game (wishes, learn, Karn, subgames, companions). */
+    private static final String[] READS_SIDEBOARD = {"Sideboard", "Learn", "Subgame", "RemoveFromMatch", "Companion",
+        "OutsideGame", "Outside the game", "outside the game"};
+    private static final Map<String, Boolean> SCRIPT_READS_SIDEBOARD = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Whether a card outside the sideboards could read or take sideboard cards (a wish, learn, Karn the Great
+     * Creator, a subgame): then every sideboard card is copied. Decided from the cards' scripts (per card name, cached);
+     * a card without a script (a token, an effect) counts as one that may.
+     */
+    static boolean sideboardRead(Game game) {
+        for (Player p : game.getPlayers()) {
+            for (ZoneType z : ZONES) {
+                if (z == ZoneType.Sideboard) {
+                    continue;
+                }
+                for (Card c : p.getCardsIn(z)) {
+                    if (c.isToken() || c.isImmutable()) {
+                        continue; // tokens and effects: their abilities come from a scripted card, checked as that card
+                    }
+                    if (c.getPaperCard() == null) {
+                        return true;
+                    }
+                    if (SCRIPT_READS_SIDEBOARD.computeIfAbsent(c.getPaperCard().getName(),
+                            n -> scriptReadsSideboard(c.getPaperCard().getRules()))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean scriptReadsSideboard(CardRules rules) {
+        List<forge.card.ICardFace> faces = new ArrayList<>();
+        faces.add(rules.getMainPart());
+        if (rules.getOtherPart() != null) {
+            faces.add(rules.getOtherPart());
+        }
+        for (forge.card.ICardFace f : faces) {
+            List<String> text = new ArrayList<>();
+            f.getAbilities().forEach(text::add);
+            f.getTriggers().forEach(text::add);
+            f.getStaticAbilities().forEach(text::add);
+            f.getReplacements().forEach(text::add);
+            f.getKeywords().forEach(text::add);
+            f.getVariables().forEach(e -> text.add(e.getValue()));
+            if (f.getOracleText() != null) {
+                text.add(f.getOracleText());
+            }
+            for (String s : text) {
+                for (String w : READS_SIDEBOARD) {
+                    if (s.contains(w)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a sideboard card does anything from the sideboard, so the copy needs it: a static ability, trigger or
+     * replacement that works there ("EffectZone$ All": devoid's colour, Thief of Existence), an ability that may be
+     * used from there, a companion, or the source of a static effect now in force. Any other sideboard card is never
+     * looked at by the rules or Forge AI while no card reads the sideboard ({@link #sideboardRead}), and none of our
+     * code tracks the zone (entity IDs, observations), so leaving it out changes nothing a copy plays.
+     */
+    private boolean actsFromSideboard(Card c) {
+        if (c.getPaperCard() == null || c.isToken() || c.isImmutable()) {
+            return true;
+        }
+        for (StaticEffect e : origGame.getStaticEffects().getEffects()) {
+            if (e.getSource() == c) {
+                return true;
+            }
+        }
+        if (!c.getKeywords(forge.game.keyword.Keyword.COMPANION).isEmpty()) {
+            return true;
+        }
+        for (CardStateName s : c.getStates()) {
+            forge.game.card.CardState st = c.getState(s);
+            for (StaticAbility a : st.getStaticAbilities()) {
+                if (anywhere(a.getParam("EffectZone"))) {
+                    return true;
+                }
+            }
+            for (forge.game.trigger.Trigger t : st.getTriggers()) {
+                if (anywhere(t.getParam("TriggerZones"))) {
+                    return true;
+                }
+            }
+            for (forge.game.replacement.ReplacementEffect r : st.getReplacementEffects()) {
+                if (anywhere(r.getParam("ActiveZones"))) {
+                    return true;
+                }
+            }
+            for (SpellAbility sa : st.getSpellAbilities()) {
+                if (sa.getRestrictions() != null && sa.getRestrictions().getZone() == ZoneType.Sideboard
+                        || anywhere(sa.getParam("ActivationZone"))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean anywhere(String zones) {
+        return zones != null && (zones.contains("All") || zones.contains("Sideboard"));
     }
 
     /**
