@@ -49,11 +49,29 @@ def split_runs(runs: Sequence[Path | str], val: float, test: float) -> Dict[str,
     return split
 
 
-def load(paths: Sequence[Path], protocols: Sequence[int]):
+def data_mix(tables) -> Dict[str, int]:
+    """Games per `protocol <n> / leaf <values>`: the shard's protocol version and the search leaf evaluations its
+    searched rows used (`search_leaf_evaluation`, protocol 15 on; 0 = no search on that row, left out)."""
+    from . import shards
+    mix: Dict[str, int] = {}
+    for t in tables:
+        leaf = "-"
+        if "search_leaf_evaluation" in t.column_names:
+            values = np.unique(t.column("search_leaf_evaluation").to_numpy())
+            leaf = "+".join(str(v) for v in values if v != 0) or "-"
+        key = f"protocol {shards.metadata(t).get('protocol_version')} / leaf {leaf}"
+        mix[key] = mix.get(key, 0) + 1
+    return dict(sorted(mix.items()))
+
+
+def load(paths: Sequence[Path], protocols: Sequence[int], mix: Dict[str, int] | None = None):
     """One table of the given games. Columns that only some shards carry (protocol 15 added the search's horizon and
     leaf evaluation, which training does not read) are dropped; the model's input and target columns are in all."""
     from . import imitation, shards
     tables = [shards.read_shard(p, protocols) for p in paths]
+    if mix is not None:
+        for k, v in data_mix(tables).items():
+            mix[k] = mix.get(k, 0) + v
     common = [c for c in tables[0].column_names if all(c in t.column_names for t in tables)]
     return imitation.concat([t.select(common) for t in tables])
 
@@ -227,7 +245,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     (out / "split.json").write_text(json.dumps({**{k: [str(x) for x in v] for k, v in split.items()},
                                                 "imitation": [str(x) for x in imit_paths]}, indent=0))
     t0 = time.time()
-    tables = {k: load(v, a.protocols) for k, v in split.items()}
+    mix: Dict[str, int] = {}
+    tables = {k: load(v, a.protocols, mix) for k, v in split.items()}
     imit = imitation.concat([imitation.read_imitation_shard(q, a.protocols) for q in imit_paths]) if imit_paths \
         else None
     from . import shards
@@ -241,6 +260,7 @@ def main(argv: Iterable[str] | None = None) -> None:
            "rows": {k: int(t.num_rows) for k, t in tables.items()},
            "policy_rows": {k: int(shards.policy_target_rows(t).sum()) for k, t in tables.items()},
            "imitation_rows": int(imit.num_rows) if imit is not None else 0,
+           "shards_by_protocol_and_leaf": mix,
            "load_s": round(time.time() - t0, 1), "args": vars(a)})
 
     init, ck = load_net(a.init)

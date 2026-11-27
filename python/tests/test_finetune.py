@@ -64,6 +64,15 @@ def test_load_drops_columns_only_some_shards_carry(table, tmp_path):
     assert t.num_rows == 2 * table.num_rows and "search_rollout" not in t.column_names
 
 
+def test_data_mix_counts_protocol_and_leaf(table):
+    plain = table.drop_columns([c for c in ("search_leaf_evaluation",) if c in table.column_names])
+    leaf = pa.array(np.where(np.arange(table.num_rows) % 2, 2, 0).astype(np.int32))
+    with_leaf = plain.append_column("search_leaf_evaluation", leaf)
+    mix = finetune.data_mix([plain, with_leaf, with_leaf])
+    p = shards.metadata(table)["protocol_version"]
+    assert mix == {f"protocol {p} / leaf -": 1, f"protocol {p} / leaf 2": 2}
+
+
 def test_batch_targets(table):
     rows = np.arange(table.num_rows)
     b = finetune.batch(table, rows)
