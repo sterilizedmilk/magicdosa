@@ -5,6 +5,7 @@ import forge.game.Game;
 import forge.game.GameOutcome;
 import forge.game.card.Card;
 import forge.game.phase.PhaseHandler;
+import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.zone.ZoneType;
 import forge.deck.Deck;
@@ -184,6 +185,12 @@ public final class ForgeSearchGame implements SearchGame {
     }
     /** What the simulations did, for the search's report. */
     public final Map<String, Integer> counts = new TreeMap<>();
+    /**
+     * Measurement only (2026-11-27 directive, depth of the tree): with {@code -Dmagicdosa.search.depthStats=true} each
+     * simulation that reached the root decision counts how far its end lies from the root, in tree decisions (the
+     * root's steps included), in agent requests after the root, in Forge phase steps and in turns.
+     */
+    static final boolean DEPTH_STATS = Boolean.getBoolean("magicdosa.search.depthStats");
 
     public ForgeSearchGame(Game shadow, ForgeGameSession shadowSession, DecisionRequest root, CardKeys keys, List<Deck> decks,
                            int[] gamesWon, String matchId, int gameNumber) {
@@ -419,6 +426,7 @@ public final class ForgeSearchGame implements SearchGame {
         ForgeGameSession s = new ForgeGameSession(copy, matchId, gameNumber, decks, gamesWon.clone(), Set.of(0, 1), client,
             keys, LogSink.DISCARD, Mode.MODE_TRAINING, rng.nextLong());
         client.session = s;
+        client.copyGame = copy;
         s.attachToCopy();
         for (Player p : copy.getRegisteredPlayers()) {
             p.dangerouslySetController(new AgentPlayerController(copy, p, p.getLobbyPlayer(), s));
@@ -457,6 +465,16 @@ public final class ForgeSearchGame implements SearchGame {
                 if (++steps > MAX_LOOP_STEPS) {
                     throw new IllegalStateException("no horizon after " + MAX_LOOP_STEPS + " loop steps");
                 }
+            }
+            if (DEPTH_STATS && client.askedRoot) {
+                String end = client.leafValue != null ? "network" : copy.isGameOver() ? "game over" : "horizon";
+                int steps0 = PhaseType.values().length;
+                int phase = ph.getPhase() == null ? 0 : ph.getPhase().ordinal();
+                count(String.format("depth %s: decisions %03d", end, client.treeSteps));
+                count(String.format("depth %s: requests %03d", end, client.requests));
+                count(String.format("depth %s: phase steps %03d", end,
+                    (ph.getTurn() - client.rootTurnAt) * steps0 + phase - client.rootPhaseAt));
+                count(String.format("depth %s: turns %d", end, ph.getTurn() - client.rootTurnAt));
             }
             if (!client.askedRoot) {
                 count("no root: " + root.getType().name().replace("DECISION_TYPE_", "") + " at "
@@ -543,6 +561,12 @@ public final class ForgeSearchGame implements SearchGame {
         private boolean delegate;
         /** The network's value of the leaf, for the root seat; set when the simulation stops there. */
         Double leafValue;
+        /** {@link #DEPTH_STATS}: tree steps chosen, requests after the root, and the copy's turn and phase at the root. */
+        int treeSteps;
+        int requests;
+        int rootTurnAt;
+        int rootPhaseAt;
+        Game copyGame;
 
         Client(Chooser chooser, SplittableRandom rng) {
             this.chooser = chooser;
@@ -697,6 +721,13 @@ public final class ForgeSearchGame implements SearchGame {
             }
             boolean isRoot = !askedRoot;
             askedRoot = true;
+            if (isRoot && DEPTH_STATS) {
+                PhaseHandler at = copyGame.getPhaseHandler();
+                rootTurnAt = at.getTurn();
+                rootPhaseAt = at.getPhase() == null ? 0 : at.getPhase().ordinal();
+            } else if (!isRoot) {
+                requests++;
+            }
             if (!isRoot && (DELEGATED.contains(r.getType()) || r.getCandidatesCount() == 0)) {
                 count("delegated " + r.getType().name().replace("DECISION_TYPE_", ""));
                 delegate = true;
@@ -764,6 +795,7 @@ public final class ForgeSearchGame implements SearchGame {
                     sorted.sort(Integer::compare);
                     pick = chooser.choose(new Decision(r.getSeat(), chosen.isEmpty() ? info : info + "|" + sorted, actions,
                         !chosen.isEmpty()));
+                    treeSteps++;
                     rootChosen |= isRoot;
                     if (leafNetwork != null && chooser.outOfTree()) {
                         // the walk left the tree here: the network values this step instead of a rollout
