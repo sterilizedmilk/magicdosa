@@ -199,3 +199,49 @@ speed, to be switched off later (they weaken play; nothing is to be built on the
 `SearchRun.horizon` / `leaf_evaluation` (protocol 15; the switches are now `next-turn`/`own-turn` and
 `forge-static`/`forge-combat`). The network leaf stays off. With the new defaults the two games' 149 searches equal
 the "Both" row's (same visits and root values).
+
+## Copy cost (2026-11-28)
+
+Question: the copy (`GameCopier` and the deal, `ForgeSearchGame.determinize`) is the largest single part of a
+simulation with the network leaf. What can be cut on our side without changing any search?
+
+**Root set and method.** Gate `E:\magicdosa-runs\gate3-step3-gen2` (main `c43f58d`, 1x against 4x, gen2-c network
+leaf): `n0/n00-g1` and `n1/n10-g1`, the first 30 agent decisions of each, `SearchReplay 12 1 30` with
+`-Dfollow=true -Dmagicdosa.reproducible=true -Dmagicdosa.search.leafModel=gen2-c.onnx`: 52 searches, 1644
+simulations. Identical searches: the `search debug` lines (budget, seed, visits, root value, answer) with the timing
+fields removed are equal. The machine ran a 15-JVM self-play chain at the same time, so only alternating runs compare:
+the old `GameCopier` (`b6323fb`, compiled into a class-path overlay) and the new one, two runs each.
+
+**Where the copy's time goes (JFR, 1 ms sampling, search thread, before the changes).** The copy is 20-23% of the
+search thread's samples. Inside it: `CardFactory.getCard` 75% (`readCard`: the script's abilities, triggers and
+statics built 38%; `buildAbilities` 35%, most of it the card view's update, 27% of the copy: keywords and the mana
+colours, which also create the card's lazily built abilities: land play, permanent spell, basic land mana),
+`checkStateEffects` 4%, the deal 2%, the rest (new game and players, history, stack, phase commands) under 2% each. Building the card is Forge's work and has side effects (ability IDs from Forge's global
+counter, lazily created abilities), so skipping or reordering any of it from our side would change what a copy
+plays: docs/upstream-candidates.md 20.
+
+**What our side can cut: cards the copy never needs.** Every copy rebuilt both sideboards (15 cards each, a fifth of
+the cards). A sideboard card is needed only when something reads the sideboard (a wish, learn, Karn: then all of it
+is copied) or when the card acts from there (a static ability, trigger, replacement or ability whose zone covers the
+sideboard, such as devoid's colour; a companion; the source of a static effect in force). None of our code tracks the
+sideboard (entity IDs, observations).
+
+| Commit | Change | Copy ms/sim before | after | All in ms/sim before | after | Thread CPU ms/sim before | after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `fb0cdf6` + `18cc7d4` | Sideboard cards that do nothing there are left out; the check is cached per card name | 9.44 | 8.01 (-15%) | 32.87 | 30.34 (-8%) | 27.81 | 25.88 (-7%) |
+
+Averages of two alternating runs each (copy 9.30 / 9.58 against 7.78 / 8.23); all four runs print the same 52
+searches as the first baseline. `fb0cdf6` alone (one run, unpaired): copy 8.64.
+Sequential determinism harness on `18cc7d4` (`ParallelDeterminismHarness`, IzzetProwess vs EsperBlink, 20 matches,
+seed 5000): `different=0`. New test: `GameCopierSideboardTest` (a devoid card is kept and stays colourless, a wish
+keeps the whole sideboard).
+
+Tried and not done:
+- In-place restore with Forge's `GameMemento` instead of a new copy per simulation: a capture of the shadow costs about
+  35 ms (shadow timing), and a restore writes every field of every object, so it is not cheaper than the 8-9 ms copy,
+  and its known gaps (`MementoGaps`) would need the same repairs.
+- A cache of the parsed ability text: parsing (`FileSection.parseToMap`) is not among the copy's hot frames; the cost
+  is building the ability objects.
+- Building the next copy on another thread while a simulation plays: Forge's ability IDs come from a global counter
+  that is not thread-safe (upstream candidate 1), and the interleaving would make IDs depend on timing.
+- Copying only part of a library (`GameCopier.LIBRARY_LIMIT`): changes what a simulation can draw or search for.
