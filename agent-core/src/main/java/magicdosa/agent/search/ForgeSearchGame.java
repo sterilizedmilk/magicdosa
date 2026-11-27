@@ -534,6 +534,8 @@ public final class ForgeSearchGame implements SearchGame {
      * Forge AI (a delegation in the copy), or, in the middle of a multi-select, finishes it at random.
      */
     private final class Client implements DelegatingClient {
+        /** Rollout answers that mapped to no candidate printed so far (search debug), over the JVM. */
+        private static int unmappedPrinted;
         private final Chooser chooser;
         private final SplittableRandom rng;
         ForgeGameSession session;
@@ -606,6 +608,11 @@ public final class ForgeSearchGame implements SearchGame {
         @Override
         public void unmapped(DecisionRequest request, String engineDecision) {
             count("rollout answer matched no candidate: " + request.getType().name().replace("DECISION_TYPE_", ""));
+            if (Boolean.getBoolean("magicdosa.search.debug") && unmappedPrinted++ < 20) { // diagnosis only
+                System.out.println("search debug: rollout answer matched no candidate: " + engineDecision + " | "
+                    + com.google.protobuf.TextFormat.shortDebugString(request.getConstraints()) + " | candidates "
+                    + request.getCandidatesCount() + " " + com.google.protobuf.TextFormat.shortDebugString(request.getContext()));
+            }
         }
 
         @Override
