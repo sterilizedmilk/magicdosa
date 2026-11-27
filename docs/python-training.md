@@ -281,6 +281,37 @@ overfits after epoch 1 again (validation BCE 0.60 → 0.76, train 0.47 → 0.27)
 
 `gen2-c.onnx` (SHA-256 669387b3…) matches PyTorch to 3e-6 (logits) and 2e-6 (value) on two self-play games.
 
+## Generation 3: gen2-c-leaf self-play
+
+Data (2026-11-28): the 1011 self-play games of `selfplay\b0021`-`b0040` (gen2-c leaf, seed bases 2,021,000-2,040,000;
+builds 93a0a0b b0021, c06a76a b0022, 05d9dee b0023-25, 0a7fbbf b0026-33, a6d3299 b0034-40). Shards: 1326 protocol 15
+with Forge-static horizon leaves (leaf evaluation 2), 696 protocol 16 with the value net at the horizon (3). No older
+games added. Split by match: train 1668 shards (146k rows), validation 182, test 172. Run D (`E:\magicdosa-runs\gen3\d`):
+init gen2-c, lr 1e-4, 4 epochs, 1230 s; the value overfits after epoch 1 (validation BCE 0.455 → 0.499), epoch 1 kept.
+
+| Set | Model | Top-1 vs search | Soft CE | Value Brier (base rate) | AUC | PRIORITY: pass is argmax / mean top prior |
+| --- | --- | --- | --- | --- | --- | --- |
+| validation | gen0-run2 | 70.1% | 3.28 | 0.200 (0.249) | 0.781 | 54.8% / 0.90 |
+| validation | gen1-b | 66.3% | 1.11 | 0.178 | 0.824 | 48.8% / 0.45 |
+| validation | gen2-c | 72.4% | 1.077 | 0.156 | 0.856 | 71.8% / 0.41 |
+| validation | gen3-d | 74.3% | 1.073 | 0.149 | 0.867 | 65.0% / 0.39 |
+| test | gen0-run2 | 69.8% | 3.16 | 0.223 (0.249) | 0.741 | 56.2% / 0.89 |
+| test | gen1-b | 67.6% | 1.09 | 0.210 | 0.764 | 48.8% / 0.45 |
+| test | gen2-c | 74.7% | 1.061 | 0.164 | 0.842 | 73.4% / 0.42 |
+| test | gen3-d | 75.4% | 1.058 | 0.165 | 0.842 | 64.2% / 0.39 |
+
+Test AUC by turn, gen2-c → gen3-d: 1-2 0.73 → 0.78, 3-4 0.81 → 0.84, 5-6 0.87 → 0.88, 7-8 0.90 → 0.90,
+9-10 0.89 → 0.87, 11-14 0.87 → 0.87. `gen3-d.onnx` (SHA-256 6ee4fb18…) matches PyTorch to 4e-6 / 2e-6.
+
+Why the policy is flat and passes (PRIORITY targets of this data, validation set; 10.6k rows, 3.45 candidates on
+average): the visit ratios are close to uniform (pass 0.371 against a uniform share of 0.357; on one batch the median
+spread between the most and least visited candidate is 0.083, one simulation of twelve), the most visited
+candidates tie in 38% of rows, and pass is always candidate 0, so pass is among the most visited in 70% of rows but
+the unique most visited in only 36%. A uniform prior with 12 simulations per candidate barely separates them, the
+soft cross-entropy then teaches a near-uniform policy with a small pass tilt, and an argmax with first-index tie
+breaking lands on pass. The sampled early turns do not touch the targets (only the played move). The recipe is
+unchanged; changing it (sharper targets, more simulations, tie handling in the search) is a planning decision.
+
 ## Placeholders
 
 Everything here exists only to make the pipeline run. None of it is a design decision.
