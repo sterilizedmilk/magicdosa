@@ -212,8 +212,7 @@ public class GameCopier {
         }
 
         copyDelayedTriggers(newGame);
-
-        // TODO update thisTurnCast
+        copyCastLists(newGame);
 
         if (advanceToPhase != null) {
             newGame.getPhaseHandler().devAdvanceToPhase(advanceToPhase, () -> GameSimulator.resolveStack(newGame, aiPlayer.getWeakestOpponent()));
@@ -715,6 +714,68 @@ public class GameCopier {
         } catch (IllegalAccessException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Cast and activation history the copy could not take over (its card has no copy); diagnostics. */
+    private int castHistoryLeftOut;
+
+    public int castHistoryLeftOut() {
+        return castHistoryLeftOut;
+    }
+
+    /**
+     * The spells cast this turn and last turn and the abilities activated this turn (storm counts, "your second spell
+     * each turn" such as Cori-Steel Cutter's trigger, cost changes), which Forge's copier leaves out ("TODO update
+     * thisTurnCast"): each entry is put on the copy's stack history with a last-known copy of the copy's card and the
+     * copy's player, as MagicStack records them.
+     */
+    private void copyCastLists(Game newGame) {
+        forge.game.zone.MagicStack from = origGame.getStack();
+        forge.game.zone.MagicStack to = newGame.getStack();
+        for (SpellAbility sa : from.getSpellsCastThisTurn()) {
+            SpellAbility c = copyHistory(sa);
+            if (c != null) {
+                to.getSpellsCastThisTurn().add(c);
+            }
+        }
+        for (Card c : from.getSpellsCastLastTurn()) {
+            Card mapped = currentCopy(c);
+            if (mapped == null) {
+                castHistoryLeftOut++;
+            } else {
+                to.getSpellsCastLastTurn().add(CardCopyService.getLKICopy(mapped));
+            }
+        }
+        for (SpellAbility sa : from.getAbilityActivatedThisTurn()) {
+            SpellAbility c = copyHistory(sa);
+            if (c != null) {
+                to.getAbilityActivatedThisTurn().add(c);
+            }
+        }
+    }
+
+    private SpellAbility copyHistory(SpellAbility sa) {
+        Card mapped = currentCopy(sa.getHostCard());
+        if (mapped == null) {
+            castHistoryLeftOut++;
+            return null;
+        }
+        Card lki = CardCopyService.getLKICopy(mapped);
+        Player activator = sa.getActivatingPlayer() == null ? null : playerMap.get(sa.getActivatingPlayer());
+        return activator == null ? sa.copy(lki, true) : sa.copy(lki, activator, true);
+    }
+
+    /** The copy's card for {@code c} (an object of the original game or a last-known copy of one), or null. */
+    private Card currentCopy(Card c) {
+        if (c == null) {
+            return null;
+        }
+        Card mapped = cardMap.get(c);
+        if (mapped == null) {
+            Card current = origGame.getCardState(c, null);
+            mapped = current == null ? null : cardMap.get(current);
+        }
+        return mapped;
     }
 
     /** The trigger a cleanup command holds (a DelayedTriggerEffect lambda), or null. */
