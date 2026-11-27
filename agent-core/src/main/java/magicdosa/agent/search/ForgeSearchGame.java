@@ -62,7 +62,7 @@ import java.util.function.LongFunction;
  * Decision types delegated inside simulations (decision 2, 11-16): mana payment (pool allocation), damage assignment,
  * trigger order, and the pre-game ones.
  */
-public final class ForgeSearchGame implements SearchGame {
+public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
     /**
      * The game's waiting triggers (a guard: a simulation must never add to the source game's; Forge's copier once let a
      * copy's spent mana queue ManaExpend triggers in the shadow, which then held every copy).
@@ -200,6 +200,53 @@ public final class ForgeSearchGame implements SearchGame {
     /** The root request's candidates by name, in candidate order. */
     private final List<String> rootNames;
 
+    /** Tree reuse measurement: a tree node's information key -> its canonical key ({@link CanonicalKey}). */
+    private final Map<String, String> canonKeys = new HashMap<>();
+    /** Tree reuse measurement: a tree node's information key -> its action names -> their canonical names. */
+    private final Map<String, Map<String, String>> canonActions = new HashMap<>();
+    /** Tree reuse diagnosis: canonical key -> the message it hashes (root seat's tree nodes). */
+    final Map<String, com.google.protobuf.Message> canonMessages = new HashMap<>();
+    /** Tree reuse: the root request's canonical key and its root action names -> canonical names. */
+    private CanonicalKey.Canon rootCanon;
+    private final Map<String, String> rootCanonByAction = new HashMap<>();
+
+    /** The canonical key of a tree node's information key (the key itself when the tree is keyed canonically). */
+    @Override
+    public String canonKey(String info) {
+        return TreeReuse.MODE == TreeReuse.Mode.ON ? info : canonKeys.get(info);
+    }
+
+    /** The canonical name of an action at a tree node (the name itself when the tree is keyed canonically). */
+    @Override
+    public String canonAction(String info, String action) {
+        if (TreeReuse.MODE == TreeReuse.Mode.ON || DONE.equals(action)) {
+            return action;
+        }
+        Map<String, String> m = canonActions.get(info);
+        return m == null ? null : m.get(action);
+    }
+
+    /** The root request's canonical key (tree reuse on or measured), else null. */
+    public String rootCanonKey() {
+        return rootCanon == null ? null : rootCanon.key();
+    }
+
+    /** The canonical name of a root action ("done" as it is). */
+    @Override
+    public String rootCanonAction(String rootAction) {
+        return DONE.equals(rootAction) ? rootAction : rootCanonByAction.get(rootAction);
+    }
+
+    /** The searched request. */
+    public DecisionRequest rootRequest() {
+        return root;
+    }
+
+    /** The root action naming a candidate of the root request. */
+    public String rootName(int candidate) {
+        return rootNames.get(candidate);
+    }
+
     /** The candidate index an action of the root decision's steps names; -1 for "done". */
     public int rootCandidate(String action) {
         return action.equals(DONE) ? -1 : rootNames.indexOf(action);
@@ -298,6 +345,12 @@ public final class ForgeSearchGame implements SearchGame {
             a.add(rootKey(c, id -> forgeIdOf(shadowSession.cardOf(id), id)));
         }
         this.rootNames = List.copyOf(a);
+        if (TreeReuse.MODE != TreeReuse.Mode.OFF) {
+            rootCanon = CanonicalKey.of(root);
+            for (int i = 0; i < rootNames.size(); i++) {
+                rootCanonByAction.put(rootNames.get(i), rootCanon.candidates().get(i));
+            }
+        }
         count("root " + root.getType().name().replace("DECISION_TYPE_", ""));
         List<Integer> all = new ArrayList<>();
         for (int i = 0; i < root.getCandidatesCount(); i++) {
@@ -835,7 +888,28 @@ public final class ForgeSearchGame implements SearchGame {
                 names.add(isRoot ? rootKey(k, id -> forgeIdOf(session.cardOf(id), id))
                     : com.google.protobuf.TextFormat.shortDebugString(k));
             }
-            String info = isRoot ? "root" : infoKey(r);
+            // with reuse on the canonical key below replaces the information key
+            String info = isRoot ? "root" : TreeReuse.MODE == TreeReuse.Mode.ON ? null : infoKey(r);
+            if (!isRoot && TreeReuse.MODE != TreeReuse.Mode.OFF) {
+                CanonicalKey.Canon canon = CanonicalKey.of(r);
+                if (TreeReuse.MODE == TreeReuse.Mode.ON) {
+                    // reuse: the tree is keyed in names a later search (another copy session) gives the same set too
+                    info = canon.key();
+                    names.clear();
+                    names.addAll(canon.candidates());
+                } else {
+                    // measurement: the tree as without reuse, the canonical names beside it
+                    Map<String, String> byName = new HashMap<>();
+                    for (int i = 0; i < names.size(); i++) {
+                        byName.put(names.get(i), canon.candidates().get(i));
+                    }
+                    canonKeys.put(info, canon.key());
+                    if (TreeReuse.DEBUG && r.getSeat() == rootSeat) {
+                        canonMessages.putIfAbsent(canon.key(), CanonicalKey.message(r));
+                    }
+                    canonActions.put(info, byName);
+                }
+            }
             List<Integer> remaining = new ArrayList<>();
             for (int i = 0; i < r.getCandidatesCount(); i++) {
                 remaining.add(i);
@@ -940,6 +1014,11 @@ public final class ForgeSearchGame implements SearchGame {
      * (depth measurement, 2026-11-27). The zone sizes stay in the player states.
      */
     static String infoKey(DecisionRequest r) {
+        return magicdosa.agent.shadow.Fingerprint.hash(infoMessage(r));
+    }
+
+    /** What {@link #infoKey} hashes. */
+    static DecisionRequest infoMessage(DecisionRequest r) {
         DecisionRequest n = magicdosa.agent.shadow.Fingerprint.normalise(r.toBuilder().clearCandidates().clearConstraints().build());
         magicdosa.protocol.v1.Observation.Builder o = n.getObservation().toBuilder().clearObjects();
         for (magicdosa.protocol.v1.GameObject g : n.getObservation().getObjectsList()) {
@@ -949,7 +1028,7 @@ public final class ForgeSearchGame implements SearchGame {
                 o.addObjects(g);
             }
         }
-        return magicdosa.agent.shadow.Fingerprint.hash(n.toBuilder().setObservation(o).build());
+        return n.toBuilder().setObservation(o).build();
     }
 
     /** A step's actions: the fitting candidates' names, then "done" where the selection may stop. */

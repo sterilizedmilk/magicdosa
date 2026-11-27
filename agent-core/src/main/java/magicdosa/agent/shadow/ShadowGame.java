@@ -345,7 +345,53 @@ public final class ShadowGame {
             && anchorGame.getPhaseHandler().getPhase() == game.getPhaseHandler().getPhase();
     }
 
+    /** Tree reuse ({@link magicdosa.agent.search.TreeReuse}): the seat's previous search, and where it stood. */
+    private magicdosa.agent.search.TreeReuse.Previous reusePrev;
+    private int reusePrevTurn = -1;
+    private int reusePrevRecoveries = -1;
+    /** The search {@link #searchedOnce} just ran (its tree and game), for {@link #reusePrev}. */
+    private magicdosa.agent.search.IsMcts justSearched;
+    private magicdosa.agent.search.ForgeSearchGame justSearchedGame;
+
     private DecisionResponse searched(DecisionRequest real) {
+        justSearched = null;
+        DecisionResponse resp = searchedOnce(real);
+        if (magicdosa.agent.search.TreeReuse.MODE != magicdosa.agent.search.TreeReuse.Mode.OFF && justSearched != null) {
+            // the action the seat played (with -Dfollow the recorded one): the next search looks below it
+            String played = resp.getChosenCount() == 1 ? justSearchedGame.rootName(resp.getChosen(0)) : null;
+            reusePrev = played == null || justSearched.lastTree() == null ? null
+                : new magicdosa.agent.search.TreeReuse.Previous(justSearched.lastTree(), justSearchedGame, real.getSeat(), played);
+            reusePrevTurn = game.getPhaseHandler().getTurn();
+            reusePrevRecoveries = result.recoveries1 + result.recoveries2;
+        }
+        return resp;
+    }
+
+    /**
+     * The previous tree's node for this search's root, or null (counted): only within the turn of the previous search
+     * and with no shadow recovery since (a recovery may have corrected the state the tree was grown from).
+     */
+    private magicdosa.agent.search.TreeReuse.Found reuseFound(magicdosa.agent.search.ForgeSearchGame g) {
+        String why;
+        magicdosa.agent.search.TreeReuse.Found f = null;
+        if (reusePrev == null) {
+            why = "no previous tree";
+        } else if (reusePrevTurn != game.getPhaseHandler().getTurn()) {
+            why = "another turn";
+        } else if (reusePrevRecoveries != result.recoveries1 + result.recoveries2) {
+            why = "recovery since";
+        } else {
+            f = magicdosa.agent.search.TreeReuse.find(reusePrev, g.rootCanonKey());
+            why = f == null ? "not in the previous tree" : "found";
+            if (f == null) {
+                magicdosa.agent.search.TreeReuse.explainMiss(reusePrev, g.rootRequest());
+            }
+        }
+        live.searched(null, Map.of("tree reuse: " + why, 1));
+        return f;
+    }
+
+    private DecisionResponse searchedOnce(DecisionRequest real) {
         if (real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
             // the anchor for searches of the decisions inside the action this priority decision may start
             long ta = magicdosa.agent.Timing.start(); // measurement only
@@ -400,7 +446,18 @@ public final class ShadowGame {
         long debugStart = System.nanoTime(); // measurement only (the debug line)
         long debugCpu = java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime(); // measurement only
         long debugProcCpu = ((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime(); // measurement only
-        magicdosa.agent.search.SearchResult r = new magicdosa.agent.search.IsMcts(live.search()).search(g, real.getSeed() ^ SEED_SALT);
+        magicdosa.agent.search.IsMcts mcts = new magicdosa.agent.search.IsMcts(live.search());
+        magicdosa.agent.search.TreeReuse.Inherited inherited = null;
+        magicdosa.agent.search.TreeReuse.Found found = null;
+        if (magicdosa.agent.search.TreeReuse.MODE != magicdosa.agent.search.TreeReuse.Mode.OFF) {
+            found = reuseFound(g);
+            if (found != null && magicdosa.agent.search.TreeReuse.MODE == magicdosa.agent.search.TreeReuse.Mode.ON) {
+                inherited = magicdosa.agent.search.TreeReuse.inherit(reusePrev, found, g);
+            }
+        }
+        magicdosa.agent.search.SearchResult r = mcts.search(g, real.getSeed() ^ SEED_SALT, inherited);
+        justSearched = mcts;
+        justSearchedGame = g;
         long debugMs = (System.nanoTime() - debugStart) / 1_000_000;
         long debugCpuMs = (java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime() - debugCpu) / 1_000_000;
         long debugProcCpuMs = (((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getProcessCpuTime() - debugProcCpu) / 1_000_000;
@@ -415,6 +472,11 @@ public final class ShadowGame {
             List<String> answer = new ArrayList<>();
             for (magicdosa.agent.search.SearchResult.Step st : r.steps) {
                 answer.add(String.valueOf(g.rootCandidate(st.actions().get(st.chosen()))));
+            }
+            if (found != null) {
+                d.append(" reuse=found(visits ").append(found.visits()).append(", depth ").append(found.depth())
+                    .append(", matches ").append(found.matches())
+                    .append(inherited == null ? "" : ", edges " + inherited.edgesTaken()).append(")");
             }
             d.append(" answer=").append(answer).append(" ms=").append(debugMs).append(" cpu=").append(debugCpuMs).append(" pcpu=").append(debugProcCpuMs);
             for (int i = 0; i < real.getCandidatesCount(); i++) {
