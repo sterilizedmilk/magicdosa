@@ -1,16 +1,16 @@
 #!/bin/bash
 # Detached run chain (2026-11-26, coordinator request): runs with no Claude session alive.
-#   1x vs 1x self-play data run in batches (selfplay/bNNNN) with the build in chain/bulk-classes (2026-11-26 user
-#   decision: self-play first; the gate 1 rerun is run separately when asked). Workers per batch: 5 minus the gate-2
-#   workers still running. Leaf: gen-0 run 2 until chain/gen1-leaf.txt names an existing ONNX file, then that file from
-#   the next batch on; each batch records its leaf (file and SHA-256 prefix) in leaf.txt and done.txt.
-#   At 1,000 self-play games (finished units, all batches) it pauses and writes chain/selfplay-1000.done (the batch
-#   folders), waits for chain/eval-model.txt (the trained ONNX path), runs the evaluation gen-0 run 2 vs that model
-#   (eval-gen0-vs-trained: both 1x, sampling off, 5 units x 12 matches, eval seeds 7,000,000+, eval-summary.txt), and
-#   then resumes self-play with the trained model as the leaf.
+#   Cycle 2 (2026-11-27 user decision), each phase resumable:
+#   1. gate 1 rerun with the gen2-c leaf: 1x vs 4x, gate settings (sampling off), the seeds of gate3-step3-net (paired),
+#      in gate3-step3-gen2 (5 units x 10 matches); GATE-DONE when all five have a summary
+#   2. 1x vs 1x self-play on gen2-c until 1,000 games on the gen2-c leaf (batches whose leaf.txt carries its SHA; the
+#      b0021+ batches count), then chain/selfplay-gen2-1000.done (the batches) and a pause
+#   3. wait for chain/eval-model-gen3.txt (gen-3 ONNX path), evaluate gen2-c (A) vs gen-3 (B) in eval-gen2-vs-gen3
+#      (both 1x, sampling off, eval seeds 7,100,000+), then self-play on gen-3 unless it is significantly worse
+#      (Wilson upper bound of its win rate under 50%), else on gen2-c; the choice goes to chain/selfplay-leaf.txt
 # Stop: create chain/STOP (it finishes the units under way, then exits). Status: chain/status.txt (now), status.log.
 # Resumable: a unit whose folder has summary.txt is done and skipped; a unit that ended without one is moved to
-# <unit>.crashed.N and run again (3 tries). Disk: checked before each batch; stops under 15 GB free on E:.
+# <unit>.crashed.N and run again (3 tries). Disk: checked before each phase and batch; stops under 15 GB free on E:.
 C=/e/magicdosa-runs/chain
 RUNS=/e/magicdosa-runs
 DECKS=E:/workspace/magicdosa/.claude/worktrees/phase3-search-b28914/decks
@@ -61,66 +61,87 @@ run_units() {
   return 0
 }
 
-status "chain started (pid $$): self-play"
-GEN0=E:/magicdosa-runs/gen0/run2/gen0-run2.onnx
+status "chain started (pid $$): cycle 2"
+CUR=E:/magicdosa-runs/gen2/c/gen2-c.onnx
+CURSHA=$(sha256sum "$(cygpath -u $CUR)" | cut -c1-16)
 S=$RUNS/selfplay
-E=$RUNS/eval-gen0-vs-trained
-mkdir -p $S
+GATE=$RUNS/gate3-step3-gen2
+E=$RUNS/eval-gen2-vs-gen3
+EVALF=$C/eval-model-gen3.txt
+MARK=$C/selfplay-gen2-1000.done
+CLASSES=$C/cycle2-classes
 MATCHES=${MATCHES:-4}
 model_from() { [ -s "$1" ] || return 1; local m; m=$(head -1 "$1" | tr -d '\r'); [ -f "$(cygpath -u "$m")" ] || return 1; echo "$m"; }
-finished_games() { local n=0 u; for u in $S/b*/w*/summary.txt; do [ -f "$u" ] && n=$((n + $(ls $(dirname $u)/*.pb.gz 2>/dev/null | wc -l))); done; echo $n; }
+leaf_games() { local n=0 b; for b in $S/b*/; do grep -q " $1" $b/leaf.txt 2>/dev/null || continue; for u in $b/w*/summary.txt; do [ -f "$u" ] && n=$((n + $(ls $(dirname $u)/*.pb.gz 2>/dev/null | wc -l))); done; done; echo $n; }
 
-evaluate() {
-  local trained=$1
-  mkdir -p $E
-  if [ ! -f $E/units.txt ]; then
-    for i in $(seq 0 4); do echo "n$i $((7000000+100*i)) 0 12 e$i-"; done > $E/units.txt
-    { echo "A (gen-0 run 2): $GEN0 $(sha256sum "$(cygpath -u $GEN0)" | cut -c1-16)"; echo "B (trained): $trained $(sha256sum "$(cygpath -u $trained)" | cut -c1-16)"; } > $E/models.txt
-    cp $C/eval-classes/commit.txt $E/commit.txt 2>/dev/null
+# 1. gate 1 rerun with gen2-c
+if [ ! -f $GATE/GATE-DONE ]; then
+  mkdir -p $GATE
+  if [ ! -f $GATE/units.txt ]; then
+    for i in $(seq 0 4); do echo "n$i $((8000+100*i)) 0 10 n$i"; done > $GATE/units.txt
+    echo "$CUR $CURSHA" > $GATE/leaf.txt
+    cp $CLASSES/commit.txt $GATE/commit.txt
   fi
-  run_units $E $C/eval-classes -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
-    -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=1 \
-    -Dmagicdosa.search.leafModelA=$GEN0 -Dmagicdosa.search.leafModelB=$trained || return 1
-  python "$(cygpath -w $C/eval_summary.py)" "$(cygpath -w $E)" > $E/eval-summary.txt 2>&1
-  [ "$(ls $E/n*/summary.txt 2>/dev/null | wc -l)" -ge 5 ] && touch $E/EVAL-DONE
-  return 0
-}
+  if [ $(free_gb) -lt 15 ]; then status "stopped: under 15 GB free on E: before the gate rerun"; exit 0; fi
+  status "gate 1 rerun with gen2-c (gate3-step3-gen2)"
+  run_units $GATE $CLASSES -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
+    -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=4 -Dmagicdosa.search.leafModel=$CUR \
+    || { status "stopped (STOP) during the gate rerun"; exit 0; }
+  python "$(cygpath -w $C/eval_summary.py)" "$(cygpath -w $GATE)" > $GATE/gate-summary.txt 2>&1
+  [ "$(ls $GATE/n*/summary.txt 2>/dev/null | wc -l)" -ge 5 ] && touch $GATE/GATE-DONE
+  status "gate 1 rerun done: $(head -1 $GATE/gate-summary.txt | sed 's/trained (B)/4x/')"
+fi
 
+# 2-3. self-play on gen2-c to 1,000 games, evaluation gen2-c vs gen-3, self-play on the choice
 b=0
 while [ -f $S/$(printf 'b%04d' $b)/units.txt ] && [ "$(ls $S/$(printf 'b%04d' $b)/w*/summary.txt 2>/dev/null | wc -l)" -ge "$(wc -l < $S/$(printf 'b%04d' $b)/units.txt)" ]; do b=$((b+1)); done
 while true; do
   stopping && { status "stopped (STOP) before batch $b"; exit 0; }
   if [ $(free_gb) -lt 15 ]; then status "stopped: $(free_gb) GB free on E: (under 15) before batch $b"; exit 0; fi
   if [ ! -f $E/EVAL-DONE ]; then
-    games=$(finished_games)
-    if [ ! -f $C/selfplay-1000.done ] && [ $games -ge 1000 ]; then
-      { echo "self-play games: $games ($(date '+%F %T'))"; for d in $S/b*/; do echo "$(cygpath -w ${d%/})"; done; } > $C/selfplay-1000.done.tmp
-      mv $C/selfplay-1000.done.tmp $C/selfplay-1000.done
-      status "self-play paused at $games games: wrote chain/selfplay-1000.done"
+    games=$(leaf_games $CURSHA)
+    if [ ! -f $MARK ] && [ $games -ge 1000 ]; then
+      { echo "gen2-c self-play games: $games ($(date '+%F %T')), leaf $CUR $CURSHA"; for d in $S/b*/; do grep -q " $CURSHA" $d/leaf.txt 2>/dev/null && echo "$(cygpath -w ${d%/})"; done; } > $MARK.tmp
+      mv $MARK.tmp $MARK
+      status "self-play paused at $games gen2-c games: wrote chain/selfplay-gen2-1000.done"
     fi
-    if [ -f $C/selfplay-1000.done ]; then
-      while ! trained=$(model_from $C/eval-model.txt); do
-        stopping && { status "stopped (STOP) while waiting for chain/eval-model.txt"; exit 0; }
-        status "waiting for chain/eval-model.txt (the trained model)"
+    if [ -f $MARK ]; then
+      while ! NEW=$(model_from $EVALF); do
+        stopping && { status "stopped (STOP) while waiting for chain/eval-model-gen3.txt"; exit 0; }
+        status "waiting for chain/eval-model-gen3.txt (the gen-3 model)"
         sleep 120
       done
-      status "evaluation: gen-0 run 2 vs $trained"
-      evaluate "$trained" || { status "stopped (STOP) during the evaluation"; exit 0; }
-      status "evaluation done: $(head -1 $E/eval-summary.txt)"
+      mkdir -p $E
+      if [ ! -f $E/units.txt ]; then
+        for i in $(seq 0 4); do echo "n$i $((7100000+100*i)) 0 12 f$i-"; done > $E/units.txt
+        { echo "A (gen2-c): $CUR $CURSHA"; echo "B (gen-3): $NEW $(sha256sum "$(cygpath -u $NEW)" | cut -c1-16)"; } > $E/models.txt
+        cp $CLASSES/commit.txt $E/commit.txt
+      fi
+      status "evaluation: gen2-c vs $NEW"
+      run_units $E $CLASSES -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
+        -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=1 \
+        -Dmagicdosa.search.leafModelA=$CUR -Dmagicdosa.search.leafModelB=$NEW || { status "stopped (STOP) during the evaluation"; exit 0; }
+      python "$(cygpath -w $C/eval_summary.py)" "$(cygpath -w $E)" > $E/eval-summary.txt 2>&1
+      if [ "$(ls $E/n*/summary.txt 2>/dev/null | wc -l)" -ge 5 ]; then
+        # gen-3 unless significantly worse: the upper end of its 95% Wilson interval under 50%
+        if python -c "import re,sys; t=open(sys.argv[1]).read(); m=re.search(r'Wilson [\d.]+-([\d.]+)%',t); sys.exit(0 if m and float(m.group(1))<50 else 1)" "$(cygpath -w $E/eval-summary.txt)"; then
+          echo "$CUR" > $C/selfplay-leaf.txt
+        else
+          echo "$NEW" > $C/selfplay-leaf.txt
+        fi
+        touch $E/EVAL-DONE
+      fi
+      status "evaluation done: $(head -1 $E/eval-summary.txt); self-play leaf $(cat $C/selfplay-leaf.txt 2>/dev/null)"
       continue
     fi
   fi
-  LEAF=$GEN0
-  if [ -f $E/EVAL-DONE ] && m=$(model_from $C/eval-model.txt); then LEAF=$m
-  elif m=$(model_from $C/gen1-leaf.txt); then LEAF=$m; fi
+  LEAF=$CUR
+  if [ -f $E/EVAL-DONE ] && m=$(model_from $C/selfplay-leaf.txt); then LEAF=$m; fi
   SHA=$(sha256sum "$(cygpath -u "$LEAF")" | cut -c1-16)
   B=$S/$(printf 'b%04d' $b)
   mkdir -p $B
   if [ ! -f $B/units.txt ]; then
-    g2=$(( 5 - $(wc -l < $RUNS/gate3-g2-net/done.txt 2>/dev/null || echo 5) ))
-    [ $g2 -lt 0 ] && g2=0
-    n=$(( WORKERS - g2 )); [ $n -lt 1 ] && n=1
-    for w in $(seq 0 $((n-1))); do echo "w$w $((2000000+1000*b+100*w)) 0 $MATCHES s$(printf '%04d' $b)w$w-"; done > $B/units.txt
+    for w in $(seq 0 $((WORKERS-1))); do echo "w$w $((2000000+1000*b+100*w)) 0 $MATCHES s$(printf '%04d' $b)w$w-"; done > $B/units.txt
     cp $C/bulk-classes/commit.txt $B/commit.txt 2>/dev/null
     echo "$LEAF $SHA" > $B/leaf.txt
     echo "leaf $LEAF sha256 $SHA" >> $B/done.txt
@@ -130,6 +151,6 @@ while true; do
   run_units $B $C/bulk-classes -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
     -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=1 -Dmagicdosa.search.leafModel=$LEAF $EXTRA \
     || { status "stopped (STOP) during batch $b"; exit 0; }
-  status "batch $b done: $(ls $B/w*/summary.txt 2>/dev/null | wc -l) of $(wc -l < $B/units.txt) units, $(ls $B/w*/*.pb.gz 2>/dev/null | wc -l) games, leaf $(cat $B/leaf.txt), total $(finished_games) games, $(free_gb) GB free"
+  status "batch $b done: $(ls $B/w*/summary.txt 2>/dev/null | wc -l) of $(wc -l < $B/units.txt) units, $(ls $B/w*/*.pb.gz 2>/dev/null | wc -l) games, leaf $(cat $B/leaf.txt), gen2-c games $(leaf_games $CURSHA), $(free_gb) GB free"
   b=$((b+1))
 done
