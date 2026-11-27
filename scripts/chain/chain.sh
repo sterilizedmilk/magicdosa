@@ -8,6 +8,9 @@
 #   3. wait for chain/eval-model-gen3.txt (gen-3 ONNX path), evaluate gen2-c (A) vs gen-3 (B) in eval-gen2-vs-gen3
 #      (both 1x, sampling off, eval seeds 7,100,000+), then self-play on gen-3 if its point-estimate win rate is at
 #      least 50% (games won / games played), else on gen2-c; the choice goes to chain/selfplay-leaf.txt
+#   Builds (2026-11-27): every new batch and the evaluation run the newest frozen build, chain/builds/<commit> named by
+#   chain/builds/current.txt (freeze-build.sh makes one from a built checkout); a batch keeps the build it started with
+#   (third field of its leaf.txt, also in done.txt), so a new build only takes effect at a batch boundary.
 # Stop: create chain/STOP (it finishes the units under way, then exits). Status: chain/status.txt (now), status.log.
 # Resumable: a unit whose folder has summary.txt is done and skipped; a unit that ended without one is moved to
 # <unit>.crashed.N and run again (3 tries). Disk: checked before each phase and batch; stops under 15 GB free on E:.
@@ -71,6 +74,8 @@ EVALF=$C/eval-model-gen3.txt
 MARK=$C/selfplay-gen2-1000.done
 CLASSES=$C/cycle2-classes
 MATCHES=${MATCHES:-4}
+current_build() { local b; b=$(head -1 $C/builds/current.txt 2>/dev/null | tr -d '\r'); [ -n "$b" ] && [ -d $C/builds/$b ] && echo $b; }
+build_dir() { if [ -n "$1" ] && [ -d $C/builds/$1 ]; then echo $C/builds/$1; else echo $C/bulk-classes; fi; }
 model_from() { [ -s "$1" ] || return 1; local m; m=$(head -1 "$1" | tr -d '\r'); [ -f "$(cygpath -u "$m")" ] || return 1; echo "$m"; }
 leaf_games() { local n=0 b; for b in $S/b*/; do grep -q " $1" $b/leaf.txt 2>/dev/null || continue; for u in $b/w*/summary.txt; do [ -f "$u" ] && n=$((n + $(ls $(dirname $u)/*.pb.gz 2>/dev/null | wc -l))); done; done; echo $n; }
 
@@ -115,10 +120,12 @@ while true; do
       if [ ! -f $E/units.txt ]; then
         for i in $(seq 0 4); do echo "n$i $((7100000+100*i)) 0 12 f$i-"; done > $E/units.txt
         { echo "A (gen2-c): $CUR $CURSHA"; echo "B (gen-3): $NEW $(sha256sum "$(cygpath -u $NEW)" | cut -c1-16)"; } > $E/models.txt
-        cp $CLASSES/commit.txt $E/commit.txt
+        EB=$(current_build); echo "${EB:-cycle2}" > $E/build.txt
+        cp $(build_dir $EB)/commit.txt $E/commit.txt 2>/dev/null || cp $CLASSES/commit.txt $E/commit.txt
       fi
       status "evaluation: gen2-c vs $NEW"
-      run_units $E $CLASSES -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
+      EB=$(head -1 $E/build.txt 2>/dev/null); EDIR=$CLASSES; [ -n "$EB" ] && [ -d $C/builds/$EB ] && EDIR=$C/builds/$EB
+      run_units $E $EDIR -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
         -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=1 \
         -Dmagicdosa.search.leafModelA=$CUR -Dmagicdosa.search.leafModelB=$NEW || { status "stopped (STOP) during the evaluation"; exit 0; }
       python "$(cygpath -w $C/eval_summary.py)" "$(cygpath -w $E)" > $E/eval-summary.txt 2>&1
@@ -142,13 +149,22 @@ while true; do
   mkdir -p $B
   if [ ! -f $B/units.txt ]; then
     for w in $(seq 0 $((WORKERS-1))); do echo "w$w $((2000000+1000*b+100*w)) 0 $MATCHES s$(printf '%04d' $b)w$w-"; done > $B/units.txt
-    cp $C/bulk-classes/commit.txt $B/commit.txt 2>/dev/null
-    echo "$LEAF $SHA" > $B/leaf.txt
-    echo "leaf $LEAF sha256 $SHA" >> $B/done.txt
+    BUILD=$(current_build)
+    cp $(build_dir $BUILD)/commit.txt $B/commit.txt 2>/dev/null
+    echo "$LEAF $SHA ${BUILD:-legacy}" > $B/leaf.txt
+    echo "leaf $LEAF sha256 $SHA build ${BUILD:-legacy}" >> $B/done.txt
+  fi
+  if [ -z "$(cut -d' ' -s -f3 $B/leaf.txt)" ]; then
+    # a batch begun by an earlier chain without a recorded build (b0022): the current build, recorded now
+    BUILD=$(current_build)
+    echo "$(cut -d' ' -f1-2 $B/leaf.txt) ${BUILD:-legacy}" > $B/leaf.txt
+    echo "build ${BUILD:-legacy} (recorded when resumed)" >> $B/done.txt
+    cp $(build_dir $BUILD)/commit.txt $B/commit.txt 2>/dev/null
   fi
   LEAF=$(cut -d' ' -f1 $B/leaf.txt)
+  BDIR=$(build_dir "$(cut -d' ' -s -f3 $B/leaf.txt)")
   EXTRA=$(cat $C/bulk-props.txt 2>/dev/null | tr '\n' ' ')
-  run_units $B $C/bulk-classes -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
+  run_units $B $BDIR -Dmagicdosa.agentPolicy=search -Dmagicdosa.agentBudgetPerCandidate=12 \
     -Dmagicdosa.agentBudgetMultiplierA=1 -Dmagicdosa.agentBudgetMultiplierB=1 -Dmagicdosa.search.leafModel=$LEAF $EXTRA \
     || { status "stopped (STOP) during batch $b"; exit 0; }
   status "batch $b done: $(ls $B/w*/summary.txt 2>/dev/null | wc -l) of $(wc -l < $B/units.txt) units, $(ls $B/w*/*.pb.gz 2>/dev/null | wc -l) games, leaf $(cat $B/leaf.txt), gen2-c games $(leaf_games $CURSHA), $(free_gb) GB free"
