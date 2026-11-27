@@ -139,6 +139,44 @@ class SearchScenarioTest {
         assertEquals(r.decisions, r.decisionsMatched, why);
     }
 
+    /**
+     * With a leaf network, a walk that reaches the horizon inside the tree is valued by the network at the first
+     * request there, never by Forge's score (2026-11-28 user decision, protocol 16), and the run records it.
+     */
+    @Test
+    void theHorizonIsValuedByTheLeafNetwork() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        magicdosa.agent.model.Evaluator fake = new magicdosa.agent.model.Evaluator() {
+            @Override
+            public Evaluation evaluate(magicdosa.protocol.v1.DecisionRequest request, java.util.List<Integer> candidates,
+                                       java.util.List<Integer> chosen) {
+                calls.incrementAndGet();
+                float[] p = new float[candidates.size()];
+                java.util.Arrays.fill(p, 1f / Math.max(1, p.length));
+                return new Evaluation(p, 0.5);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        magicdosa.agent.model.LeafNetwork.use(fake, "fake.onnx");
+        try {
+            Scenario s = burn("search-net-horizon");
+            s.search = SearchConfig.of(24);
+            ShadowGame.Result r = s.play(2);
+            LiveShadow.Stats st = s.stats;
+            String why = st.line() + " samples: " + r.samples;
+            assertTrue(st.search.getOrDefault("horizon: network", 0) > 0, why);
+            assertEquals(0, st.search.getOrDefault("horizon", 0), why);
+            assertTrue(calls.get() > 0, why);
+            assertEquals(magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK,
+                magicdosa.agent.search.SearchResult.recordedLeafEvaluation(s.search), why);
+        } finally {
+            magicdosa.agent.model.LeafNetwork.use(null, "");
+        }
+    }
+
     @Test
     void sameSeedSameSearches() throws Exception {
         String[] lines = new String[2];

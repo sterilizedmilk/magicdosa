@@ -288,6 +288,11 @@ enum LeafEvaluation {
   LEAF_EVALUATION_FORGE_COMBAT = 1;
   // Forge's GameStateEvaluator score of the board as it stands, without the combat simulation.
   LEAF_EVALUATION_FORGE_STATIC = 2;
+  // protocol 16 (2026-11-28 user decision, one evaluator for every leaf): with a leaf model loaded, every simulation
+  // that does not end the game is valued by the leaf network, where the walk leaves the tree and at the horizon (at
+  // the first request asked there). Protocol 15 runs with a leaf model recorded FORGE_STATIC: their horizon leaves had
+  // Forge's static score.
+  LEAF_EVALUATION_NETWORK = 3;
 }
 
 // The rollout policy of a search (2026-11-26 user decision): plain Forge AI is a temporary early-stage choice (phase 3
