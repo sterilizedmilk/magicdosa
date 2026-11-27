@@ -276,3 +276,26 @@ Root-cause analysis of every entry (Forge file:line, minimal repro, scope, fix o
 - **Our workaround:** reflection (`ForgeSearchGame.SCORE_IMPL`), checked when the class loads.
 - **Fix upstream:** a public overload or flag that skips the combat simulation.
 
+
+## 19. Forge AI's attack declaration takes minutes on large boards (2026-11-27, measurement)
+
+- **What:** `AiAttackController.declareAttackers` on boards with dozens of creatures runs for minutes:
+  `notNeededAsBlockers` predicts the next combats (`ComputerUtil.predictNextCombatsRemainingLife`), each running the full
+  `AiBlockController.assignBlockers` (trade blocks, `canDestroyAttacker`, per-blocker trigger scans) over every pair.
+- **How we hit it:** the phase-2 fin4 shadow stop (Broodscale mirror m9-g2, decision 786, turn 23): the shadow's Forge AI
+  did not answer within the 10-minute safeguard. `AttackTiming` (agent-core test tools) rebuilds that game's turn-start
+  states from the log and times the attack declaration, one JVM, no other load:
+
+  | Turn | Attacking creatures | Possible blockers | Time | Attackers declared |
+  | --- | --- | --- | --- | --- |
+  | 21 | 46 | 80 | 141 s | 0 |
+  | 22 | 80 | 46 | 223 s | 0 |
+  | 23 | 45 | 83 | 502 s | 0 |
+  | 24 | 172 | 2 | 922 s | 0 |
+
+  Turn 23 took 8.4 minutes alone; with five workers on the machine it passed 10. Not a fault of the shadow.
+- **Our workaround:** the hang safeguard (search skipped, thread dump, the shadow started again; agent-core restarted
+  when a thread cannot be ended). Forge AI answers inside the shadow only where the search delegates (and in rollouts
+  under the plain-Forge-AI rollout; the network leaf does not roll out).
+- **Fix upstream:** a cheaper `notNeededAsBlockers` on large boards (cap the predicted combats, or reuse one block
+  assignment), or a step budget for the AI's combat prediction.

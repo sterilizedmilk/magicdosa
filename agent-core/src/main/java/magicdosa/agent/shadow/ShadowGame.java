@@ -251,6 +251,7 @@ public final class ShadowGame {
                 }
                 magicdosa.agent.search.KillCheck.Outcome all = magicdosa.agent.search.KillCheck.evaluate(possible, opp);
                 int life = opp.getLife();
+                verifyKillCheck(out, "attack", possible, opp, all);
                 if (all.lethal(life)) {
                     out.put("kill: available", 1);
                     if (!magicdosa.agent.search.KillCheck.evaluate(chosen, opp).lethal(life)) {
@@ -284,6 +285,7 @@ public final class ShadowGame {
                 }
                 magicdosa.agent.search.KillCheck.Outcome best = magicdosa.agent.search.KillCheck.evaluate(attackers, me);
                 int life = me.getLife();
+                verifyKillCheck(out, "block", attackers, me, best);
                 int took = magicdosa.agent.search.KillCheck.damageWith(attackers, blockOf);
                 if (best.lethal(life)) {
                     out.put("kill: lethal attack unpreventable", 1);
@@ -300,6 +302,30 @@ public final class ShadowGame {
         if (!out.isEmpty()) {
             live.searched(null, out);
         }
+    }
+
+    /**
+     * Measurement only ({@code -Dmagicdosa.killVerify=true}): the checker's least damage, with the blocks it found, dealt
+     * by Forge on a copy (KillCheckCopy); counted as agreeing or differing, exact and approximate cases apart, so the
+     * checker's own error rate can be read from replays of existing logs.
+     */
+    private void verifyKillCheck(Map<String, Integer> out, String where, List<forge.game.card.Card> attackers,
+                                 Player defender, magicdosa.agent.search.KillCheck.Outcome o) {
+        if (!Boolean.getBoolean("magicdosa.killVerify") || attackers.isEmpty()) {
+            return;
+        }
+        String kind = o.approximate() ? "approximate" : "exact";
+        Integer copy;
+        try {
+            copy = magicdosa.agent.search.KillCheckCopy.damageOnCopy(game, attackers, defender, o.bestBlocks());
+        } catch (RuntimeException e) {
+            copy = null;
+        }
+        String verdict = copy == null ? "copy failed" : copy == o.minDamage() ? "agree" : "differ";
+        out.merge("kill verify: " + verdict + " (" + kind + ")", 1, Integer::sum);
+        System.out.println("KILLVERIFY " + where + " " + kind + " " + verdict + " checker=" + o.minDamage() + " copy=" + copy
+            + " life=" + defender.getLife() + " attackers=" + attackers.size() + " blocks=" + o.bestBlocks().size()
+            + (o.approximate() ? " factors=" + o.factors() : "") + " turn=" + game.getPhaseHandler().getTurn());
     }
 
     /** The viewer's last priority point (search): a copy of the shadow there and the record position of that decision. */
@@ -457,6 +483,23 @@ public final class ShadowGame {
 
     /** Tests only: the live decision at which the shadow thread hangs once per JVM (0: never). */
     static long HANG_TEST_AT = Long.getLong("magicdosa.shadowHangTestAt", 0);
+
+    /**
+     * With {@code -Dmagicdosa.shadowHangTestOnce=<file>} the test hang fires in one agent-core only (the first that
+     * creates the file), so the agent-core a harness starts after it plays the match again without hanging.
+     */
+    private static boolean hangTestFirstTime() {
+        String once = System.getProperty("magicdosa.shadowHangTestOnce");
+        if (once == null) {
+            return true;
+        }
+        try {
+            java.nio.file.Files.createFile(java.nio.file.Path.of(once));
+            return true;
+        } catch (java.io.IOException e) {
+            return false; // already fired in an earlier agent-core
+        }
+    }
     static final java.util.concurrent.atomic.AtomicBoolean HANG_TEST_FIRED = new java.util.concurrent.atomic.AtomicBoolean();
 
     /** The record marks an answer the shadow does not know (an unintended fallback of the real game) with this ID. */
@@ -2280,11 +2323,20 @@ public final class ShadowGame {
         @Override
         public DecisionResponse decide(DecisionRequest request) {
             if (live != null && live.pending() != null && live.pending().getDecisionId() == HANG_TEST_AT
-                    && HANG_TEST_FIRED.compareAndSet(false, true)) {
+                    && HANG_TEST_FIRED.compareAndSet(false, true) && hangTestFirstTime()) {
                 // test of the hang safeguard (-Dmagicdosa.shadowHangTestAt=<decision ID>): this thread spins at the
-                // live decision until it is ended
+                // live decision until it is ended; with -Dmagicdosa.shadowHangTestStubborn=true it cannot be ended (it
+                // keeps spinning through ThreadDeath), so agent-core is marked for a restart and the harness's restart
+                // path runs end to end
+                boolean stubborn = Boolean.getBoolean("magicdosa.shadowHangTestStubborn");
                 while (true) {
-                    Thread.onSpinWait();
+                    try {
+                        Thread.onSpinWait();
+                    } catch (Throwable t) {
+                        if (!stubborn) {
+                            throw t;
+                        }
+                    }
                 }
             }
             DecisionRequest real;
