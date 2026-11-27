@@ -232,6 +232,10 @@ vocabulary and model versions) before a game starts, as `Agent.check` does for t
 - Data (2026-11-26): `gate3-step3-net` (1x vs 4x, network leaf gen0-run2, protocol 15, both seats' shards) and
   `gate3-step1` (1x vs Forge AI, protocol 14; `repro/` skipped, exact re-runs of `w3` games). All encoder 5 with
   identical feature names; protocol 15 only added search metadata columns, which training drops.
+- **Gate seeds used for training:** gen1-b (and so every model initialised from it) was trained on `gate3-step3-net`
+  (seed bases 8000-8400) and `gate3-step1`. Gate runs on those seeds (e.g. `gate3-step3-gen2`, seeds 8000-8400) are
+  not clean evaluations of these models. From gen-3 on, training reads self-play shards only (seeds 2,000,000+),
+  never `gate3-*` or `eval-*` folders (evaluation seeds 7,000,000+), so training and evaluation seeds stay apart.
 - Policy target: visit ratios of searched model rows (every one has them). Not policy samples: intended delegations
   (5954 rows), shadow-recovery failures and failed searches (188 rows; uniform-prior choices). Their chosen action is
   never used. Value target: the deciding seat's result on every row (no sideboard, no draws).
