@@ -161,6 +161,7 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
 
     /** The search's rollout policy, horizon and leaf evaluation ({@link SearchConfig}). */
     public ForgeSearchGame withSettings(SearchConfig c) {
+        this.reuse = c.gumbel() != null ? TreeReuse.Mode.OFF : TreeReuse.MODE; // Gumbel search starts fresh
         this.rollout = c.rollout();
         this.horizon = c.horizon();
         this.leafEvaluation = c.leafEvaluation();
@@ -255,6 +256,8 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
     /** The root request's candidates by name, in candidate order. */
     private final List<String> rootNames;
 
+    /** Tree reuse for this search: {@link TreeReuse#MODE}, off with Gumbel search ({@link #withSettings}). */
+    private TreeReuse.Mode reuse = TreeReuse.MODE;
     /** Tree reuse measurement: a tree node's information key -> its canonical key ({@link CanonicalKey}). */
     private final Map<String, String> canonKeys = new HashMap<>();
     /** Tree reuse measurement: a tree node's information key -> its action names -> their canonical names. */
@@ -268,13 +271,13 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
     /** The canonical key of a tree node's information key (the key itself when the tree is keyed canonically). */
     @Override
     public String canonKey(String info) {
-        return TreeReuse.MODE == TreeReuse.Mode.ON ? info : canonKeys.get(info);
+        return reuse == TreeReuse.Mode.ON ? info : canonKeys.get(info);
     }
 
     /** The canonical name of an action at a tree node (the name itself when the tree is keyed canonically). */
     @Override
     public String canonAction(String info, String action) {
-        if (TreeReuse.MODE == TreeReuse.Mode.ON || DONE.equals(action)) {
+        if (reuse == TreeReuse.Mode.ON || DONE.equals(action)) {
             return action;
         }
         Map<String, String> m = canonActions.get(info);
@@ -283,12 +286,24 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
 
     /** The root request's canonical key (tree reuse on or measured), else null. */
     public String rootCanonKey() {
+        ensureRootCanon();
         return rootCanon == null ? null : rootCanon.key();
+    }
+
+    /** The root request's canonical names, computed once when tree reuse is on or measured for this search. */
+    private void ensureRootCanon() {
+        if (rootCanon == null && reuse != TreeReuse.Mode.OFF) {
+            rootCanon = CanonicalKey.of(root);
+            for (int i = 0; i < rootNames.size(); i++) {
+                rootCanonByAction.put(rootNames.get(i), rootCanon.candidates().get(i));
+            }
+        }
     }
 
     /** The canonical name of a root action ("done" as it is). */
     @Override
     public String rootCanonAction(String rootAction) {
+        ensureRootCanon();
         return DONE.equals(rootAction) ? rootAction : rootCanonByAction.get(rootAction);
     }
 
@@ -400,12 +415,7 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
             a.add(rootKey(c, id -> forgeIdOf(shadowSession.cardOf(id), id)));
         }
         this.rootNames = List.copyOf(a);
-        if (TreeReuse.MODE != TreeReuse.Mode.OFF) {
-            rootCanon = CanonicalKey.of(root);
-            for (int i = 0; i < rootNames.size(); i++) {
-                rootCanonByAction.put(rootNames.get(i), rootCanon.candidates().get(i));
-            }
-        }
+
         count("root " + root.getType().name().replace("DECISION_TYPE_", ""));
         List<Integer> all = new ArrayList<>();
         for (int i = 0; i < root.getCandidatesCount(); i++) {
@@ -975,10 +985,10 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
                     : com.google.protobuf.TextFormat.shortDebugString(k));
             }
             // with reuse on the canonical key below replaces the information key
-            String info = isRoot ? "root" : TreeReuse.MODE == TreeReuse.Mode.ON ? null : infoKey(r);
-            if (!isRoot && TreeReuse.MODE != TreeReuse.Mode.OFF) {
+            String info = isRoot ? "root" : reuse == TreeReuse.Mode.ON ? null : infoKey(r);
+            if (!isRoot && reuse != TreeReuse.Mode.OFF) {
                 CanonicalKey.Canon canon = CanonicalKey.of(r);
-                if (TreeReuse.MODE == TreeReuse.Mode.ON) {
+                if (reuse == TreeReuse.Mode.ON) {
                     // reuse: the tree is keyed in names a later search (another copy session) gives the same set too
                     info = canon.key();
                     names.clear();

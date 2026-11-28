@@ -38,10 +38,13 @@ import java.util.List;
  * @param networkAlone    gate 1 since 2026-11-27 ("does search beat the net"): a decision the search would take is answered
  *                        by the leaf network's policy head instead (its most probable action, no simulation); everything
  *                        else (the shadow, what goes to Forge AI) stays as with search, so only the root answer differs
+ * @param gumbel          Gumbel search (2026-11-28 user directive "Gumbel v2"; Danihelka et al., ICLR 2022): sequential
+ *                        halving at the root, the completed-Q improved policy below it; null: UCB1 (comparison switch,
+ *                        {@code -Dmagicdosa.search.algorithm=ucb1})
  */
 public record SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                            double wideningAlpha, int perCandidate, int multiplier, RolloutPolicy rollout,
-                           SearchHorizon horizon, LeafEvaluation leafEvaluation, boolean networkAlone) {
+                           SearchHorizon horizon, LeafEvaluation leafEvaluation, boolean networkAlone, Gumbel gumbel) {
 
     public SearchConfig {
         if (budget < 1) {
@@ -59,7 +62,48 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     public SearchConfig(long budget, double exploration, boolean opponentInTree, int wideningMin, double wideningC,
                         double wideningAlpha) {
         this(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, 0, 1, DEFAULT_ROLLOUT, DEFAULT_HORIZON,
-            DEFAULT_LEAF_EVALUATION, false);
+            DEFAULT_LEAF_EVALUATION, false, Gumbel.fromSystemProperties());
+    }
+
+    /**
+     * Gumbel search settings (2026-11-28 directive): {@code noise} draws Gumbel(0, 1) noise at the root (self-play) or
+     * not (evaluation and gates: top-k by the prior logits only, ties by the seed); {@code maxK} root candidates at most
+     * enter sequential halving; {@code cVisit}, {@code cScale}: sigma(q) = (cVisit + max_b N(b)) * cScale * q, the same
+     * as python/magicdosa/targets.py. The prior logits are all 0 (uniform; no policy head in the search).
+     */
+    public record Gumbel(boolean noise, int maxK, double cVisit, double cScale) {
+        public Gumbel {
+            if (maxK < 1 || cVisit < 0 || cScale <= 0) {
+                throw new IllegalArgumentException("bad Gumbel settings");
+            }
+        }
+
+        public static final double C_VISIT = GumbelMath.C_VISIT, C_SCALE = GumbelMath.C_SCALE;
+        public static final int MAX_K = 16;
+
+        /**
+         * From {@code magicdosa.search.algorithm} (gumbel, the default, or ucb1: null), {@code .gumbelNoise} (default
+         * false: evaluation and gates; self-play sets true), {@code .gumbelK}, {@code .cVisit}, {@code .cScale}.
+         */
+        public static Gumbel fromSystemProperties() {
+            String a = System.getProperty("magicdosa.search.algorithm", "gumbel");
+            if (a.equals("ucb1")) {
+                return null;
+            }
+            if (!a.equals("gumbel")) {
+                throw new IllegalArgumentException("magicdosa.search.algorithm: gumbel or ucb1, not " + a);
+            }
+            return new Gumbel(Boolean.getBoolean("magicdosa.search.gumbelNoise"),
+                Integer.getInteger("magicdosa.search.gumbelK", MAX_K),
+                Double.parseDouble(System.getProperty("magicdosa.search.cVisit", Double.toString(C_VISIT))),
+                Double.parseDouble(System.getProperty("magicdosa.search.cScale", Double.toString(C_SCALE))));
+        }
+    }
+
+    /** The same settings with another search algorithm: Gumbel settings, or null for UCB1. */
+    public SearchConfig withGumbel(Gumbel g) {
+        return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
+            multiplier, rollout, horizon, leafEvaluation, networkAlone, g);
     }
 
     /** Simulations for a root with {@code actions} actions (its first step's candidates and "done"). */
@@ -70,7 +114,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
     /** The budget by root: {@code perCandidate} simulations per root action, times {@code multiplier}. */
     public SearchConfig perCandidate(int simulationsPerAction, int times) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha,
-            simulationsPerAction, times, rollout, horizon, leafEvaluation, networkAlone);
+            simulationsPerAction, times, rollout, horizon, leafEvaluation, networkAlone, gumbel);
     }
 
     /** The default rollout policy (2026-11-26 user decision, early stage only). */
@@ -91,7 +135,9 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             return "network alone (the leaf network's policy head at every search root)";
         }
         return (perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier) + ", rollout "
-            + rolloutName(rollout) + ", horizon " + horizonName(horizon) + ", leaf " + leafName(leafEvaluation);
+            + rolloutName(rollout) + ", horizon " + horizonName(horizon) + ", leaf " + leafName(leafEvaluation)
+            + (gumbel == null ? ", ucb1" : ", gumbel k" + gumbel.maxK() + (gumbel.noise() ? " noise" : "")
+                + " cVisit " + gumbel.cVisit() + " cScale " + gumbel.cScale());
     }
 
     /** "own-turn" or "next-turn". */
@@ -141,22 +187,22 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     public SearchConfig withRollout(RolloutPolicy p) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, p, horizon, leafEvaluation, networkAlone);
+            multiplier, p, horizon, leafEvaluation, networkAlone, gumbel);
     }
 
     public SearchConfig withHorizon(SearchHorizon h) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, rollout, h, leafEvaluation, networkAlone);
+            multiplier, rollout, h, leafEvaluation, networkAlone, gumbel);
     }
 
     public SearchConfig withNetworkAlone(boolean alone) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, rollout, horizon, leafEvaluation, alone);
+            multiplier, rollout, horizon, leafEvaluation, alone, gumbel);
     }
 
     public SearchConfig withLeafEvaluation(LeafEvaluation e) {
         return new SearchConfig(budget, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate,
-            multiplier, rollout, horizon, e, networkAlone);
+            multiplier, rollout, horizon, e, networkAlone, gumbel);
     }
 
     /** Phase-3 defaults with the given budget (UCB constant sqrt(2), opponent in the tree, widening past 20 actions). */
@@ -166,12 +212,12 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
     public SearchConfig withBudget(long b) {
         return new SearchConfig(b, exploration, opponentInTree, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
-            horizon, leafEvaluation, networkAlone);
+            horizon, leafEvaluation, networkAlone, gumbel);
     }
 
     public SearchConfig withOpponentInTree(boolean in) {
         return new SearchConfig(budget, exploration, in, wideningMin, wideningC, wideningAlpha, perCandidate, multiplier, rollout,
-            horizon, leafEvaluation, networkAlone);
+            horizon, leafEvaluation, networkAlone, gumbel);
     }
 
     /**
@@ -190,6 +236,6 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             Double.parseDouble(System.getProperty("magicdosa.search.wideningAlpha", Double.toString(d.wideningAlpha))),
             0, 1, rolloutNamed(System.getProperty("magicdosa.search.rollout", rolloutName(d.rollout))),
             horizonNamed(System.getProperty("magicdosa.search.horizon", horizonName(d.horizon))),
-            leafNamed(System.getProperty("magicdosa.search.leafEval", leafName(d.leafEvaluation))), false);
+            leafNamed(System.getProperty("magicdosa.search.leafEval", leafName(d.leafEvaluation))), false, d.gumbel);
     }
 }

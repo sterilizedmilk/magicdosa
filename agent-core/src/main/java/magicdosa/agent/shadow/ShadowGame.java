@@ -384,10 +384,16 @@ public final class ShadowGame {
         magicdosa.agent.Timing.addHistogram("search.rootEstimate", t);
     }
 
+    /** Tree reuse is on or measured, and the search is UCB1 (Gumbel's sequential halving starts fresh at every root). */
+    private boolean reuseOn() {
+        return magicdosa.agent.search.TreeReuse.MODE != magicdosa.agent.search.TreeReuse.Mode.OFF && live.search() != null
+            && live.search().gumbel() == null;
+    }
+
     private DecisionResponse searched(DecisionRequest real) {
         justSearched = null;
         DecisionResponse resp = searchedOnce(real);
-        if (magicdosa.agent.search.TreeReuse.MODE != magicdosa.agent.search.TreeReuse.Mode.OFF && justSearched != null) {
+        if (reuseOn() && justSearched != null) {
             // the action the seat played (with -Dfollow the recorded one): the next search looks below it
             String played = resp.getChosenCount() == 1 ? justSearchedGame.rootName(resp.getChosen(0)) : null;
             reusePrev = played == null || justSearched.lastTree() == null ? null
@@ -485,7 +491,7 @@ public final class ShadowGame {
         magicdosa.agent.search.IsMcts mcts = new magicdosa.agent.search.IsMcts(live.search());
         magicdosa.agent.search.TreeReuse.Inherited inherited = null;
         magicdosa.agent.search.TreeReuse.Found found = null;
-        if (magicdosa.agent.search.TreeReuse.MODE != magicdosa.agent.search.TreeReuse.Mode.OFF) {
+        if (reuseOn()) {
             found = reuseFound(g);
             if (found != null && magicdosa.agent.search.TreeReuse.MODE == magicdosa.agent.search.TreeReuse.Mode.ON) {
                 inherited = magicdosa.agent.search.TreeReuse.inherit(reusePrev, found, g);

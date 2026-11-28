@@ -74,7 +74,7 @@ class IsMctsTest {
 
     @Test
     void findsTheBestCandidateAndReportsVisitRatios() {
-        SearchResult r = new IsMcts(SearchConfig.of(400)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
+        SearchResult r = new IsMcts(SearchConfig.of(400).withGumbel(null)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
         assertEquals(1, r.chosen(), r.toString());
         assertEquals(400, r.iterations);
         assertEquals(400, r.determinizations);
@@ -95,7 +95,7 @@ class IsMctsTest {
      */
     @Test
     void equalVisitsAreDecidedByMeanValueNotByCandidateOrder() {
-        SearchResult r = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {0, 1, 0}), 11);
+        SearchResult r = new IsMcts(SearchConfig.of(3).withGumbel(null)).search(new Bandit(new double[] {0, 1, 0}), 11);
         assertEquals(1, r.visits(0), r.toString());
         assertEquals(1, r.visits(1), r.toString());
         assertEquals(1, r.visits(2), r.toString());
@@ -104,25 +104,25 @@ class IsMctsTest {
         // equal means too: a pick drawn from the seed, the same for the same seed, and not always candidate 0
         java.util.Set<Integer> picks = new java.util.TreeSet<>();
         for (long seed = 1; seed <= 40; seed++) {
-            SearchResult same = new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), seed);
+            SearchResult same = new IsMcts(SearchConfig.of(3).withGumbel(null)).search(new Bandit(new double[] {1, 1, 1}), seed);
             assertEquals(SearchResult.Tie.SEED, same.rootTie(), same.toString());
-            assertEquals(same.chosen(), new IsMcts(SearchConfig.of(3)).search(new Bandit(new double[] {1, 1, 1}), seed).chosen());
+            assertEquals(same.chosen(), new IsMcts(SearchConfig.of(3).withGumbel(null)).search(new Bandit(new double[] {1, 1, 1}), seed).chosen());
             picks.add(same.chosen());
         }
         assertEquals(java.util.Set.of(0, 1, 2), picks); // every candidate is picked for some seed
         // a clear visit leader needs no tie-break
-        SearchResult clear = new IsMcts(SearchConfig.of(400)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
+        SearchResult clear = new IsMcts(SearchConfig.of(400).withGumbel(null)).search(new Bandit(new double[] {0.3, 0.8, 0.4}), 7);
         assertEquals(SearchResult.Tie.NONE, clear.rootTie(), clear.toString());
     }
 
     @Test
     void sameSeedAndBudgetSameResult() {
         Bandit g = new Bandit(new double[] {0.5, 0.52, 0.49, 0.51});
-        SearchResult a = new IsMcts(SearchConfig.of(200)).search(g, 42);
-        SearchResult b = new IsMcts(SearchConfig.of(200)).search(g, 42);
+        SearchResult a = new IsMcts(SearchConfig.of(200).withGumbel(null)).search(g, 42);
+        SearchResult b = new IsMcts(SearchConfig.of(200).withGumbel(null)).search(g, 42);
         assertEquals(a.toString(), b.toString());
         assertEquals(a.method(), b.method());
-        SearchResult c = new IsMcts(SearchConfig.of(200)).search(g, 43);
+        SearchResult c = new IsMcts(SearchConfig.of(200).withGumbel(null)).search(g, 43);
         assertTrue(!a.toString().equals(c.toString()), "another seed should give another run");
     }
 
@@ -135,11 +135,11 @@ class IsMctsTest {
     void ucbTiesAreBrokenByTheSeedNotByCandidateOrder() {
         int firstLeads = 0;
         for (long seed = 1; seed <= 20; seed++) {
-            SearchResult r = new IsMcts(SearchConfig.of(31)).search(new Constant(3), seed);
+            SearchResult r = new IsMcts(SearchConfig.of(31).withGumbel(null)).search(new Constant(3), seed);
             if (r.visits(0) > r.visits(1) && r.visits(0) > r.visits(2)) {
                 firstLeads++;
             }
-            assertEquals(r.toString(), new IsMcts(SearchConfig.of(31)).search(new Constant(3), seed).toString());
+            assertEquals(r.toString(), new IsMcts(SearchConfig.of(31).withGumbel(null)).search(new Constant(3), seed).toString());
         }
         assertTrue(firstLeads < 20, "candidate 0 took the odd visit for every seed");
     }
@@ -172,19 +172,19 @@ class IsMctsTest {
     /** 2026-11-25: the budget by root is its actions x simulations per action x the multiplier. */
     @Test
     void theBudgetPerCandidateScalesWithTheRoot() {
-        SearchConfig oneX = SearchConfig.of(1).perCandidate(12, 1);
+        SearchConfig oneX = SearchConfig.of(1).withGumbel(null).perCandidate(12, 1);
         SearchResult r = new IsMcts(oneX).search(new Bandit(new double[] {0.5, 0.5, 0.5}), 4);
         assertEquals(36, r.budget);
         assertEquals(36, r.iterations);
         assertEquals(36, r.method().getRan().getBudget());
-        SearchResult four = new IsMcts(SearchConfig.of(1).perCandidate(12, 4)).search(new Bandit(new double[] {0.5, 0.5}), 4);
+        SearchResult four = new IsMcts(SearchConfig.of(1).withGumbel(null).perCandidate(12, 4)).search(new Bandit(new double[] {0.5, 0.5}), 4);
         assertEquals(96, four.budget);
     }
 
     @Test
     void theBudgetBoundsTheTree() {
         for (long budget : new long[] {1, 10, 100}) {
-            SearchResult r = new IsMcts(SearchConfig.of(budget)).search(new Ambush(), 1);
+            SearchResult r = new IsMcts(SearchConfig.of(budget).withGumbel(null)).search(new Ambush(), 1);
             assertEquals(budget, r.iterations);
             assertTrue(r.nodes <= budget + 1, r.toString()); // the root plus at most one node per simulation
         }
@@ -193,10 +193,10 @@ class IsMctsTest {
     @Test
     void theOtherSeatsNodesAreItsInformationSets() {
         // in the tree, the other seat learns to block whenever it holds the blocker: attacking is worth 0.5 < 0.6
-        SearchResult in = new IsMcts(SearchConfig.of(3000)).search(new Ambush(), 3);
+        SearchResult in = new IsMcts(SearchConfig.of(3000).withGumbel(null)).search(new Ambush(), 3);
         assertEquals(0, in.chosen(), in.toString());
         // the switch: the other seat answered by the rollout policy (blocks half the time), attacking is worth 0.75
-        SearchResult out = new IsMcts(SearchConfig.of(3000).withOpponentInTree(false)).search(new Ambush(), 3);
+        SearchResult out = new IsMcts(SearchConfig.of(3000).withGumbel(null).withOpponentInTree(false)).search(new Ambush(), 3);
         assertEquals(1, out.chosen(), out.toString());
     }
 
@@ -204,13 +204,13 @@ class IsMctsTest {
     void wideningLimitsTheCandidatesTried() {
         double[] p = new double[50];
         java.util.Arrays.fill(p, 0.5);
-        SearchResult r = new IsMcts(SearchConfig.of(60)).search(new Bandit(p), 5);
+        SearchResult r = new IsMcts(SearchConfig.of(60).withGumbel(null)).search(new Bandit(p), 5);
         int tried = 0;
         for (int i = 0; i < r.candidates(); i++) {
             tried += r.visits(i) > 0 ? 1 : 0;
         }
         assertEquals(20, tried, r.toString()); // ceil(2 * sqrt(61)) < 20: the first 20 in the node's random order
-        SearchResult all = new IsMcts(new SearchConfig(60, Math.sqrt(2), true, 0, 2, 0.5)).search(new Bandit(p), 5);
+        SearchResult all = new IsMcts(new SearchConfig(60, Math.sqrt(2), true, 0, 2, 0.5).withGumbel(null)).search(new Bandit(p), 5);
         tried = 0;
         for (int i = 0; i < all.candidates(); i++) {
             tried += all.visits(i) > 0 ? 1 : 0;
@@ -237,7 +237,7 @@ class IsMctsTest {
                 return chooser -> chooser.choose(new Decision(0, "root", differ ? List.of("a0") : rootActions())) == 0 ? 1 : 0;
             }
         };
-        SearchResult r = new IsMcts(SearchConfig.of(100)).search(g, 9);
+        SearchResult r = new IsMcts(SearchConfig.of(100).withGumbel(null)).search(g, 9);
         assertTrue(r.rootMismatches > 0, r.toString());
         assertEquals(100, r.determinizations + r.rootMismatches);
         assertEquals(r.rootMismatches, r.method().getRan().getFailed());
