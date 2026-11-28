@@ -135,7 +135,9 @@ vocab 3). 최종 게이트 fin4: 16조합×60 네 가지(순수 Forge AI, 결정
 https://claude.ai/artifact/NRbTKugmT5UTSKjephvyod
 
 **3단계: 탐색(IS-MCTS).** 목표와 게이트는 설계 문서 개요 탭의 "3단계 목표" 단락, 방침은 작업 대화 구성 문서의
-"2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색은 `main`에 있음(2026-11-28 기준 protocol 17 / encoder 5 / vocab 3 / shard schema 2: 후보별 탐색 통계 N·Q·사전확률, 탐색 상태).
+"2단계 완료 승인과 3단계 방침 (2026-11-24)". 탐색은 `main`에 있음(2026-11-28 기준 protocol 18 / encoder 5 / vocab 3 / shard schema 3: 후보별 탐색 통계 N·Q·사전확률, 탐색 상태, 탐색 알고리즘).
+기본 탐색은 Gumbel(루트 순차 반감, 비루트 completed-Q, Q 정규화, 사전확률 로짓 0, 정책 헤드 미사용; 11-28 지시 "Gumbel v2").
+게이트·평가는 Gumbel 노이즈 끔, 자가 대국은 `-Dmagicdosa.search.gumbelNoise=true`. UCB1은 비교용 스위치.
 구현 메모는 `docs/search.md`, 성능은 `docs/search-perf.md`, 신경망 추론은 `docs/inference.md`.
 실행: `--policy search --budget-per-candidate 12 --budget-multiplier 1|2|4`(예산은 시뮬레이션 수, 시간 아님).
 지평선(다음 턴 시작)은 실행 속도를 위한 임시 설정이다(2026-11-26 사용자 결정). 플레이 성능을 해치므로 영구 정책으로
