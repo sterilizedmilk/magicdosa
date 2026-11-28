@@ -6,7 +6,8 @@ Targets (design 학습·평가 "학습·보상", planning decision 2026-11-25 de
 - policy: the search visit ratios of rows the model decided with a search (`shards.policy_target_rows`). Rows without
   a search are no policy samples: intended delegations (Forge AI chose), shadow-recovery failures and failed searches
   (the model chose with a uniform prior, so the choice carries no signal). Their chosen action is never a target.
-- value: the deciding seat's game result on every row (`shards.value_target_rows`: no sideboard rows, no draws).
+- value: the deciding seat's game result on every row (`shards.value_target_rows`: no sideboard rows, draws 0.5,
+  no game with an unintended fallback).
 Optionally imitation games (`--imitation`) add value rows only (their policy is Forge AI's, never a gen-1 target).
 
 Games are split by match (crc32 of `<run>/<match>`: both seats' shards and every game of a match stay together) into

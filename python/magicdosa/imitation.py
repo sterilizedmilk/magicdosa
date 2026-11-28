@@ -94,7 +94,7 @@ def imitation_targets(table: pa.Table, rows: np.ndarray) -> Dict[str, np.ndarray
     return {
         "chosen": table.column("chosen").to_numpy()[rows].astype(np.int64),
         "policy_mask": ~np.isin(dtype, shards.NOT_PLAY_POLICY),
-        "result": table.column("result").to_numpy()[rows].astype(np.float32),
+        "result": shards.value_targets(table)[rows],
         "value_mask": shards.value_target_rows(table)[rows],
         "n_candidates": shards.list_lengths(table, "cand_kind")[rows],
     }

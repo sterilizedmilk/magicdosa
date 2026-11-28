@@ -71,3 +71,28 @@ def test_privileged_labels_present():
     # training mode: the library order of both seats is recorded at every decision
     assert batch["priv_my_library_mask"].any()
     assert np.isin(batch["result"], [0.0, 1.0]).all()
+
+
+def _with(table, **columns):
+    for name, values in columns.items():
+        i = table.column_names.index(name)
+        table = table.set_column(i, name, pa.array(values, type=table.schema.field(name).type))
+    return table
+
+
+def test_value_targets_draws_half_and_fallback_games_dropped():
+    table = shards.read_shard(SAMPLE)
+    n = table.num_rows
+    draw = np.zeros(n, bool)
+    draw[:2] = True
+    game = np.array(["g1"] * (n // 2) + ["g2"] * (n - n // 2))
+    decider = table.column("decider").to_numpy().copy()
+    decider[-1] = shards.DECIDER_UNINTENDED_FALLBACK
+    t = _with(table, is_draw=draw, game_id=game, decider=decider)
+    y = shards.value_targets(t)
+    assert (y[:2] == 0.5).all() and np.isin(y[2:], [0.0, 1.0]).all()
+    rows = shards.value_target_rows(t)
+    assert not rows[game == "g2"].any()                     # the whole fallback game, not only its row
+    dtype = t.column("decision_type").to_numpy()
+    assert (rows[game == "g1"] == ~np.isin(dtype[game == "g1"], shards.NOT_PLAY_VALUE)).all()
+    assert rows[:2].any() or np.isin(dtype[:2], shards.NOT_PLAY_VALUE).all()   # draws are value rows

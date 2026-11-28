@@ -176,12 +176,32 @@ def policy_target_rows(table: pa.Table) -> np.ndarray:
     return (decider == DECIDER_MODEL) & has_visits & ~np.isin(dtype, NOT_PLAY_POLICY)
 
 
+DECIDER_UNINTENDED_FALLBACK = 3
+DRAW_VALUE = 0.5
+
+
+def fallback_games(table: pa.Table) -> np.ndarray:
+    """Per row: True when the row's game (game_id) has any unintended-fallback decision. Such a game is not
+    agent-core's play, so none of its rows is a value sample (coordinator 2026-11-28, item 3)."""
+    decider = table.column("decider").to_numpy()
+    game = np.asarray(table.column("game_id").to_numpy(zero_copy_only=False))
+    bad = np.unique(game[decider == DECIDER_UNINTENDED_FALLBACK])
+    return np.isin(game, bad) if len(bad) else np.zeros(table.num_rows, bool)
+
+
 def value_target_rows(table: pa.Table) -> np.ndarray:
-    """Rows with a play-module value target (the game result). PLACEHOLDER: draws are left out until the draw value
-    is decided; rows of every decider are kept (the design excludes delegated rows from the policy only)."""
+    """Rows with a play-module value target (the result of that game, not the match): rows of every decider
+    (model, intended delegation; the design excludes delegated rows from the policy only), draws included (target
+    0.5, `value_targets`), not sideboard rows (rewarded by the match), no row of a game with an unintended fallback."""
     dtype = table.column("decision_type").to_numpy()
+    return ~np.isin(dtype, NOT_PLAY_VALUE) & ~fallback_games(table)
+
+
+def value_targets(table: pa.Table) -> np.ndarray:
+    """Value target per row: the deciding seat's game result, 1 win / 0 loss / 0.5 draw."""
+    result = table.column("result").to_numpy().astype(np.float32)
     draw = table.column("is_draw").to_numpy(zero_copy_only=False)
-    return ~np.isin(dtype, NOT_PLAY_VALUE) & ~draw
+    return np.where(draw, np.float32(DRAW_VALUE), result)
 
 
 def training_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dict[str, Dict[str, np.ndarray]]:
@@ -196,7 +216,7 @@ def training_batch(table: pa.Table, rows: Optional[Sequence[int]] = None) -> Dic
         "chosen": b["chosen"].astype(np.int64),
         "visit_ratio": b["visit_ratio"],
         "policy_mask": policy_target_rows(table)[rows],
-        "result": b["result"].astype(np.float32),
+        "result": value_targets(table)[rows],
         "value_mask": value_target_rows(table)[rows],
     }
     return {"inputs": inputs, "targets": targets, "privileged": {k: b[k] for k in PRIVILEGED}}
