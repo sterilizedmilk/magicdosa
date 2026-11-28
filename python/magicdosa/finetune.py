@@ -3,9 +3,11 @@
     python -m magicdosa.finetune --runs <run dir>... --init <checkpoint.pt> --out <dir> [--threads 4] [--epochs 8]
 
 Targets (design 학습·평가 "학습·보상", planning decision 2026-11-25 decision 3):
-- policy: the search visit ratios of rows the model decided with a search (`shards.policy_target_rows`). Rows without
-  a search are no policy samples: intended delegations (Forge AI chose), shadow-recovery failures and failed searches
-  (the model chose with a uniform prior, so the choice carries no signal). Their chosen action is never a target.
+- policy (`--policy-target`, default completed-q, coordinator 2026-11-28): the completed-Q distribution
+  (targets.completed_q, `--c-visit 50 --c-scale 0.1`) of rows whose search completed (search_status 1) and recorded
+  N and Q per candidate (shard schema 2); with `visits`, the search visit ratios of searched model rows. Everything
+  else is value-only: protocol 15/16 shards under completed-q, skipped or aborted searches, intended delegations
+  (Forge AI chose), shadow-recovery failures and failed searches. A chosen action is never a policy target.
 - value: the deciding seat's game result on every row (`shards.value_target_rows`: no sideboard rows, draws 0.5,
   no game with an unintended fallback).
 Optionally imitation games (`--imitation`) add value rows only (their policy is Forge AI's, never a gen-1 target).
@@ -77,33 +79,83 @@ def load(paths: Sequence[Path], protocols: Sequence[int], mix: Dict[str, int] | 
     return imitation.concat([t.select(common) for t in tables])
 
 
-def batch(table, rows: np.ndarray, value_only: bool = False) -> Dict[str, Dict[str, np.ndarray]]:
-    """Model inputs and targets; the visit ratios are padded to the candidate width. Nothing privileged."""
+VISITS = {"kind": "visits"}
+
+
+def completed_q_target(c_visit: float = 50.0, c_scale: float = 0.1) -> Dict[str, object]:
+    return {"kind": "completed-q", "c_visit": c_visit, "c_scale": c_scale}
+
+
+def _list(table, name: str, rows: np.ndarray, width: int, fill, dtype) -> np.ndarray:
     from . import shards
+    a, _ = shards._padded(table, name, rows, 1, fill, dtype)
+    if a.shape[1] < width:
+        a = np.pad(a, ((0, 0), (0, width - a.shape[1])), constant_values=fill)
+    return a[:, :width]
+
+
+def policy_mask(table, rows: np.ndarray, target: Dict[str, object] | None = None) -> np.ndarray:
+    """Rows with a policy target. Visits: searched model rows with visit ratios (shards.policy_target_rows).
+    Completed-Q: those of them whose search completed (search_status 1) and recorded N and Q for every candidate
+    (shard schema 2); everything else (protocol 15/16 shards, skipped or aborted searches) is value-only."""
+    from . import shards
+    base = shards.policy_target_rows(table)[rows]
+    if (target or VISITS)["kind"] == "visits":
+        return base
+    status = table.column("search_status").to_numpy()[rows]
+    n_cand = shards.list_lengths(table, "cand_kind")[rows]
+    full = (shards.list_lengths(table, "cand_visits")[rows] == n_cand) & \
+        (shards.list_lengths(table, "cand_q")[rows] == n_cand)
+    return base & (status == shards.STATUS_COMPLETED) & full
+
+
+def batch(table, rows: np.ndarray, value_only: bool = False,
+          target: Dict[str, object] | None = None) -> Dict[str, Dict[str, np.ndarray]]:
+    """Model inputs and targets, padded to the candidate width. Nothing privileged. `policy_target` is the visit
+    ratios or the completed-Q distribution (targets.completed_q) per `target`; `visit_ratio` is kept for diagnostics."""
+    from . import shards, targets
+    target = target or VISITS
     b = shards.training_batch(table, rows)
     y = b["targets"]
-    width = b["inputs"]["cand_mask"].shape[1]
+    mask = b["inputs"]["cand_mask"]
+    width = mask.shape[1]
     vr = y["visit_ratio"]
     if vr.shape[1] < width:
         vr = np.pad(vr, ((0, 0), (0, width - vr.shape[1])))
+    vr = vr[:, :width]
     turn = np.rint(b["inputs"]["global"][:, 0] * TURN_SCALE).astype(np.int64)
-    pm = np.zeros(len(rows), bool) if value_only else y["policy_mask"]
-    return {"inputs": b["inputs"], "targets": {"visit_ratio": vr[:, :width], "policy_mask": pm,
+    pm = np.zeros(len(rows), bool) if value_only else policy_mask(table, rows, target)
+    if target["kind"] == "visits":
+        pt = vr
+    else:
+        pt = np.zeros(vr.shape, np.float32)
+        if pm.any():
+            n = _list(table, "cand_visits", rows, width, 0, np.float64)[pm]
+            q = _list(table, "cand_q", rows, width, np.nan, np.float64)[pm]
+            prior = _list(table, "cand_prior", rows, width, np.nan, np.float64)[pm]
+            root = table.column("search_root_value").to_numpy()[rows][pm].astype(np.float64)
+            visited = (n > 0) & ~np.isnan(q)
+            mean_q = (np.where(visited, q * n, 0).sum(-1) / np.maximum(np.where(visited, n, 0).sum(-1), 1))
+            root = np.where(np.isnan(root), mean_q, root)          # no root estimate: the visit-weighted mean Q
+            pt[pm] = targets.completed_q(n, q, root, mask[pm], logits=prior,
+                                         c_visit=target["c_visit"], c_scale=target["c_scale"])
+    return {"inputs": b["inputs"], "targets": {"policy_target": pt, "visit_ratio": vr, "policy_mask": pm,
                                                 "result": y["result"], "value_mask": y["value_mask"], "turn": turn}}
 
 
-def batches(table, rows: np.ndarray, size: int, rng, shuffle: bool, value_only: bool = False):
+def batches(table, rows: np.ndarray, size: int, rng, shuffle: bool, value_only: bool = False,
+            target: Dict[str, object] | None = None):
     from . import shards
     if not shuffle:
         for j in range(0, len(rows), size):
-            yield batch(table, rows[j:j + size], value_only)
+            yield batch(table, rows[j:j + size], value_only, target)
         return
     length = shards.list_lengths(table, "token_kind")[rows] + rng.uniform(0, 4, len(rows))
     order = rows[np.argsort(length, kind="stable")]
     starts = list(range(0, len(order), size))
     rng.shuffle(starts)
     for j in starts:
-        yield batch(table, np.sort(order[j:j + size]), value_only)
+        yield batch(table, np.sort(order[j:j + size]), value_only, target)
 
 
 def losses(net, b):
@@ -114,7 +166,7 @@ def losses(net, b):
     y = b["targets"]
     pm = torch.from_numpy(y["policy_mask"])
     vm = torch.from_numpy(y["value_mask"])
-    target = torch.from_numpy(y["visit_ratio"])
+    target = torch.from_numpy(y["policy_target"])
     ce = -(target * F.log_softmax(logits, -1).clamp(min=-1e4)).sum(-1)
     policy = (ce * pm).sum() / pm.sum().clamp(min=1)
     bce = F.binary_cross_entropy(value, torch.from_numpy(y["result"]), reduction="none")
@@ -147,10 +199,11 @@ CAND_PASS = 4      # cand_kind of a pass candidate (Candidate.ActionCase PASS; E
 TURN_BUCKETS =((1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 14), (15, 999))
 
 
-def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
-    """Policy: soft cross-entropy against the visit ratios and top-1 agreement with the search (the net's argmax is
-    one of the most-visited candidates), overall and per decision type. Value: loss, Brier score, accuracy and AUC
-    against the deciding seat's result, overall and by turn."""
+def evaluate(net, table, rows: np.ndarray, target: Dict[str, object] | None = None) -> Dict[str, object]:
+    """Policy: soft cross-entropy against the policy target (visit ratios or completed-Q) and top-1 agreement with it
+    (the net's argmax is one of the target's most likely candidates), overall and per decision type; PRIORITY
+    statistics against the visit ratios. Value: loss, Brier score, accuracy and AUC against the deciding seat's
+    result, overall and by turn."""
     import torch
     net.eval()
     ce, hit, n, per_type = 0.0, 0, 0, {}
@@ -158,12 +211,12 @@ def evaluate(net, table, rows: np.ndarray) -> Dict[str, object]:
                            "uniform", "n")}
     v_all, r_all, t_all, bce, nv = [], [], [], 0.0, 0
     with torch.no_grad():
-        for b in batches(table, rows, 512, None, shuffle=False):
+        for b in batches(table, rows, 512, None, shuffle=False, target=target):
             out = losses(net, b)
             y = b["targets"]
             pm = y["policy_mask"]
             if pm.any():
-                vr = y["visit_ratio"][pm]
+                vr = y["policy_target"][pm]
                 pred = out["logits"].numpy()[pm].argmax(-1)
                 ok = vr[np.arange(len(pred)), pred] >= vr.max(-1) - 1e-6
                 ce += float(out["policy"]) * int(pm.sum())
@@ -254,10 +307,15 @@ def main(argv: Iterable[str] | None = None) -> None:
     p.add_argument("--imitation-batch", type=int, default=64, help="imitation rows added to every training batch")
     p.add_argument("--compare", nargs="*", default=[], help="further checkpoints evaluated on validation and test")
     p.add_argument("--eval-only", action="store_true", help="evaluate --init and --compare, no training")
+    p.add_argument("--policy-target", choices=("completed-q", "visits"), default="completed-q",
+                   help="completed-Q from N, Q, prior and root value (shard schema 2) or the visit ratios")
+    p.add_argument("--c-visit", type=float, default=50.0)
+    p.add_argument("--c-scale", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=1)
     a = p.parse_args(argv)
     from .pretrain import _setup_threads
     _setup_threads(a.threads)
+    target = completed_q_target(a.c_visit, a.c_scale) if a.policy_target == "completed-q" else VISITS
 
     import torch
     from . import imitation, versions
@@ -293,17 +351,17 @@ def main(argv: Iterable[str] | None = None) -> None:
     train_rows = all_rows["train"]
     write({"event": "start", "games": {k: len(v) for k, v in split.items()}, "imitation_games": len(imit_paths),
            "rows": {k: int(t.num_rows) for k, t in tables.items()},
-           "policy_rows": {k: int(shards.policy_target_rows(t).sum()) for k, t in tables.items()},
+           "policy_rows": {k: int(policy_mask(t, np.arange(t.num_rows), target).sum()) for k, t in tables.items()},
            "imitation_rows": int(imit.num_rows) if imit is not None else 0,
            "shards_by_protocol_and_leaf": mix,
            "load_s": round(time.time() - t0, 1), "args": vars(a)})
 
     init, ck = load_net(a.init)
-    metrics = {"init": a.init, "init_eval": {k: evaluate(init, tables[k], all_rows[k]) for k in ("val", "test")}}
+    metrics = {"init": a.init, "init_eval": {k: evaluate(init, tables[k], all_rows[k], target) for k in ("val", "test")}}
     write({"event": "init", **metrics["init_eval"]["val"], "split": "val"})
     for c in a.compare:
         other, _ = load_net(c)
-        metrics.setdefault("compare", {})[c] = {k: evaluate(other, tables[k], all_rows[k]) for k in ("val", "test")}
+        metrics.setdefault("compare", {})[c] = {k: evaluate(other, tables[k], all_rows[k], target) for k in ("val", "test")}
         write({"event": "compare", "checkpoint": c, **metrics["compare"][c]["val"], "split": "val"})
     if a.eval_only:
         (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
@@ -327,7 +385,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         net.train()
         sums = {"policy": 0.0, "value": 0.0, "imit_value": 0.0, "n": 0}
         imit_iter = None
-        for b in batches(tables["train"], train_rows, a.batch, rng, shuffle=True):
+        for b in batches(tables["train"], train_rows, a.batch, rng, shuffle=True, target=target):
             net.train()
             terms = losses(net, b)
             loss = terms["policy"] + a.value_weight * terms["value"]
@@ -346,7 +404,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             sums["value"] += float(terms["value"].detach())
             sums["n"] += 1
         k = max(sums["n"], 1)
-        ev = evaluate(net, tables["val"], all_rows["val"])
+        ev = evaluate(net, tables["val"], all_rows["val"], target)
         score = ev["policy_ce"] + ev["value_bce"]
         write({"event": "epoch", "epoch": epoch, "step": step, "train_policy": sums["policy"] / k,
                "train_value": sums["value"] / k, "train_imit_value": sums["imit_value"] / k,
@@ -358,7 +416,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     save("last.pt", a.epochs)
     best_net, _ = load_net(out / "best.pt")
     metrics.update({"best_epoch": best_epoch, "train_seconds": round(time.time() - t0, 1), "threads": a.threads,
-                    "best_eval": {k: evaluate(best_net, tables[k], all_rows[k]) for k in ("val", "test")}})
+                    "best_eval": {k: evaluate(best_net, tables[k], all_rows[k], target) for k in ("val", "test")}})
     (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
     write({"event": "done", "best_epoch": best_epoch, "test": metrics["best_eval"]["test"],
            "test_init": metrics["init_eval"]["test"]})

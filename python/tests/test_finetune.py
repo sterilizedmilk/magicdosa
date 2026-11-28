@@ -121,3 +121,55 @@ def test_auc():
     assert finetune.auc(np.array([0.1, 0.4, 0.35, 0.8]), np.array([0, 0, 1, 1])) == 0.75
     assert finetune.auc(np.array([0.5, 0.5]), np.array([0, 1])) == 0.5
     assert np.isnan(finetune.auc(np.array([0.5]), np.array([1])))
+
+
+def _searched(table, status):
+    """The sample with every row a searched model decision: visit ratios, N, Q, prior logits per candidate, a root
+    value and the given search_status per row."""
+    from magicdosa import targets
+    n_cand = shards.list_lengths(table, "cand_kind")
+    rng = np.random.default_rng(0)
+    visits = [list(rng.integers(0, 6, k)) for k in n_cand]
+    q = [[float(rng.uniform()) if v else float("nan") for v in vs] for vs in visits]
+    prior = [[float("nan")] * k for k in n_cand]
+    ratio = [[v / max(sum(vs), 1) for v in vs] for vs in visits]
+    cols = {"decider": pa.array(np.ones(table.num_rows, np.int32)),
+            "visit_ratio": pa.array(ratio, type=pa.list_(pa.float32())),
+            "cand_visits": pa.array(visits, type=pa.list_(pa.int32())),
+            "cand_q": pa.array(q, type=pa.list_(pa.float32())),
+            "cand_prior": pa.array(prior, type=pa.list_(pa.float32())),
+            "search_root_value": pa.array(np.full(table.num_rows, 0.5, np.float32)),
+            "search_status": pa.array(np.asarray(status, np.int32))}
+    for name, values in cols.items():
+        i = table.column_names.index(name)
+        table = table.set_column(i, pa.field(name, values.type, nullable=table.schema.field(name).nullable), values)
+    return table, visits, q
+
+
+def test_completed_q_targets_only_on_completed_searches(table):
+    from magicdosa import targets
+    status = np.where(np.arange(table.num_rows) % 3 == 0, shards.STATUS_SKIPPED, shards.STATUS_COMPLETED)
+    t, visits, q = _searched(table, status)
+    rows = np.arange(t.num_rows)
+    tgt = finetune.completed_q_target()
+    b = finetune.batch(t, rows, target=tgt)
+    y = b["targets"]
+    play = ~np.isin(t.column("decision_type").to_numpy(), shards.NOT_PLAY_POLICY)
+    assert (y["policy_mask"] == (play & (status == shards.STATUS_COMPLETED))).all()
+    assert (y["value_mask"] == shards.value_target_rows(t)).all()          # skipped rows stay value samples
+    mask = b["inputs"]["cand_mask"]
+    for i in np.where(y["policy_mask"])[0]:
+        k = len(visits[i])
+        want = targets.completed_q([visits[i]], [q[i]], [0.5], [[True] * k])[0]
+        assert np.allclose(y["policy_target"][i, :k], want, atol=1e-6) and not y["policy_target"][i, k:].any()
+        assert np.isclose(y["policy_target"][i][mask[i]].sum(), 1)
+    visits_mode = finetune.batch(t, rows)["targets"]                       # visit ratios ignore search_status
+    assert (visits_mode["policy_mask"] == play).all()
+
+
+def test_completed_q_leaves_shards_without_stats_value_only(table):
+    t, _, _ = _searched(table, np.full(table.num_rows, shards.STATUS_COMPLETED))
+    empty = pa.array([[] for _ in range(t.num_rows)], type=pa.list_(pa.int32()))
+    t = t.set_column(t.column_names.index("cand_visits"), "cand_visits", empty)       # a protocol-16 shard
+    y = finetune.batch(t, np.arange(t.num_rows), target=finetune.completed_q_target())["targets"]
+    assert not y["policy_mask"].any() and y["value_mask"].any()
