@@ -85,7 +85,7 @@ def batch(table, rows: np.ndarray, value_only: bool = False) -> Dict[str, Dict[s
     vr = y["visit_ratio"]
     if vr.shape[1] < width:
         vr = np.pad(vr, ((0, 0), (0, width - vr.shape[1])))
-    turn = np.rint(b["inputs"]["global"][:, 0] * 20).astype(np.int64)
+    turn = np.rint(b["inputs"]["global"][:, 0] * TURN_SCALE).astype(np.int64)
     pm = np.zeros(len(rows), bool) if value_only else y["policy_mask"]
     return {"inputs": b["inputs"], "targets": {"visit_ratio": vr[:, :width], "policy_mask": pm,
                                                 "result": y["result"], "value_mask": y["value_mask"], "turn": turn}}
@@ -140,6 +140,7 @@ def auc(score: np.ndarray, label: np.ndarray) -> float:
     return float((ranks[pos].sum() - pos.sum() * (pos.sum() + 1) / 2) / (pos.sum() * neg.sum()))
 
 
+TURN_SCALE = 40    # Encoder.java: global "turn" = min(40, game turn) / 40
 DECISION_PRIORITY = 1
 CAND_PASS = 4      # cand_kind of a pass candidate (Candidate.ActionCase PASS; Encoder.java)
 TURN_BUCKETS =((1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 14), (15, 999))

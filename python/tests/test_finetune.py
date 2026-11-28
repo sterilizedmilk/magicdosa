@@ -89,7 +89,9 @@ def test_batch_targets(table):
     assert y["visit_ratio"].shape == b["inputs"]["cand_mask"].shape
     assert (y["policy_mask"] == shards.policy_target_rows(table)).all()
     assert not finetune.batch(table, rows, value_only=True)["targets"]["policy_mask"].any()
-    assert (y["turn"] >= 0).all()
+    g = table.column("global").combine_chunks().values.to_numpy().reshape(table.num_rows, -1)
+    assert (y["turn"] == np.rint(g[:, 0] * 40)).all()           # Encoder: min(40, turn) / 40
+    assert (y["turn"] >= 0).all() and (y["turn"] <= table.column("turns").to_numpy()).all()
 
 
 def test_auc():
