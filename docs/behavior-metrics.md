@@ -17,8 +17,10 @@ Each metric is counted per agent seat and game, then grouped by matchup (own dec
 judgement uses only what the deciding seat knew from its own request: the public state plus its own hand. Privileged
 records are never read.
 
-- **Seat mode:** `search` if any of the seat's decision steps ran search; else `network` if a step was decided by the
-  network alone (search skipped); else `delegated`.
+- **Seat mode:** `search` if any of the seat's decision steps ran search; else `network` if a step's prior was the
+  learned policy head (the network alone); else `random` if the steps were decided without search on the uniform
+  prior (the random policy); else `delegated`. The log header does not name the policy, so the mode comes from the
+  steps (`Method.prior`). Before 2026-11-28 a random seat was counted as `network`.
 - **① Confirmed kill not closed:** this covers the seat's turns in which an attack declaration got the kill checker's
   KILL verdict (`DecisionResponse.kill_check = 2`, on public information). The metric is the share of those turns in
   which the seat did not win that same turn. `approx N` counts the turns whose verdict was approximate

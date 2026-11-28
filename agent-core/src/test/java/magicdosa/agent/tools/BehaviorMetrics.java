@@ -10,7 +10,7 @@ import magicdosa.protocol.v1.GameOver;
 import magicdosa.protocol.v1.KillCheckOutcome;
 import magicdosa.protocol.v1.LogHeader;
 import magicdosa.protocol.v1.LogRecord;
-import magicdosa.protocol.v1.SearchSkipReason;
+import magicdosa.protocol.v1.Prior;
 import magicdosa.protocol.v1.Zone;
 
 import java.io.BufferedReader;
@@ -50,8 +50,9 @@ import java.util.stream.Stream;
  *   <li>Game length in turns; and, in games where the seat's value reached 0.9 (search root value, or the value head
  *       for a network-alone seat when logged), the turns from the first such decision to the game's end.</li>
  * </ol>
- * Seat mode: "search" if any of the seat's steps ran search, else "network" if a step was decided by the network
- * alone, else "delegated".
+ * Seat mode: "search" if any of the seat's steps ran search; else "network" if a step's prior was the learned policy
+ * head (the network alone); else "random" if steps were decided without search on the uniform prior (the random
+ * policy); else "delegated". The log header does not name the policy, so it is read from the steps.
  */
 public final class BehaviorMetrics {
     public static final double CONFIDENT = 0.9;
@@ -128,7 +129,8 @@ public final class BehaviorMetrics {
             t.turns = over.getTurns();
             t.killKnownGames = h.getProtocolVersion() >= 17 ? 1 : 0;
             boolean searched = false;
-            boolean netAlone = false;
+            boolean learned = false;
+            boolean uniform = false;
             Set<Integer> killTurns = new HashSet<>();
             Set<Integer> killExact = new HashSet<>();
             Set<Integer> landOffered = new HashSet<>();
@@ -143,8 +145,8 @@ public final class BehaviorMetrics {
                 int turn = q.getObservation().getGame().getTurn();
                 for (DecisionStep st : d.getResponse().getStepsList()) {
                     searched |= st.getMethod().hasRan();
-                    netAlone |= st.getMethod().hasSkipped()
-                        && st.getMethod().getSkipped() != SearchSkipReason.SEARCH_SKIP_REASON_UNSPECIFIED;
+                    learned |= st.getMethod().getPrior() == Prior.PRIOR_LEARNED_HEAD;
+                    uniform |= st.getMethod().getPrior() == Prior.PRIOR_UNIFORM;
                     if (confidentTurn < 0 && (st.getMethod().hasRan() ? st.getMethod().getRan().getRootValue() >= CONFIDENT
                         : st.getDiagnostics().hasValue() && st.getDiagnostics().getValue() >= CONFIDENT)) {
                         confidentTurn = turn;
@@ -214,9 +216,13 @@ public final class BehaviorMetrics {
             String own = deck(h, seat);
             String opp = h.getPlayersList().stream().filter(p -> p.getSeat() != seat).map(p -> p.getDeckName())
                 .findFirst().orElse("?");
-            out.add(new SeatResult(seat, own + " vs " + opp, searched ? "search" : netAlone ? "network" : "delegated", t));
+            out.add(new SeatResult(seat, own + " vs " + opp, mode(searched, learned, uniform), t));
         }
         return out;
+    }
+
+    static String mode(boolean searched, boolean learnedPrior, boolean uniformPrior) {
+        return searched ? "search" : learnedPrior ? "network" : uniformPrior ? "random" : "delegated";
     }
 
     private static String deck(LogHeader h, int seat) {
