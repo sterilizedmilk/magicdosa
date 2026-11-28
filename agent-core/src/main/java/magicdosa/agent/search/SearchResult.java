@@ -187,7 +187,8 @@ public final class SearchResult {
                 : magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_GUMBEL)
             .setGumbelNoise(config.gumbel() != null && config.gumbel().noise()).setGumbelK(gumbelK)
             .setCVisit(config.gumbel() == null ? 0f : (float) config.gumbel().cVisit())
-            .setCScale(config.gumbel() == null ? 0f : (float) config.gumbel().cScale())).build();
+            .setCScale(config.gumbel() == null ? 0f : (float) config.gumbel().cScale())
+            .setQNormalize(config.gumbel() != null && config.gumbel().normalize())).build();
     }
 
     /**

@@ -430,6 +430,29 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
         return rootSeat;
     }
 
+    private Double rootValue;
+
+    /** The leaf network's value of the root request over its first step's candidates (once per search). */
+    @Override
+    public double rootValue() {
+        if (leafNetwork == null || playout()) {
+            return Double.NaN;
+        }
+        if (rootValue == null) {
+            List<Integer> candidates = new ArrayList<>();
+            for (String a : rootActions) {
+                candidates.add(rootCandidate(a));
+            }
+            rootValue = leafNetwork.evaluate(root, candidates, List.of()).value();
+        }
+        return rootValue;
+    }
+
+    @Override
+    public boolean leafIsNetwork() {
+        return leafNetwork != null && !playout();
+    }
+
     @Override
     public int rootTurn() {
         return root.getObservation().getGame().getTurn();

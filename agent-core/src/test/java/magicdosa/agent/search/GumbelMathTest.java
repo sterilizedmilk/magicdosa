@@ -1,71 +1,85 @@
 package magicdosa.agent.search;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The completed-Q formulas give the numbers of python/magicdosa/targets.py on the shared fixture
- * (test resource completed_q_fixture.txt, also read by python/tests/test_targets_fixture.py).
+ * The completed-Q formulas give the numbers of python/magicdosa/targets.py on the shared fixtures
+ * python/tests/data/completed_q_fixtures.json (also checked by python tests/test_targets.py).
  */
 class GumbelMathTest {
 
-    private static double[] doubles(String s) {
-        String[] p = s.trim().split(",");
-        double[] out = new double[p.length];
-        for (int i = 0; i < p.length; i++) {
-            out[i] = p[i].trim().equals("nan") ? Double.NaN : Double.parseDouble(p[i].trim());
+    private static Path fixtures() {
+        return Path.of(System.getProperty("magicdosa.repo", "../.."), "python", "tests", "data", "completed_q_fixtures.json");
+    }
+
+    private static double[] doubles(JsonElement e) {
+        if (e == null || e.isJsonNull()) {
+            return null;
+        }
+        JsonArray a = e.getAsJsonArray();
+        double[] out = new double[a.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = a.get(i).isJsonNull() ? Double.NaN : a.get(i).getAsDouble();
         }
         return out;
     }
 
     @Test
-    void javaMatchesPythonOnTheSharedFixture() throws Exception {
-        List<String> rows = new ArrayList<>();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(
-                GumbelMathTest.class.getResourceAsStream("/completed_q_fixture.txt"), StandardCharsets.UTF_8))) {
-            for (String line; (line = r.readLine()) != null; ) {
-                if (!line.isBlank() && !line.startsWith("#")) {
-                    rows.add(line);
-                }
-            }
-        }
-        assertTrue(rows.size() >= 5);
-        for (String row : rows) {
-            String[] f = row.split("\\|");
-            double[] nd = doubles(f[0]);
+    void javaMatchesPythonOnTheSharedFixtures() throws Exception {
+        JsonObject root = JsonParser.parseString(Files.readString(fixtures(), StandardCharsets.UTF_8)).getAsJsonObject();
+        JsonArray cases = root.getAsJsonArray("cases");
+        assertTrue(cases.size() >= 10, "fixture cases: " + cases.size());
+        for (JsonElement c : cases) {
+            JsonObject o = c.getAsJsonObject();
+            double[] nd = doubles(o.get("n"));
             long[] n = new long[nd.length];
             for (int i = 0; i < n.length; i++) {
                 n[i] = (long) nd[i];
             }
-            double[] q = doubles(f[1]);
-            double v = Double.parseDouble(f[2].trim());
-            double[] md = doubles(f[3]);
-            boolean[] mask = new boolean[md.length];
-            for (int i = 0; i < mask.length; i++) {
-                mask[i] = md[i] != 0;
-            }
-            double[] logits = f[4].trim().equals("none") ? null : doubles(f[4]);
-            double[] expected = doubles(f[5]);
-            double[] got = GumbelMath.improvedPolicy(logits, n, q, v, mask, GumbelMath.C_VISIT, GumbelMath.C_SCALE);
+            double[] q = doubles(o.get("q"));
+            double v = o.get("root_value").isJsonNull() ? Double.NaN : o.get("root_value").getAsDouble();
+            double[] logits = doubles(o.get("prior_logits"));
+            double[] expected = doubles(o.get("target"));
+            double[] got = GumbelMath.improvedPolicy(logits, n, q, v, null, o.get("c_visit").getAsDouble(),
+                o.get("c_scale").getAsDouble(), o.get("q_normalize").getAsBoolean());
             for (int i = 0; i < expected.length; i++) {
-                assertEquals(expected[i], got[i], 2e-6, row);
+                assertEquals(expected[i], got[i], 1e-6, o.get("name").getAsString());
             }
         }
     }
 
     @Test
-    void sigmaScalesWithTheMostVisitedCandidate() {
-        assertEquals((50 + 30) * 0.1 * 0.5, GumbelMath.sigma(0.5, 30, 50, 0.1), 1e-12);
-        double[] qHat = GumbelMath.completedQ(new long[] {3, 0}, new double[] {0.9, Double.NaN}, 0.4);
-        assertEquals(0.9, qHat[0], 0);
-        assertEquals(0.4, qHat[1], 0);
+    void closeValuesAreStretchedAndEqualOnesStayZero() {
+        double[] stretched = GumbelMath.normalized(new double[] {0.50, 0.51, 0.52}, null);
+        assertEquals(0, stretched[0], 1e-6);
+        assertEquals(0.5, stretched[1], 1e-6);
+        assertEquals(1, stretched[2], 1e-6);
+        double[] equal = GumbelMath.normalized(new double[] {0.5, 0.5, 0.5}, null);
+        for (double x : equal) {
+            assertEquals(0, x, 0, "no division by zero");
+        }
+    }
+
+    @Test
+    void unvisitedCandidatesTakeVMix() {
+        // v 0.3, visited Q 0.7 (N 10) and 0.4 (N 2), uniform prior: Q_bar 0.55, v_mix (0.3 + 12 * 0.55) / 13
+        double[] qHat = GumbelMath.completedQ(null, new long[] {10, 0, 2}, new double[] {0.7, Double.NaN, 0.4}, 0.3, null);
+        assertEquals((0.3 + 12 * 0.55) / 13, qHat[1], 1e-12);
+        assertEquals(0.7, qHat[0], 0);
+        // no network value: the visit-weighted mean Q stands in for v
+        double[] noNet = GumbelMath.completedQ(null, new long[] {5, 0, 1}, new double[] {0.6, Double.NaN, 0.2}, Double.NaN, null);
+        double mean = (5 * 0.6 + 0.2) / 6;
+        assertEquals((mean + 6 * 0.4) / 7, noNet[1], 1e-12);
     }
 }

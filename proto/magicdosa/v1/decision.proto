@@ -305,6 +305,9 @@ message SearchRun {
   uint32 gumbel_k = 18;
   float c_visit = 19;
   float c_scale = 20;
+  // protocol 19 (Gumbel v2, 2026-11-28): sigma is taken of each node's min-max stretched completed Q (q_tilde), and
+  // unvisited candidates are completed with v_mix; protocol 18 runs had neither
+  bool q_normalize = 21;
 }
 
 enum SearchAlgorithm {

@@ -69,9 +69,10 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
      * Gumbel search settings (2026-11-28 directive): {@code noise} draws Gumbel(0, 1) noise at the root (self-play) or
      * not (evaluation and gates: top-k by the prior logits only, ties by the seed); {@code maxK} root candidates at most
      * enter sequential halving; {@code cVisit}, {@code cScale}: sigma(q) = (cVisit + max_b N(b)) * cScale * q, the same
-     * as python/magicdosa/targets.py. The prior logits are all 0 (uniform; no policy head in the search).
+     * as python/magicdosa/targets.py; {@code normalize}: sigma of the children's min-max stretched q_hat (default on).
+     * The prior logits are all 0 (uniform; no policy head in the search).
      */
-    public record Gumbel(boolean noise, int maxK, double cVisit, double cScale) {
+    public record Gumbel(boolean noise, int maxK, double cVisit, double cScale, boolean normalize) {
         public Gumbel {
             if (maxK < 1 || cVisit < 0 || cScale <= 0) {
                 throw new IllegalArgumentException("bad Gumbel settings");
@@ -83,7 +84,8 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
 
         /**
          * From {@code magicdosa.search.algorithm} (gumbel, the default, or ucb1: null), {@code .gumbelNoise} (default
-         * false: evaluation and gates; self-play sets true), {@code .gumbelK}, {@code .cVisit}, {@code .cScale}.
+         * false: evaluation and gates; self-play sets true), {@code .gumbelK}, {@code .cVisit}, {@code .cScale},
+         * {@code .gumbelNormalize} (default true).
          */
         public static Gumbel fromSystemProperties() {
             String a = System.getProperty("magicdosa.search.algorithm", "gumbel");
@@ -96,7 +98,8 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
             return new Gumbel(Boolean.getBoolean("magicdosa.search.gumbelNoise"),
                 Integer.getInteger("magicdosa.search.gumbelK", MAX_K),
                 Double.parseDouble(System.getProperty("magicdosa.search.cVisit", Double.toString(C_VISIT))),
-                Double.parseDouble(System.getProperty("magicdosa.search.cScale", Double.toString(C_SCALE))));
+                Double.parseDouble(System.getProperty("magicdosa.search.cScale", Double.toString(C_SCALE))),
+                Boolean.parseBoolean(System.getProperty("magicdosa.search.gumbelNormalize", "true")));
         }
     }
 
@@ -137,7 +140,7 @@ public record SearchConfig(long budget, double exploration, boolean opponentInTr
         return (perCandidate == 0 ? "budget " + budget : perCandidate + " per candidate x" + multiplier) + ", rollout "
             + rolloutName(rollout) + ", horizon " + horizonName(horizon) + ", leaf " + leafName(leafEvaluation)
             + (gumbel == null ? ", ucb1" : ", gumbel k" + gumbel.maxK() + (gumbel.noise() ? " noise" : "")
-                + " cVisit " + gumbel.cVisit() + " cScale " + gumbel.cScale());
+                + " cVisit " + gumbel.cVisit() + " cScale " + gumbel.cScale() + (gumbel.normalize() ? " normalized" : ""));
     }
 
     /** "own-turn" or "next-turn". */

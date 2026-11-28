@@ -20,6 +20,19 @@ public interface SearchGame {
     /** Keys of the root decision's candidates, in candidate order (the real request's candidates). */
     List<String> rootActions();
 
+    /**
+     * Gumbel search: the network's value of the root decision for the root seat, NaN when no network values this game's
+     * leaves (the root's visit-weighted mean then stands in, as in targets.py).
+     */
+    default double rootValue() {
+        return Double.NaN;
+    }
+
+    /** Whether a simulation's value is the network's value of the node its walk expanded (a network leaf). */
+    default boolean leafIsNetwork() {
+        return false;
+    }
+
     /** The game turn of the root decision (0 when unknown): early-turn sampling of the played move uses it. */
     default int rootTurn() {
         return 0;

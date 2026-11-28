@@ -61,6 +61,7 @@ def test_older_protocol_only_when_listed(table, tmp_path):
 def test_compatible_protocols_read_without_asking(table, tmp_path):
     # protocol 15 shards (gen2-c self-play b0021-b0033) train together with protocol 16 ones
     assert 15 in versions.COMPATIBLE_PROTOCOLS
+    assert {16, 17, 18} <= set(versions.COMPATIBLE_PROTOCOLS)  # protocol 19 reads 15-18
     p15 = write(table, tmp_path / "p15.arrow", protocol_version="15")
     assert shards.read_shard(p15).num_rows == table.num_rows
     assert shards.read_shards([p15]).num_rows == table.num_rows
