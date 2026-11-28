@@ -56,7 +56,7 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "search_tree_reuse", "kill_check", "kill_check_approximate", "chosen",
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "search_tree_reuse", "kill_check", "kill_check_approximate", "search_algorithm", "search_gumbel_noise", "chosen",
         "end_reason", "turns", "oov");
     private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio", "cand_q",
         "cand_prior");
@@ -67,9 +67,10 @@ public final class ShardWriter {
     /**
      * Shard layout version (schema metadata {@code shard_schema_version}; Python's versions.SHARD_SCHEMA_VERSION). 2
      * (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior, search_tree_reuse,
-     * search_inherited_visits, kill_check, kill_check_approximate. A shard without it is 1.
+     * search_inherited_visits, kill_check, kill_check_approximate. 3 (protocol 18): search_algorithm (0 no search, 1
+     * UCB1, 2 Gumbel), search_gumbel_noise. A shard without it is 1.
      */
-    public static final int SHARD_SCHEMA_VERSION = 2;
+    public static final int SHARD_SCHEMA_VERSION = 3;
 
     /** {@code search_status}: no search decision on this step (another decider, or no method recorded). */
     public static final int STATUS_NONE = 0;
@@ -270,6 +271,8 @@ public final class ShardWriter {
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
         r.put("search_status", searchStatus(step));
+        r.put("search_algorithm", step.getMethod().hasRan() ? step.getMethod().getRan().getAlgorithmValue() : 0);
+        r.put("search_gumbel_noise", step.getMethod().hasRan() && step.getMethod().getRan().getGumbelNoise() ? 1 : 0);
         r.put("kill_check", d.response().getKillCheckValue());    // per decision: the same on every step of it
         r.put("kill_check_approximate", d.response().getKillCheckApproximate() ? 1 : 0);
         r.put("search_root_value", step.getMethod().hasRan() ? step.getMethod().getRan().getRootEstimate() : Float.NaN);

@@ -86,7 +86,16 @@ class GumbelSearchTest {
             SearchResult b = new IsMcts(oneX(g)).search(new Values(flat(20, 3, 0.6)), 42);
             assertEquals(a.toString(), b.toString());
             assertEquals(a.method(), b.method());
+            // protocol 18: the run records the algorithm and its settings
+            magicdosa.protocol.v1.SearchRun run = a.method().getRan();
+            assertEquals(magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_GUMBEL, run.getAlgorithm());
+            assertEquals(g.noise(), run.getGumbelNoise());
+            assertEquals(16, run.getGumbelK());
+            assertEquals(50f, run.getCVisit(), 0);
+            assertEquals(0.1f, run.getCScale(), 1e-7);
         }
+        assertEquals(magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_UCB1, new IsMcts(oneX(null))
+            .search(new Values(flat(3, 0, 0.6)), 1).method().getRan().getAlgorithm());
     }
 
     @Test

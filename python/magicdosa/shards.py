@@ -63,6 +63,8 @@ STATUS_NONE, STATUS_COMPLETED, STATUS_SKIPPED, STATUS_ABORTED = 0, 1, 2, 3
 # kill_check values (protocol KillCheckOutcome), from the deciding seat's view: not checked, checked with no confirmed
 # kill or death, attacking with everything is a confirmed kill, the attack is lethal whatever is blocked
 KILL_CHECK_NOT_CHECKED, KILL_CHECK_NONE, KILL_CHECK_KILL, KILL_CHECK_DEATH = 0, 1, 2, 3
+# search_algorithm values (protocol SearchAlgorithm): no search on the row, UCB1, Gumbel
+SEARCH_NONE, SEARCH_UCB1, SEARCH_GUMBEL = 0, 1, 2
 SKIP_REASON_SHADOW_STOPPED = 6
 
 
@@ -88,6 +90,13 @@ def with_schema2_columns(table: pa.Table) -> pa.Table:
                        ("kill_check", pa.int32()), ("kill_check_approximate", pa.int32())):
         if name not in table.column_names:   # no tree reuse and no kill-check verdict recorded before protocol 17
             table = table.append_column(pa.field(name, kind, nullable=False), pa.array(np.zeros(n), type=kind))
+    if "search_algorithm" not in table.column_names:   # before protocol 18 every search was UCB1
+        status = table.column("search_status").to_numpy()
+        table = table.append_column(pa.field("search_algorithm", pa.int32(), nullable=False),
+                                    pa.array(np.where(status == STATUS_COMPLETED, SEARCH_UCB1, 0).astype(np.int32)))
+    if "search_gumbel_noise" not in table.column_names:
+        table = table.append_column(pa.field("search_gumbel_noise", pa.int32(), nullable=False),
+                                    pa.array(np.zeros(n, dtype=np.int32)))
     for name, kind in (("cand_visits", pa.int32()), ("cand_q", pa.float32()), ("cand_prior", pa.float32())):
         if name not in table.column_names:
             table = table.append_column(name, pa.array([[] for _ in range(n)], type=pa.list_(kind)))

@@ -182,7 +182,12 @@ public final class SearchResult {
             .setLeafModel(magicdosa.agent.model.LeafNetwork.fileName())
             .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())
             .setRootEstimate((float) rootEstimate())
-            .setTreeReuse(treeReuse).setInheritedVisits(inheritedVisits)).build();
+            .setTreeReuse(treeReuse).setInheritedVisits(inheritedVisits)
+            .setAlgorithm(config.gumbel() == null ? magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_UCB1
+                : magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_GUMBEL)
+            .setGumbelNoise(config.gumbel() != null && config.gumbel().noise()).setGumbelK(gumbelK)
+            .setCVisit(config.gumbel() == null ? 0f : (float) config.gumbel().cVisit())
+            .setCScale(config.gumbel() == null ? 0f : (float) config.gumbel().cScale())).build();
     }
 
     /**
