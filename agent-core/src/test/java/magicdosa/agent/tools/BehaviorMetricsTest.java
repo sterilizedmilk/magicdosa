@@ -26,6 +26,7 @@ import magicdosa.protocol.v1.Observation;
 import magicdosa.protocol.v1.PassCandidate;
 import magicdosa.protocol.v1.PlayLand;
 import magicdosa.protocol.v1.PlayLandCandidate;
+import magicdosa.protocol.v1.Prior;
 import magicdosa.protocol.v1.SearchRun;
 import magicdosa.protocol.v1.SearchSkipReason;
 import magicdosa.protocol.v1.Zone;
@@ -68,7 +69,7 @@ class BehaviorMetricsTest {
     }
 
     private List<LogRecord> game(int protocol) {
-        DecisionStep net = DecisionStep.newBuilder().setMethod(Method.newBuilder()
+        DecisionStep net = DecisionStep.newBuilder().setMethod(Method.newBuilder().setPrior(Prior.PRIOR_LEARNED_HEAD)
             .setSkipped(SearchSkipReason.SEARCH_SKIP_REASON_NOT_AVAILABLE)).build();
         KillCheckOutcome none = KillCheckOutcome.KILL_CHECK_OUTCOME_NONE;
         KillCheckOutcome kill = KillCheckOutcome.KILL_CHECK_OUTCOME_KILL;
@@ -117,6 +118,23 @@ class BehaviorMetricsTest {
         assertEquals(2, t.confidentTurnsToEnd); // first root value >= 0.9 on turn 3, game ends turn 5
         assertEquals("| A vs B | search | 1 | 100.0 | 50.0% (1/2) | 100.0% (1/1) | 50.0% (1/2) | 75.0% (3/4) | 5.0 | 2.0 (1, 100%) |",
             BehaviorMetrics.row("A vs B", "search", t));
+    }
+
+    /** The random policy and the network alone both skip search; the prior tells them apart. */
+    @Test
+    void seatModes() {
+        assertEquals("search", BehaviorMetrics.mode(true, true, true));
+        assertEquals("network", BehaviorMetrics.mode(false, true, true));
+        assertEquals("random", BehaviorMetrics.mode(false, false, true));
+        assertEquals("delegated", BehaviorMetrics.mode(false, false, false));
+        DecisionStep random = DecisionStep.newBuilder().setMethod(Method.newBuilder().setPrior(Prior.PRIOR_UNIFORM)
+            .setSkipped(SearchSkipReason.SEARCH_SKIP_REASON_NOT_AVAILABLE)).build();
+        List<LogRecord> g = new ArrayList<>(game(17).stream()
+            .filter(r -> !r.hasDecision() || r.getDecision().getRequest().getObservation().getGame().getTurn() == 1).toList());
+        List<LogRecord> randomGame = g.stream().map(r -> !r.hasDecision() ? r : r.toBuilder().setDecision(r.getDecision()
+            .toBuilder().setResponse(r.getDecision().getResponse().toBuilder().setSteps(0, random))).build()).toList();
+        assertEquals("network", BehaviorMetrics.game(g, TYPES).get(0).mode());
+        assertEquals("random", BehaviorMetrics.game(randomGame, TYPES).get(0).mode());
     }
 
     @Test
