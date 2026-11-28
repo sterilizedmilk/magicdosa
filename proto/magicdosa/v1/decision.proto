@@ -297,6 +297,21 @@ message SearchRun {
   // from there; the root's visit counts (the policy target) include them
   bool tree_reuse = 14;
   uint64 inherited_visits = 15;
+  // protocol 18 (2026-11-28 user directive "Gumbel v2"): the search algorithm and, for Gumbel, its settings: root
+  // Gumbel noise on (self-play) or off (evaluation, gates), the candidates that entered sequential halving, and
+  // sigma(q) = (c_visit + max N) * c_scale * q
+  SearchAlgorithm algorithm = 16;
+  bool gumbel_noise = 17;
+  uint32 gumbel_k = 18;
+  float c_visit = 19;
+  float c_scale = 20;
+}
+
+enum SearchAlgorithm {
+  SEARCH_ALGORITHM_UNSPECIFIED = 0; // protocol 17 and older: UCB1
+  SEARCH_ALGORITHM_UCB1 = 1;        // UCB1 with availability counts and progressive widening (the comparison switch)
+  // Gumbel (Danihelka et al., ICLR 2022): sequential halving at the root, the completed-Q improved policy below it
+  SEARCH_ALGORITHM_GUMBEL = 2;
 }
 
 // Where a simulation stops when the game has not ended. NEXT_TURN is a temporary default for speed (2026-11-26 user

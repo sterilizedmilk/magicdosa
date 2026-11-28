@@ -112,13 +112,26 @@ public final class IsMcts {
         long budget = config.budgetFor(n);
         out.budget = budget;
         long simulations = budget;
+        SearchConfig.Gumbel gumbel = config.gumbel();
+        if (gumbel != null) {
+            // tree reuse would hand the root's sequential halving visits it did not schedule: Gumbel starts fresh
+            inherited = null;
+        }
         if (inherited != null) {
             root = inherited.root(root);
             out.inheritedVisits = root.visits;
             out.inheritedNodes = inherited.nodes();
             simulations = Math.max(budget - root.visits, n);
         }
+        Halving halving = gumbel == null ? null : new Halving(rootActions, gumbel, budget, seed);
         for (long it = 0; it < simulations; it++) {
+            String forced = null;
+            if (halving != null) {
+                forced = halving.next(root);
+                if (forced == null) {
+                    break; // the schedule is spent (never more than the budget)
+                }
+            }
             SplittableRandom simRng = rng.split();
             out.iterations++;
             SearchGame.Simulation sim;
@@ -132,7 +145,7 @@ public final class IsMcts {
                 out.noDeterminization++;
                 continue;
             }
-            Walk walk = new Walk(root, rootActions, simRng, nodes);
+            Walk walk = new Walk(root, rootActions, simRng, nodes, forced);
             double v;
             try {
                 v = sim.play(walk);
@@ -173,6 +186,11 @@ public final class IsMcts {
         }
         out.nodes = nodes[0];
         last = new Tree(root, rootActions);
+        if (halving != null) {
+            out.gumbelK = halving.k;
+            return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits,
+                gumbelSteps(root, halving, new SplittableRandom(seed ^ 0x5DEECE66DL)));
+        }
         // ties the visits and the mean values leave are drawn from the seed (its own stream: the simulations' draws
         // above do not depend on it)
         return out.build(visits, root.visits == 0 ? Double.NaN : reward / root.visits,
@@ -265,6 +283,221 @@ public final class IsMcts {
         return out;
     }
 
+    /**
+     * Gumbel sequential halving at the root (2026-11-28 directive; Danihelka et al. 2022). The k = min(maxK, actions)
+     * candidates with the highest g + logits enter (g: Gumbel(0, 1) noise from the seed when {@code noise}, else 0;
+     * logits all 0, a uniform prior; ties by a per-action rank from the seed). ceil(log2 k) rounds: each gives every
+     * remaining candidate budget / (rounds * remaining) simulations (at least one), the last round what is left, then
+     * keeps the better half by g + logits + sigma(q_hat). Every started simulation counts, so the total never exceeds
+     * the budget. The answer is the best remaining candidate by the same score.
+     */
+    static final class Halving {
+        final List<String> actions;
+        final SearchConfig.Gumbel gumbel;
+        final long budget;
+        final int k;
+        final int rounds;
+        final java.util.Map<String, Double> g = new java.util.HashMap<>();
+        final java.util.Map<String, Double> rank = new java.util.HashMap<>();
+        List<String> remaining;
+        int round;
+        long spent;
+        /** This round's simulations still to start, as a queue of actions. */
+        final java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+
+        Halving(List<String> actions, SearchConfig.Gumbel gumbel, long budget, long seed) {
+            this.actions = actions;
+            this.gumbel = gumbel;
+            this.budget = budget;
+            SplittableRandom r = new SplittableRandom(seed ^ 0x47756D62656CL);
+            for (String a : actions) {
+                double u = r.nextDouble();
+                g.put(a, gumbel.noise() ? -Math.log(-Math.log(Math.max(u, Double.MIN_VALUE))) : 0.0);
+                rank.put(a, r.nextDouble());
+            }
+            this.k = Math.min(gumbel.maxK(), actions.size());
+            this.rounds = k <= 1 ? 1 : 32 - Integer.numberOfLeadingZeros(k - 1); // ceil(log2 k)
+            List<String> byPrior = new ArrayList<>(actions);
+            byPrior.sort(order(a -> g.get(a))); // logits are 0
+            this.remaining = new ArrayList<>(byPrior.subList(0, k));
+        }
+
+        /** Descending by score, ties by the seeded rank (never by candidate order). */
+        java.util.Comparator<String> order(java.util.function.ToDoubleFunction<String> score) {
+            return java.util.Comparator.<String>comparingDouble(a -> -score.applyAsDouble(a))
+                .thenComparingDouble(a -> rank.get(a));
+        }
+
+        /** g + logits + sigma(q_hat) of a root action. */
+        double score(Node root, String a) {
+            long maxN = 0;
+            double rewards = 0;
+            long visits = 0;
+            for (Edge e : root.edges.values()) {
+                maxN = Math.max(maxN, e.visits);
+                rewards += e.reward;
+                visits += e.visits;
+            }
+            double v = visits == 0 ? 0.5 : rewards / visits; // the root's mean: the completed Q of unvisited ones
+            Edge e = root.edges.get(a);
+            double q = e.visits > 0 ? e.reward / e.visits : v;
+            return g.get(a) + GumbelMath.sigma(q, maxN, gumbel.cVisit(), gumbel.cScale());
+        }
+
+        /** The root action of the next simulation; null when the budget is spent. */
+        String next(Node root) {
+            if (spent >= budget) {
+                return null;
+            }
+            while (queue.isEmpty()) {
+                if (round > 0) {
+                    if (remaining.size() <= 1 && round >= rounds) {
+                        // a single candidate left with budget over (floors): it takes the rest
+                        if (remaining.isEmpty()) {
+                            return null;
+                        }
+                    } else if (remaining.size() > 1) {
+                        List<String> sorted = new ArrayList<>(remaining);
+                        sorted.sort(order(a -> score(root, a)));
+                        remaining = new ArrayList<>(sorted.subList(0, (remaining.size() + 1) / 2));
+                    }
+                }
+                long left = budget - spent;
+                int m = remaining.size();
+                boolean last = round >= rounds - 1 || m <= 1;
+                List<String> sorted = new ArrayList<>(remaining);
+                sorted.sort(order(a -> score(root, a)));
+                if (last) {
+                    long each = left / m;
+                    long extra = left % m;
+                    for (String a : sorted) {
+                        for (long i = 0; i < each + (extra > 0 ? 1 : 0); i++) {
+                            queue.add(a);
+                        }
+                        extra--;
+                    }
+                } else {
+                    long each = Math.max(1, budget / ((long) rounds * m));
+                    each = Math.min(each, left / m);
+                    if (each == 0) {
+                        for (int i = 0; i < left; i++) {
+                            queue.add(sorted.get(i % m));
+                        }
+                    } else {
+                        for (String a : sorted) {
+                            for (long i = 0; i < each; i++) {
+                                queue.add(a);
+                            }
+                        }
+                    }
+                }
+                round++;
+                if (queue.isEmpty()) {
+                    return null;
+                }
+            }
+            spent++;
+            return queue.poll();
+        }
+
+        /** The answer: the best remaining candidate by g + logits + sigma(q_hat), ties by the seeded rank. */
+        String best(Node root) {
+            List<String> sorted = new ArrayList<>(remaining);
+            sorted.sort(order(a -> score(root, a)));
+            return sorted.get(0);
+        }
+
+        /** Whether the best remaining candidate ties another on the score (broken by the seed). */
+        boolean tied(Node root) {
+            if (remaining.size() < 2) {
+                return false;
+            }
+            List<String> sorted = new ArrayList<>(remaining);
+            sorted.sort(order(a -> score(root, a)));
+            return score(root, sorted.get(0)) == score(root, sorted.get(1));
+        }
+    }
+
+    /**
+     * The root decision's steps in Gumbel mode: the first by sequential halving's answer, each later step of a
+     * multi-step decision by the same score without noise (logits + sigma(q_hat) among its visited actions, the node's
+     * mean as the completed Q, ties by the seed).
+     */
+    private List<SearchResult.Step> gumbelSteps(Node root, Halving halving, SplittableRandom tieRng) {
+        List<SearchResult.Step> out = new ArrayList<>();
+        Node node = root;
+        boolean first = true;
+        while (node != null && node.visits > 0) {
+            List<String> actions = new ArrayList<>();
+            long[] v = new long[node.edges.size()];
+            double[] mean = new double[node.edges.size()];
+            int i = 0;
+            for (Edge e : node.edges.values()) {
+                actions.add(e.action);
+                v[i] = e.visits;
+                mean[i] = e.visits == 0 ? 0 : e.reward / e.visits;
+                i++;
+            }
+            int best;
+            SearchResult.Tie tie;
+            if (first) {
+                best = actions.indexOf(halving.best(root));
+                tie = halving.tied(root) ? SearchResult.Tie.SEED : SearchResult.Tie.NONE;
+            } else {
+                double[] score = completedScores(node, v, mean);
+                List<Integer> top = new ArrayList<>();
+                double bestScore = Double.NEGATIVE_INFINITY;
+                for (int j = 0; j < v.length; j++) {
+                    if (v[j] == 0) {
+                        continue;
+                    }
+                    if (score[j] > bestScore) {
+                        bestScore = score[j];
+                        top.clear();
+                        top.add(j);
+                    } else if (score[j] == bestScore) {
+                        top.add(j);
+                    }
+                }
+                if (top.isEmpty()) {
+                    break;
+                }
+                best = top.size() == 1 ? top.get(0) : top.get(tieRng.nextInt(top.size()));
+                tie = top.size() == 1 ? SearchResult.Tie.NONE : SearchResult.Tie.SEED;
+            }
+            first = false;
+            out.add(new SearchResult.Step(actions, v, mean, best, tie));
+            Edge chosen = node.edges.get(actions.get(best));
+            Node next = null;
+            for (Node m : chosen.next.values()) {
+                if (m.continuation && m.seat == root.seat && (next == null || m.visits > next.visits)) {
+                    next = m;
+                }
+            }
+            node = next;
+        }
+        return out;
+    }
+
+    /** logits + sigma(q_hat) per action of a node (logits 0; the node's mean value completes unvisited ones). */
+    private double[] completedScores(Node node, long[] visits, double[] mean) {
+        SearchConfig.Gumbel gm = config.gumbel();
+        long maxN = 0;
+        double rewards = 0;
+        long total = 0;
+        for (Edge e : node.edges.values()) {
+            maxN = Math.max(maxN, e.visits);
+            rewards += e.reward;
+            total += e.visits;
+        }
+        double v = total == 0 ? 0.5 : rewards / total;
+        double[] out = new double[visits.length];
+        for (int j = 0; j < visits.length; j++) {
+            out[j] = GumbelMath.sigma(visits[j] > 0 ? mean[j] : v, maxN, gm.cVisit(), gm.cScale());
+        }
+        return out;
+    }
+
     /** An action drawn in proportion to its visits; {@code fallback} when nothing was visited. */
     static SearchResult.Choice sampled(long[] visits, SplittableRandom rng, SearchResult.Choice fallback) {
         long total = 0;
@@ -298,10 +531,13 @@ public final class IsMcts {
         final List<Node> pathNodes = new ArrayList<>();
         private boolean started;
         private boolean outOfTree;
+        /** Gumbel: the root action sequential halving gave this simulation. */
+        private final String forcedRoot;
         /** Why the root decision did not match, also when the engine swallowed the exception. */
         String mismatch;
 
-        Walk(Node root, List<String> rootActions, SplittableRandom rng, long[] nodes) {
+        Walk(Node root, List<String> rootActions, SplittableRandom rng, long[] nodes, String forcedRoot) {
+            this.forcedRoot = forcedRoot;
             this.root = root;
             this.rootActions = rootActions;
             this.rng = rng;
@@ -352,10 +588,68 @@ public final class IsMcts {
                     return ROLLOUT;
                 }
             }
-            int pick = select(node, d.actions());
+            int pick = node == root && forcedRoot != null ? forced(node, d.actions())
+                : config.gumbel() != null ? gumbelSelect(node, d.actions()) : select(node, d.actions());
             path.add(node.edges.get(d.actions().get(pick)));
             pathNodes.add(node);
             return pick;
+        }
+
+        /** The root action sequential halving scheduled (counted as available, as a selection would). */
+        private int forced(Node node, List<String> actions) {
+            int i = actions.indexOf(forcedRoot);
+            for (String a : new java.util.LinkedHashSet<>(actions)) {
+                Edge e = node.edges.computeIfAbsent(a, x -> new Edge(x, rng.nextLong()));
+                e.available++;
+            }
+            return i;
+        }
+
+        /**
+         * Gumbel below the root (opponent nodes too): argmax over the actions available in this sample of
+         * pi'(a) - N(a) / (1 + sum_b N(b)), pi' = softmax(logits + sigma(q_hat)) over them (logits 0, the node's mean value
+         * completing unvisited actions); ties by the simulation's seeded random. Availability is counted as with UCB1.
+         */
+        private int gumbelSelect(Node node, List<String> actions) {
+            List<Integer> avail = new ArrayList<>(actions.size());
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (int i = 0; i < actions.size(); i++) {
+                String a = actions.get(i);
+                node.edges.computeIfAbsent(a, x -> new Edge(x, rng.nextLong()));
+                if (seen.add(a)) {
+                    avail.add(i); // a key offered twice is one action
+                }
+            }
+            int m = avail.size();
+            long[] n = new long[m];
+            double[] q = new double[m];
+            long total = 0;
+            double rewards = 0;
+            for (int j = 0; j < m; j++) {
+                Edge e = node.edges.get(actions.get(avail.get(j)));
+                e.available++;
+                n[j] = e.visits;
+                q[j] = e.visits == 0 ? Double.NaN : e.reward / e.visits;
+                total += e.visits;
+                rewards += e.reward;
+            }
+            double v = total == 0 ? 0.5 : rewards / total;
+            SearchConfig.Gumbel gm = config.gumbel();
+            double[] pi = GumbelMath.improvedPolicy(null, n, q, v, null, gm.cVisit(), gm.cScale());
+            List<Integer> top = new ArrayList<>();
+            double best = Double.NEGATIVE_INFINITY;
+            for (int j = 0; j < m; j++) {
+                double score = pi[j] - (double) n[j] / (1 + total);
+                if (score > best) {
+                    best = score;
+                    top.clear();
+                    top.add(j);
+                } else if (score == best) {
+                    top.add(j);
+                }
+            }
+            int j = top.size() == 1 ? top.get(0) : top.get(rng.nextInt(top.size()));
+            return avail.get(j);
         }
 
         /** UCB1 with availability among the available actions (widened), unvisited ones first in random order. */

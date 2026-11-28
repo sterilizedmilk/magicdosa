@@ -84,13 +84,13 @@ class TreeReuseTest {
     }
 
     private static SearchResult reuse(long budget) {
-        IsMcts first = new IsMcts(SearchConfig.of(400));
+        IsMcts first = new IsMcts(SearchConfig.of(400).withGumbel(null));
         first.search(new Line(), 3);
         TreeReuse.Previous prev = new TreeReuse.Previous(first.lastTree(), SAME, 0, "a");
         TreeReuse.Found found = TreeReuse.find(prev, "next");
         assertNotNull(found);
         assertEquals(2, found.depth(), "below the other seat's node");
-        SearchResult r = new IsMcts(SearchConfig.of(budget)).search(new Next(), 11, TreeReuse.inherit(prev, found, SAME));
+        SearchResult r = new IsMcts(SearchConfig.of(budget).withGumbel(null)).search(new Next(), 11, TreeReuse.inherit(prev, found, SAME));
         assertEquals(found.visits(), r.inheritedVisits);
         return r;
     }
@@ -121,7 +121,7 @@ class TreeReuseTest {
 
     @Test
     void aKeyNotBelowThePlayedActionIsNotFound() {
-        IsMcts first = new IsMcts(SearchConfig.of(200));
+        IsMcts first = new IsMcts(SearchConfig.of(200).withGumbel(null));
         first.search(new Line(), 3);
         assertNull(TreeReuse.find(new TreeReuse.Previous(first.lastTree(), SAME, 0, "b"), "next"));
         assertNull(TreeReuse.find(new TreeReuse.Previous(first.lastTree(), SAME, 0, "a"), "elsewhere"));
