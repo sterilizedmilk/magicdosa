@@ -61,7 +61,9 @@ class ShardSearchStatsTest {
         if (!stats.isEmpty()) {
             s.addVisitRatio(0f).addVisitRatio(1f);
         }
-        return DecisionResponse.newBuilder().setDecisionId(id).addChosen(1).addSteps(s).build();
+        return DecisionResponse.newBuilder().setDecisionId(id).addChosen(1).addSteps(s)
+            .setKillCheck(stats.isEmpty() ? magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_DEATH
+                : magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_NONE).build();
     }
 
     @Test
@@ -94,6 +96,9 @@ class ShardSearchStatsTest {
             assertEquals(0.75f, (Float) q.get(1), 1e-6);
             assertTrue(Float.isNaN((Float) ((ListVector) root.getVector("cand_prior")).getObject(0).get(1)));
             assertEquals(List.of(), ((ListVector) root.getVector("cand_visits")).getObject(1));
+            IntVector kill = (IntVector) root.getVector("kill_check");
+            assertEquals(magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_NONE_VALUE, kill.get(0));
+            assertEquals(magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_DEATH_VALUE, kill.get(1));
         }
     }
 }

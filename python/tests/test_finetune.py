@@ -69,7 +69,7 @@ def test_compatible_protocols_read_without_asking(table, tmp_path):
 def test_protocol16_shards_read_with_the_schema2_columns(table, tmp_path):
     # protocol 17 / shard schema 2 added search_status, search_root_value and the per-candidate N, Q and prior
     added = ["search_status", "search_root_value", "cand_visits", "cand_q", "cand_prior", "search_tree_reuse",
-             "search_inherited_visits"]
+             "search_inherited_visits", "kill_check", "kill_check_approximate"]
     old = table.drop_columns([c for c in added if c in table.column_names])
     p16 = write(old, tmp_path / "p16.arrow", protocol_version="16")
     t = shards.read_shard(p16)
@@ -79,6 +79,7 @@ def test_protocol16_shards_read_with_the_schema2_columns(table, tmp_path):
     assert all(np.isnan(v) for v in t.column("search_root_value").to_pylist())
     assert t.column("cand_visits").to_pylist() == [[]] * table.num_rows
     assert t.column("search_inherited_visits").to_pylist() == [0] * table.num_rows
+    assert t.column("kill_check").to_pylist() == [shards.KILL_CHECK_NOT_CHECKED] * table.num_rows
     # mixed with a schema-2 shard whose columns sit where agent-core puts them
     new = write(t.select(list(reversed(t.column_names))), tmp_path / "p17.arrow", protocol_version="17",
                 shard_schema_version="2")

@@ -226,5 +226,11 @@ least, the same inputs give the same search).
   `cand_prior` (lists parallel to `visit_ratio`, NaN where missing), `search_root_value` (NaN without search),
   `search_status` (0 no search decision, 1 completed: search ran, every step of it; 2 skipped: `search_skip_reason`
   says why; 3 aborted: the wall-clock safety net stopped the shadow, `SEARCH_SKIP_REASON_SHADOW_STOPPED`). `chosen` is
-  unchanged. Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
-  `search_skip_reason`, `search_root_value` NaN and empty per-candidate lists.
+  unchanged.
+- **Kill check per decision:** `DecisionResponse.kill_check` (`KillCheckOutcome`, from the deciding seat's view: 0 not
+  checked, 1 none, 2 confirmed kill: attacking with everything is lethal against the best blocks, 3 confirmed death:
+  the attack is lethal whatever is blocked) and `kill_check_approximate`, wherever the checker runs (attack and block
+  declarations, after the answer; measurement only). Shard columns `kill_check`, `kill_check_approximate`, the same on
+  every step of the decision.
+- Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
+  `search_skip_reason`, `search_root_value` NaN, empty per-candidate lists, no tree reuse and `kill_check` 0.

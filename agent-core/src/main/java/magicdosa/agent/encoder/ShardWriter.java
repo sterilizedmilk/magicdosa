@@ -56,7 +56,7 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "search_tree_reuse", "chosen",
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "search_tree_reuse", "kill_check", "kill_check_approximate", "chosen",
         "end_reason", "turns", "oov");
     private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio", "cand_q",
         "cand_prior");
@@ -67,7 +67,7 @@ public final class ShardWriter {
     /**
      * Shard layout version (schema metadata {@code shard_schema_version}; Python's versions.SHARD_SCHEMA_VERSION). 2
      * (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior, search_tree_reuse,
-     * search_inherited_visits. A shard without it is 1.
+     * search_inherited_visits, kill_check, kill_check_approximate. A shard without it is 1.
      */
     public static final int SHARD_SCHEMA_VERSION = 2;
 
@@ -270,6 +270,8 @@ public final class ShardWriter {
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
         r.put("search_status", searchStatus(step));
+        r.put("kill_check", d.response().getKillCheckValue());    // per decision: the same on every step of it
+        r.put("kill_check_approximate", d.response().getKillCheckApproximate() ? 1 : 0);
         r.put("search_root_value", step.getMethod().hasRan() ? step.getMethod().getRan().getRootEstimate() : Float.NaN);
         // per candidate of the step (parallel to visit_ratio): N, Q and the prior logit, NaN where missing
         List<Integer> visits = new ArrayList<>();

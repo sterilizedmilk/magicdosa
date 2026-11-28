@@ -200,6 +200,19 @@ message DecisionResponse {
   // One step per pick; a single-pick decision has one step. Kept in the log from the start, because visit ratios
   // exist only at play time (design: 학습 전략과 보상 "프로토타입 우선"). Each step is one Arrow sample.
   repeated DecisionStep steps = 4;
+  // protocol 17 (2026-11-28): the confirmed-kill checker's verdict on this decision from the deciding seat's view,
+  // wherever it runs (attack and block declarations); measurement only, the answer does not read it
+  KillCheckOutcome kill_check = 5;
+  bool kill_check_approximate = 6;  // the verdict leaves factors out (menace, combat triggers, ...)
+}
+
+enum KillCheckOutcome {
+  KILL_CHECK_OUTCOME_UNSPECIFIED = 0; // not checked (not a combat declaration, or the check failed)
+  KILL_CHECK_OUTCOME_NONE = 1;        // checked: no confirmed kill or death
+  // Attack declaration: attacking with every possible attacker is lethal against the defender's best blocks.
+  KILL_CHECK_OUTCOME_KILL = 2;
+  // Block declaration: the attack is lethal whatever the deciding seat blocks.
+  KILL_CHECK_OUTCOME_DEATH = 3;
 }
 
 // One pick of a (possibly multi-select) decision. Order is free; search merges branches that reach the same set
