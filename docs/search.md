@@ -255,9 +255,9 @@ comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
   round the better half by g + logits + sigma(q_hat) stays (the root's mean completes unvisited ones). Every started
   simulation counts, so at most n run. The answer: the best remaining candidate by the same score, ties by the seed.
 - **Below the root** (the other seat's nodes too): argmax over the actions available in the simulation's sample of
-  pi'(a) - N(a) / (1 + sum_b N(b)), pi' = softmax(logits + sigma(q_hat)), the node's mean completing unvisited
+  pi'(a) - N(a) / (1 + sum_b N(b)), pi' = softmax(logits + sigma(q_tilde)), v_mix completing unvisited
   actions; availability counted as before; no progressive widening; ties by the simulation's seeded random. Later
-  steps of a multi-step root decision are answered by logits + sigma(q_hat) among their visited actions.
+  steps of a multi-step root decision are answered by logits + sigma(q_tilde) among their visited actions.
 - **Tree reuse** is off in Gumbel mode: an inherited root would carry visits the halving schedule did not give, so the
   rounds would no longer split the budget as defined. `SearchRun.tree_reuse` records false. Reuse stays with UCB1.
 - **Recorded** (protocol 18): `SearchRun.algorithm` (UCB1 / Gumbel), `gumbel_noise`, `gumbel_k`, `c_visit`,
