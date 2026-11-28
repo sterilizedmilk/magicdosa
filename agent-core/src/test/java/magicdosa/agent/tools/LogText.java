@@ -132,7 +132,10 @@ public final class LogText {
         }
     }
 
-    /** Reads a length-delimited LogRecord stream, gzipped when the file name ends in {@code .gz}. */
+    /**
+     * Reads a length-delimited LogRecord stream, gzipped when the file name ends in {@code .gz}. A log cut off while
+     * being written (empty, or truncated mid-stream) yields the records read before the cut.
+     */
     public static List<LogRecord> read(Path file) throws IOException {
         List<LogRecord> records = new ArrayList<>();
         try (InputStream raw = new BufferedInputStream(Files.newInputStream(file));
@@ -141,6 +144,8 @@ public final class LogText {
             while ((r = LogRecord.parseDelimitedFrom(in)) != null) {
                 records.add(r);
             }
+        } catch (java.io.EOFException | com.google.protobuf.InvalidProtocolBufferException e) {
+            // truncated: keep what was read
         }
         return records;
     }
