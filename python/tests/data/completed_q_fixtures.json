@@ -1,0 +1,259 @@
+{
+ "about": "Completed-Q targets (python/magicdosa/targets.py; the Java search Gumbel v2 must give the same numbers). q/prior_logits null = missing; root_value null = missing. sigma = (c_visit + max N) * c_scale * q.",
+ "cases": [
+  {
+   "name": "visit tie, Q differs",
+   "n": [
+    6,
+    6
+   ],
+   "q": [
+    0.4,
+    0.6
+   ],
+   "root_value": 0.5,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.00368424,
+    0.99631578
+   ]
+  },
+  {
+   "name": "visit tie, Q differs, no normalization",
+   "n": [
+    6,
+    6
+   ],
+   "q": [
+    0.4,
+    0.6
+   ],
+   "root_value": 0.5,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": false,
+   "target": [
+    0.24601129,
+    0.75398874
+   ]
+  },
+  {
+   "name": "close Q stretched",
+   "n": [
+    4,
+    4,
+    4
+   ],
+   "q": [
+    0.5,
+    0.51,
+    0.52
+   ],
+   "root_value": 0.5,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.00421433,
+    0.06270804,
+    0.93307763
+   ]
+  },
+  {
+   "name": "close Q not stretched",
+   "n": [
+    4,
+    4,
+    4
+   ],
+   "q": [
+    0.5,
+    0.51,
+    0.52
+   ],
+   "root_value": 0.5,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": false,
+   "target": [
+    0.31550395,
+    0.33300957,
+    0.35148647
+   ]
+  },
+  {
+   "name": "all equal",
+   "n": [
+    3,
+    9,
+    1
+   ],
+   "q": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "root_value": 0.5,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.33333334,
+    0.33333334,
+    0.33333334
+   ]
+  },
+  {
+   "name": "unvisited takes v_mix",
+   "n": [
+    10,
+    0,
+    2
+   ],
+   "q": [
+    0.7,
+    null,
+    0.4
+   ],
+   "root_value": 0.3,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.96490687,
+    0.03270135,
+    0.00239177
+   ]
+  },
+  {
+   "name": "unvisited, no normalization",
+   "n": [
+    10,
+    0,
+    2
+   ],
+   "q": [
+    0.7,
+    null,
+    0.4
+   ],
+   "root_value": 0.3,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": false,
+   "target": [
+    0.65463793,
+    0.23715115,
+    0.10821092
+   ]
+  },
+  {
+   "name": "root value missing",
+   "n": [
+    5,
+    0,
+    1
+   ],
+   "q": [
+    0.6,
+    null,
+    0.2
+   ],
+   "root_value": null,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.91983217,
+    0.07640866,
+    0.00375914
+   ]
+  },
+  {
+   "name": "prior-weighted Q_bar",
+   "n": [
+    1,
+    1,
+    0
+   ],
+   "q": [
+    0.2,
+    0.6,
+    null
+   ],
+   "root_value": 0.5,
+   "prior_logits": [
+    1.0986122886681098,
+    0.0,
+    0.0
+   ],
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": false,
+   "target": [
+    0.23023339,
+    0.59021169,
+    0.17955494
+   ]
+  },
+  {
+   "name": "prior logits, nothing visited",
+   "n": [
+    0,
+    0
+   ],
+   "q": [
+    null,
+    null
+   ],
+   "root_value": 0.5,
+   "prior_logits": [
+    1.0986122886681098,
+    0.0
+   ],
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.75,
+    0.25
+   ]
+  },
+  {
+   "name": "budget 1 (one visit)",
+   "n": [
+    1,
+    0,
+    0,
+    0
+   ],
+   "q": [
+    0.9,
+    null,
+    null,
+    null
+   ],
+   "root_value": 0.45,
+   "prior_logits": null,
+   "c_visit": 50.0,
+   "c_scale": 0.1,
+   "q_normalize": true,
+   "target": [
+    0.98203826,
+    0.00598724,
+    0.00598724,
+    0.00598724
+   ]
+  }
+ ]
+}

@@ -5,7 +5,8 @@
 Targets (design 학습·평가 "학습·보상", planning decision 2026-11-25 decision 3):
 - policy (`--policy-target`, default completed-q, coordinator 2026-11-28): the completed-Q distribution
   (targets.completed_q, `--c-visit 50 --c-scale 0.1`) of rows whose search completed (search_status 1) and recorded
-  N and Q per candidate (shard schema 2); with `visits`, the search visit ratios of searched model rows. Everything
+  N and Q per candidate (shard schema 2; unvisited candidates take v_mix, `--q-normalize on` stretches q_hat per
+  row); with `visits`, the search visit ratios of searched model rows. Everything
   else is value-only: protocol 15/16 shards under completed-q, skipped or aborted searches, intended delegations
   (Forge AI chose), shadow-recovery failures and failed searches. A chosen action is never a policy target.
 - value: the deciding seat's game result on every row (`shards.value_target_rows`: no sideboard rows, draws 0.5,
@@ -82,8 +83,8 @@ def load(paths: Sequence[Path], protocols: Sequence[int], mix: Dict[str, int] | 
 VISITS = {"kind": "visits"}
 
 
-def completed_q_target(c_visit: float = 50.0, c_scale: float = 0.1) -> Dict[str, object]:
-    return {"kind": "completed-q", "c_visit": c_visit, "c_scale": c_scale}
+def completed_q_target(c_visit: float = 50.0, c_scale: float = 0.1, q_normalize: bool = True) -> Dict[str, object]:
+    return {"kind": "completed-q", "c_visit": c_visit, "c_scale": c_scale, "q_normalize": q_normalize}
 
 
 def _list(table, name: str, rows: np.ndarray, width: int, fill, dtype) -> np.ndarray:
@@ -134,11 +135,8 @@ def batch(table, rows: np.ndarray, value_only: bool = False,
             q = _list(table, "cand_q", rows, width, np.nan, np.float64)[pm]
             prior = _list(table, "cand_prior", rows, width, np.nan, np.float64)[pm]
             root = table.column("search_root_value").to_numpy()[rows][pm].astype(np.float64)
-            visited = (n > 0) & ~np.isnan(q)
-            mean_q = (np.where(visited, q * n, 0).sum(-1) / np.maximum(np.where(visited, n, 0).sum(-1), 1))
-            root = np.where(np.isnan(root), mean_q, root)          # no root estimate: the visit-weighted mean Q
-            pt[pm] = targets.completed_q(n, q, root, mask[pm], logits=prior,
-                                         c_visit=target["c_visit"], c_scale=target["c_scale"])
+            pt[pm] = targets.completed_q(n, q, root, mask[pm], logits=prior, c_visit=target["c_visit"],
+                                         c_scale=target["c_scale"], q_normalize=target.get("q_normalize", True))
     return {"inputs": b["inputs"], "targets": {"policy_target": pt, "visit_ratio": vr, "policy_mask": pm,
                                                 "result": y["result"], "value_mask": y["value_mask"], "turn": turn}}
 
@@ -311,13 +309,15 @@ def main(argv: Iterable[str] | None = None) -> None:
                    help="completed-Q from N, Q, prior and root value (shard schema 2) or the visit ratios")
     p.add_argument("--c-visit", type=float, default=50.0)
     p.add_argument("--c-scale", type=float, default=0.1)
+    p.add_argument("--q-normalize", choices=("on", "off"), default="on",
+                   help="min-max stretch of q_hat over the row's candidates before sigma")
     p.add_argument("--reset-policy-head", action="store_true",
                    help="keep the init checkpoint's encoder and value head, re-initialize the policy head")
     p.add_argument("--seed", type=int, default=1)
     a = p.parse_args(argv)
     from .pretrain import _setup_threads
     _setup_threads(a.threads)
-    target = completed_q_target(a.c_visit, a.c_scale) if a.policy_target == "completed-q" else VISITS
+    target = completed_q_target(a.c_visit, a.c_scale, a.q_normalize == "on") if a.policy_target == "completed-q" else VISITS
 
     import torch
     from . import imitation, versions
