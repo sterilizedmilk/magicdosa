@@ -15,6 +15,7 @@
     <forge.home>${project.basedir}/../forge</forge.home>
     <!-- harnesses and benchmarks are main programs in the test sources, so mvn install does not run them -->
     <exec.mainClass>magicdosa.agent.determinism.ParallelDeterminismHarness</exec.mainClass>
+    <test.heap>1g</test.heap>
     <decks.dir>${project.basedir}/../decks</decks.dir>
     <!-- paths in exec.args must be absolute: the JVM runs in forge-gui -->
     <exec.args>${decks.dir} IzzetProwess.dck EsperBlink.dck 40 8 5000</exec.args>
@@ -84,6 +85,8 @@
         <configuration>
           <!-- shadow scenario tests run Forge, which reads res/ from forge-gui -->
           <workingDirectory>${forge.home}/forge-gui</workingDirectory>
+          <!-- Arrow (shard tests) needs java.nio opened; -Dtest.heap sets the test JVM's heap -->
+          <argLine>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED -Xmx${test.heap}</argLine>
         </configuration>
       </plugin>
       <plugin>

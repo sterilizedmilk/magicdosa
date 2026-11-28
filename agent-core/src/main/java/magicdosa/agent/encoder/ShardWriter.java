@@ -56,12 +56,39 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "chosen",
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "chosen",
         "end_reason", "turns", "oov");
-    private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio");
+    private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio", "cand_q",
+        "cand_prior");
     private static final List<String> INT_LISTS = List.of("token_kind", "token_card", "token_key", "rel_src", "rel_dst",
         "rel_kind", "deck_card", "deck_count", "deck_group", "cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key",
-        "cand_string", "priv_opp_hand", "priv_my_library", "priv_opp_library");
+        "cand_string", "priv_opp_hand", "priv_my_library", "priv_opp_library", "cand_visits");
+
+    /**
+     * Shard layout version (schema metadata {@code shard_schema_version}; Python's versions.SHARD_SCHEMA_VERSION). 2
+     * (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior. A shard without it is 1.
+     */
+    public static final int SHARD_SCHEMA_VERSION = 2;
+
+    /** {@code search_status}: no search decision on this step (another decider, or no method recorded). */
+    public static final int STATUS_NONE = 0;
+    /** Search ran (every step of a multi-step search too). */
+    public static final int STATUS_COMPLETED = 1;
+    /** Search skipped for a cause ({@code search_skip_reason}). */
+    public static final int STATUS_SKIPPED = 2;
+    /** The wall-clock safety net stopped the shadow (hang safeguard): {@code SEARCH_SKIP_REASON_SHADOW_STOPPED}. */
+    public static final int STATUS_ABORTED = 3;
+
+    /** The step's search status (protocol 17 column; derived from the step's method, so older logs give the same). */
+    public static int searchStatus(DecisionStep step) {
+        if (step.getMethod().hasRan()) {
+            return STATUS_COMPLETED;
+        }
+        if (step.getMethod().getSkipped() == magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SHADOW_STOPPED) {
+            return STATUS_ABORTED;
+        }
+        return step.getMethod().getSkippedValue() != 0 ? STATUS_SKIPPED : STATUS_NONE;
+    }
 
     /**
      * zstd level of the shards' buffer compression (2026-11-25: the disk is the bottleneck); 0 writes them uncompressed.
@@ -186,6 +213,7 @@ public final class ShardWriter {
         Path file = dir.resolve(hello.getGameId() + ".arrow");
         Map<String, String> meta = new LinkedHashMap<>();
         meta.put("protocol_version", String.valueOf(Versions.PROTOCOL));
+        meta.put("shard_schema_version", String.valueOf(SHARD_SCHEMA_VERSION));
         meta.put("encoder_version", String.valueOf(AgentCore.ENCODER_VERSION));
         meta.put("vocab_version", String.valueOf(encoder.vocab().version()));
         meta.put("model_version", modelVersion);
@@ -238,6 +266,20 @@ public final class ShardWriter {
         r.put("search_seed", step.getMethod().hasRan() ? step.getMethod().getRan().getSeed() : 0L);
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
+        r.put("search_status", searchStatus(step));
+        r.put("search_root_value", step.getMethod().hasRan() ? step.getMethod().getRan().getRootEstimate() : Float.NaN);
+        // per candidate of the step (parallel to visit_ratio): N, Q and the prior logit, NaN where missing
+        List<Integer> visits = new ArrayList<>();
+        List<Float> meanQ = new ArrayList<>();
+        List<Float> prior = new ArrayList<>();
+        for (magicdosa.protocol.v1.CandidateStats c : step.getCandidateStatsList()) {
+            visits.add((int) Math.min(Integer.MAX_VALUE, c.getVisits()));
+            meanQ.add(c.hasMeanValue() ? c.getMeanValue() : Float.NaN);
+            prior.add(c.hasPrior() ? c.getPrior() : Float.NaN);
+        }
+        r.put("cand_visits", visits);
+        r.put("cand_q", meanQ);
+        r.put("cand_prior", prior);
         boolean draw = !over.hasWinnerSeat();
         r.put("is_draw", draw);
         r.put("result", draw ? 0f : over.getWinnerSeat() == q.getSeat() ? 1f : 0f);
@@ -337,6 +379,7 @@ public final class ShardWriter {
         fields.add(new Field("search_ran", FieldType.notNullable(ArrowType.Bool.INSTANCE), null));
         fields.add(new Field("is_draw", FieldType.notNullable(ArrowType.Bool.INSTANCE), null));
         fields.add(new Field("result", FieldType.notNullable(F32), null));
+        fields.add(new Field("search_root_value", FieldType.notNullable(F32), null));
         for (String c : FLOAT_LISTS) {
             fields.add(listOf(c, F32));
         }
@@ -363,6 +406,7 @@ public final class ShardWriter {
                 ((BitVector) root.getVector("search_ran")).setSafe(i, (Boolean) r.get("search_ran") ? 1 : 0);
                 ((BitVector) root.getVector("is_draw")).setSafe(i, (Boolean) r.get("is_draw") ? 1 : 0);
                 ((Float4Vector) root.getVector("result")).setSafe(i, (Float) r.get("result"));
+                ((Float4Vector) root.getVector("search_root_value")).setSafe(i, (Float) r.get("search_root_value"));
             }
             for (String c : FLOAT_LISTS) {
                 UnionListWriter w = ((ListVector) root.getVector(c)).getWriter();

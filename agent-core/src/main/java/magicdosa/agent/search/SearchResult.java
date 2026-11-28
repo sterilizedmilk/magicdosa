@@ -102,6 +102,38 @@ public final class SearchResult {
         return visits[candidate];
     }
 
+    /** The root position's value estimate for the SearchRun record; NaN: the root mean ({@link #rootValue}). */
+    private double rootEstimate = Double.NaN;
+
+    /** Records the leaf network's value of the root request as the run's root estimate (protocol 17). */
+    public SearchResult withRootEstimate(double v) {
+        this.rootEstimate = v;
+        return this;
+    }
+
+    /** The root estimate recorded: the network's value of the root when set, else the root mean (0 when NaN). */
+    public double rootEstimate() {
+        double v = Double.isNaN(rootEstimate) ? rootValue : rootEstimate;
+        return Double.isNaN(v) ? 0 : v;
+    }
+
+    /**
+     * Per-candidate statistics of a step (protocol 17): N, Q (the root seat's mean win probability; unset when N = 0) and
+     * no prior (the search's prior is uniform).
+     */
+    public static List<magicdosa.protocol.v1.CandidateStats> candidateStats(Step s) {
+        List<magicdosa.protocol.v1.CandidateStats> out = new ArrayList<>();
+        for (int i = 0; i < s.visits().length; i++) {
+            magicdosa.protocol.v1.CandidateStats.Builder b = magicdosa.protocol.v1.CandidateStats.newBuilder()
+                .setVisits(s.visits()[i]);
+            if (s.visits()[i] > 0) {
+                b.setMeanValue((float) s.mean()[i]);
+            }
+            out.add(b.build());
+        }
+        return out;
+    }
+
     /** Whether any simulation was backed up (else the search did not decide anything). */
     public boolean searched() {
         return determinizations > 0;
@@ -142,7 +174,8 @@ public final class SearchResult {
             .setFailed(noDeterminization + rootMismatches + failures).setRollout(config.rollout())
             .setHorizon(config.horizon()).setLeafEvaluation(recordedLeafEvaluation(config))
             .setLeafModel(magicdosa.agent.model.LeafNetwork.fileName())
-            .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())).build();
+            .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())
+            .setRootEstimate((float) rootEstimate())).build();
     }
 
     /**

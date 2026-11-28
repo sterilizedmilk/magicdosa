@@ -212,3 +212,18 @@ runs with reuse on print the same 52 searches. Tests: `CanonicalKeyTest` (anothe
 and names; another state another key; mulligans and known library cards left out), `TreeReuseTest` (toy games: the
 node found past the other seat's node, inherited visits count toward the budget with one simulation per action at
 least, the same inputs give the same search).
+
+## Search records (protocol 17, shard schema 2; 2026-11-28 user directive)
+
+- **Per candidate, every searched step** (each step of a multi-step search too): `DecisionStep.candidate_stats`, parallel
+  to the step's candidates: visits N, mean value Q (the root seat's win probability in [0, 1], unset when N = 0) and
+  the prior logit (unset: the search's prior is uniform). Steps the tree did not reach (finished after the search, no
+  visit ratios) have none.
+- **Root estimate:** `SearchRun.root_estimate`, the leaf network's value of the root request when a leaf model is
+  loaded (one evaluation per search, recorded only), else the root mean (`root_value`).
+- **Shards** (`ShardWriter.SHARD_SCHEMA_VERSION` 2, schema metadata `shard_schema_version`): `cand_visits`, `cand_q`,
+  `cand_prior` (lists parallel to `visit_ratio`, NaN where missing), `search_root_value` (NaN without search),
+  `search_status` (0 no search decision, 1 completed: search ran, every step of it; 2 skipped: `search_skip_reason`
+  says why; 3 aborted: the wall-clock safety net stopped the shadow, `SEARCH_SKIP_REASON_SHADOW_STOPPED`). `chosen` is
+  unchanged. Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
+  `search_skip_reason`, `search_root_value` NaN and empty per-candidate lists.
