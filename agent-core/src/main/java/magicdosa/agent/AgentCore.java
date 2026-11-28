@@ -72,7 +72,9 @@ public final class AgentCore {
             RandomPolicy random = new RandomPolicy();
             String name = policyName.equals("search") ? "search-uniform"
                 : policyName.equals("network") ? "network:" + (magicdosa.agent.model.LeafNetwork.get() == null ? ""
-                    : magicdosa.agent.model.LeafNetwork.fileName()) : policyName;
+                    : magicdosa.agent.model.LeafNetwork.fileName())
+                    + magicdosa.agent.policy.NetworkPolicy.temperatureTag(magicdosa.agent.policy.NetworkPolicy.TEMPERATURE)
+                : policyName;
             policy = new magicdosa.agent.policy.Policy() {
                 @Override
                 public String modelVersion() {

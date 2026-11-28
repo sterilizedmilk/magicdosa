@@ -456,7 +456,8 @@ public final class ShadowGame {
                 throw new IllegalStateException("network alone without a model (-Dmagicdosa.search.leafModel)");
             }
             long t0 = magicdosa.agent.Timing.start(); // measurement only
-            DecisionResponse resp = new magicdosa.agent.policy.NetworkPolicy(net, magicdosa.agent.model.LeafNetwork.fileName())
+            DecisionResponse resp = new magicdosa.agent.policy.NetworkPolicy(net, magicdosa.agent.model.LeafNetwork.fileName(),
+                    magicdosa.agent.policy.NetworkPolicy.TEMPERATURE)
                 .decide(real);
             magicdosa.agent.Timing.addHistogram("network.decision", t0);
             live.searched(null, java.util.Map.of("network alone " + real.getType().name().replace("DECISION_TYPE_", ""), 1));
