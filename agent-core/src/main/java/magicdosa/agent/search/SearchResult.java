@@ -184,11 +184,13 @@ public final class SearchResult {
 
     /**
      * How the run's leaves were valued: by the leaf network whenever one is loaded (protocol 16: at the tree exit and at
-     * the horizon), else by Forge's score as the settings say.
+     * the horizon; protocol 17: the horizon at the turn boundary by default), else by Forge's score as the settings say.
      */
     public static magicdosa.protocol.v1.LeafEvaluation recordedLeafEvaluation(SearchConfig config) {
         return magicdosa.agent.model.LeafNetwork.fileName().isEmpty() ? config.leafEvaluation()
-            : magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK;
+            : ForgeSearchGame.BOUNDARY == ForgeSearchGame.Boundary.ON
+                ? magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK_BOUNDARY
+                : magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK;
     }
 
     @Override

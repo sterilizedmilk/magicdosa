@@ -310,6 +310,10 @@ enum LeafEvaluation {
   // the first request asked there). Protocol 15 runs with a leaf model recorded FORGE_STATIC: their horizon leaves had
   // Forge's static score.
   LEAF_EVALUATION_NETWORK = 3;
+  // protocol 17 (2026-11-28 directive, option 2): as NETWORK at the tree exit, but the horizon is valued at the turn
+  // boundary itself, from the observation of the seat asked first in the new turn (in a priority-at-upkeep header with
+  // one placeholder candidate), without playing on to that request or building its legal actions.
+  LEAF_EVALUATION_NETWORK_BOUNDARY = 4;
 }
 
 // The rollout policy of a search (2026-11-26 user decision): plain Forge AI is a temporary early-stage choice (phase 3
