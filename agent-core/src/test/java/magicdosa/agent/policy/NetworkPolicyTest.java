@@ -57,6 +57,34 @@ class NetworkPolicyTest {
         return r.build();
     }
 
+    /** 2026-11-28: at temperature 1 a step is drawn from the policy, from the request's seed. */
+    @Test
+    void temperatureOneSamplesThePolicyFromTheSeed() {
+        Scores net = new Scores(0, 0.1, 0.6, 0.3);
+        NetworkPolicy t1 = new NetworkPolicy(net, "m.onnx", 1.0);
+        assertEquals("network:m.onnx@T=1.0", t1.modelVersion());
+        assertEquals("network:m.onnx", new NetworkPolicy(net, "m.onnx").modelVersion());
+        int[] counts = new int[3];
+        int n = 6000;
+        for (int s = 0; s < n; s++) {
+            DecisionRequest r = request(3, 1, 1).toBuilder().setSeed(1000 + s).build();
+            List<Integer> a = t1.decide(r).getChosenList();
+            assertEquals(a, t1.decide(r).getChosenList(), "the same seed gives the same sample");
+            counts[a.get(0)]++;
+        }
+        double[] p = {0.1, 0.6, 0.3};
+        for (int k = 0; k < 3; k++) {
+            assertEquals(p[k], counts[k] / (double) n, 0.03, "candidate " + k + ": " + java.util.Arrays.toString(counts));
+        }
+        // a low temperature sharpens towards the argmax
+        java.util.SplittableRandom rng = new java.util.SplittableRandom(3);
+        int top = 0;
+        for (int i = 0; i < 1000; i++) {
+            top += NetworkPolicy.sample(new float[] {0.1f, 0.6f, 0.3f}, 0.1, rng) == 1 ? 1 : 0;
+        }
+        assertTrue(top > 990, "T=0.1: " + top);
+    }
+
     @Test
     void singleChoiceTakesTheMostProbable() {
         Scores net = new Scores(0, 0.1, 0.6, 0.3);

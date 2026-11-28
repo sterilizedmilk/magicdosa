@@ -176,8 +176,10 @@ final class AgentConnection implements AutoCloseable, RandomGames.Agents {
         java.util.Set<String> keys = new java.util.TreeSet<>(System.getProperties().stringPropertyNames());
         keys.addAll(overrides.keySet());
         for (String k : keys) {
-            if (k.startsWith("magicdosa.shadow") || k.startsWith("magicdosa.search") || k.equals("magicdosa.timing")) {
-                // shadowStats, shadowDump, ...; an override (one side's leaf model) replaces the run's value
+            if (k.startsWith("magicdosa.shadow") || k.startsWith("magicdosa.search") || k.startsWith("magicdosa.network.")
+                    || k.equals("magicdosa.timing")) {
+                // shadowStats, shadowDump, network.temperature, ...; an override (one side's leaf model) replaces the
+                // run's value
                 cmd.add(cmd.indexOf("-cp"), "-D" + k + "=" + prop(overrides, k));
             }
         }
