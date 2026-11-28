@@ -119,6 +119,73 @@ class ShadowScenarioTest {
         }
     }
 
+    /**
+     * 2026-11-28: library cards a seat is shown for a choice (a fetchland's search, Expressive Iteration's look at the
+     * top three) carry their identity in that seat's observation while the choice is open; before, each was an unknown
+     * library card (no oracle_id, so no token: the network could not tell the candidates apart). The shadow must still
+     * match every decision.
+     */
+    @Test
+    void libraryCardsShownForAChoiceCarryTheirIdentity() throws Exception {
+        for (String name : new String[] {"shown-0", "shown-1"}) { // names seed the games
+            Scenario s = new Scenario(name, 5, 0);
+            s.seat(0).deck("Mountain", 18).deck("Island", 10).deck("Steam Vents", 4).deck("Bloodstained Mire", 4)
+                .deck("Lightning Bolt", 4).deck("Preordain", 4).deck("Lava Dart", 4).deck("Expressive Iteration", 4)
+                .deck("Monastery Swiftspear", 4).deck("Mishra's Bauble", 4)
+                .library("Lightning Bolt", "Preordain", "Lava Dart", "Monastery Swiftspear", "Mountain", "Island", "Steam Vents")
+                .hand("Expressive Iteration")
+                .battlefield("Bloodstained Mire", "Steam Vents", "Mountain");
+            s.seat(1).deck("Forest", 60).library("Forest", "Forest", "Forest").hand("Forest");
+            ShadowGame.Result r = s.play(3);
+            List<magicdosa.protocol.v1.DecisionRequest> shown = s.requests.stream()
+                .filter(q -> q.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_CHOOSE_CARDS)
+                .filter(q -> q.getCandidatesList().stream().anyMatch(c -> zoneOf(q, c) == magicdosa.protocol.v1.Zone.ZONE_LIBRARY))
+                .toList();
+            String what = name + ": " + shown.stream().map(q -> q.getContext().getEnginePrompt()).toList();
+            assertTrue(shown.stream().anyMatch(q -> q.getContext().getEnginePrompt().equals("Select a card from your library")),
+                what + ": no fetchland search");
+            assertTrue(shown.stream().anyMatch(q -> q.getContext().getEnginePrompt().equals("Choose card(s) to put into hand")),
+                what + ": no Expressive Iteration look");
+            for (magicdosa.protocol.v1.DecisionRequest q : shown) {
+                java.util.Set<Long> ids = new java.util.HashSet<>();
+                for (magicdosa.protocol.v1.Candidate c : q.getCandidatesList()) {
+                    long id = candidateId(c);
+                    assertTrue(ids.add(id), what + ": candidate " + id + " offered twice");
+                    String oracle = q.getObservation().getObjectsList().stream().filter(g -> g.getId() == id)
+                        .map(magicdosa.protocol.v1.GameObject::getOracleId).findFirst().orElse("");
+                    assertTrue(!oracle.isEmpty(), what + ": candidate " + id + " of \"" + q.getContext().getEnginePrompt()
+                        + "\" has no identity");
+                }
+            }
+            // a fetch before the look shuffles the library, so the top three may repeat a name
+            magicdosa.protocol.v1.DecisionRequest look = shown.stream()
+                .filter(q -> q.getContext().getEnginePrompt().equals("Choose card(s) to put into hand")).findFirst().orElseThrow();
+            assertTrue(look.getCandidatesCount() >= 2, name + ": the look offers " + look.getCandidatesCount() + " cards");
+            // the encoder makes each a token of its own card: every candidate points at a different token with a card
+            magicdosa.agent.encoder.Encoder enc = new magicdosa.agent.encoder.Encoder(magicdosa.agent.encoder.Vocab.load());
+            for (magicdosa.protocol.v1.DecisionRequest q : shown) {
+                magicdosa.agent.encoder.Encoder.Encoded e = enc.encode(q);
+                java.util.Set<Integer> tokens = new java.util.HashSet<>();
+                for (int i = 0; i < q.getCandidatesCount(); i++) {
+                    int t = e.candRef0()[i];
+                    assertTrue(t >= 0 && tokens.add(t), what + ": candidate " + i + " has no token of its own (" + t + ")");
+                    assertTrue(e.tokenCard()[t] != magicdosa.agent.encoder.Vocab.PAD, what + ": candidate " + i + "'s token has no card");
+                }
+            }
+            clean(r);
+        }
+    }
+
+    private static long candidateId(magicdosa.protocol.v1.Candidate c) {
+        return c.hasTarget() ? c.getTarget().getEntityId() : c.getCardId();
+    }
+
+    private static magicdosa.protocol.v1.Zone zoneOf(magicdosa.protocol.v1.DecisionRequest q, magicdosa.protocol.v1.Candidate c) {
+        long id = candidateId(c);
+        return q.getObservation().getObjectsList().stream().filter(g -> g.getId() == id).map(magicdosa.protocol.v1.GameObject::getZone)
+            .findFirst().orElse(magicdosa.protocol.v1.Zone.ZONE_NONE);
+    }
+
     private static boolean casts(Scenario s, int seat, String card) {
         String oracle = Scenario.keys().oracleIdByName(card);
         return s.events.stream().anyMatch(e -> e.hasCastSpell() && e.getCastSpell().getSeat() == seat

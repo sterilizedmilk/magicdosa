@@ -691,6 +691,33 @@ public final class ForgeGameSession {
         return false;
     }
 
+    /**
+     * Cards a seat is shown for the choice it is being asked now (a library search, a look at the top cards, a scry or
+     * surveil, an order of cards moving out of a library): known to that seat, with their identity, while the choice is
+     * open (2026-11-28), whatever Forge's view says. Only that seat's observation names them; the stream already told
+     * it what they are ({@link #showTo}).
+     */
+    private final Map<Integer, Set<Card>> shownForChoice = new HashMap<>();
+
+    /** Runs {@code choice} with {@code cards} shown to {@code p} (see {@link #shownForChoice}); nested choices add up. */
+    <R> R whileShown(Player p, Collection<? extends Card> cards, java.util.function.Supplier<R> choice) {
+        Set<Card> shown = shownForChoice.computeIfAbsent(seat(p), k -> java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        Set<Card> before = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        before.addAll(shown);
+        shown.addAll(cards);
+        try {
+            return choice.get();
+        } finally {
+            shown.retainAll(before);
+        }
+    }
+
+    /** Whether {@code viewer} is being shown {@code c} for the choice it is asked now. */
+    boolean shownForChoice(int viewer, Card c) {
+        Set<Card> s = shownForChoice.get(viewer);
+        return s != null && s.contains(c);
+    }
+
     /** Whether the viewer has seen the object that has entity ID {@code id} now (same object: rule 400.7). */
     boolean seen(int viewer, long id) {
         Set<Long> s = visibleIds.get(viewer);
