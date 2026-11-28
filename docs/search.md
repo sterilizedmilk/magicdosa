@@ -234,3 +234,46 @@ least, the same inputs give the same search).
   every step of the decision.
 - Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
   `search_skip_reason`, `search_root_value` NaN, empty per-candidate lists, no tree reuse and `kill_check` 0.
+
+## Gumbel search (2026-11-28 user directive "Gumbel v2", protocol 18)
+
+Danihelka et al., "Policy improvement by planning with Gumbel" (ICLR 2022). The default algorithm; UCB1 stays as the
+comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
+
+- **Shared formula** (`GumbelMath`, the same as python/magicdosa/targets.py `completed_q`; the fixture
+  `agent-core/src/test/resources/completed_q_fixture.txt` is checked by GumbelMathTest and test_targets_fixture.py):
+  sigma(q) = (c_visit + max_b N(b)) * c_scale * q (`-Dmagicdosa.search.cVisit` 50, `.cScale` 0.1); q_hat = Q where
+  visited, else the value estimate; logits all 0 (uniform; no policy head anywhere in the search).
+- **Root:** k = min(16, actions) (`.gumbelK`) candidates by g + logits, g ~ Gumbel(0, 1) from the seed with
+  `-Dmagicdosa.search.gumbelNoise=true` (self-play), else 0 (the default: evaluation and gates; ties by a per-action
+  rank drawn from the seed). Budget n = actions x 12 x multiplier, as before. ceil(log2 k) rounds of
+  floor(n / (rounds * remaining)) simulations per remaining candidate (at least 1), the last round the rest; after a
+  round the better half by g + logits + sigma(q_hat) stays (the root's mean completes unvisited ones). Every started
+  simulation counts, so at most n run. The answer: the best remaining candidate by the same score, ties by the seed.
+- **Below the root** (the other seat's nodes too): argmax over the actions available in the simulation's sample of
+  pi'(a) - N(a) / (1 + sum_b N(b)), pi' = softmax(logits + sigma(q_hat)), the node's mean completing unvisited
+  actions; availability counted as before; no progressive widening; ties by the simulation's seeded random. Later
+  steps of a multi-step root decision are answered by logits + sigma(q_hat) among their visited actions.
+- **Tree reuse** is off in Gumbel mode: an inherited root would carry visits the halving schedule did not give, so the
+  rounds would no longer split the budget as defined. `SearchRun.tree_reuse` records false. Reuse stays with UCB1.
+- **Recorded** (protocol 18): `SearchRun.algorithm` (UCB1 / Gumbel), `gumbel_noise`, `gumbel_k`, `c_visit`,
+  `c_scale`; shard schema 3 columns `search_algorithm`, `search_gumbel_noise` (older shards: UCB1 where search ran).
+
+**Measurement** (2026-11-28; the 117-root set of docs/search-quality-2026-11.md: the first game of each
+`gate3-step3-gen2` unit, 30 decisions each, gen2-c leaf, `SearchReplay -Dfollow=true`, reproducible; 114 roots are
+searched now, the 3 others have one candidate and are skipped). Gumbel without noise (the gate setting); UCB1 with
+tree reuse off, so both start from a fresh tree. One run each; the machine ran other sessions' JVMs.
+
+| | UCB1 1x | Gumbel 1x | UCB1 4x | Gumbel 4x |
+| --- | --- | --- | --- | --- |
+| Answers 1x vs 4x differ | 36 / 114 (31.6%) | 39 / 114 (34.2%) | | |
+| Root top-visit share (mean) | 0.437 | 0.449 | 0.464 | 0.448 |
+| Pass share of priority answers (93) | 31.2% | 22.6% | 26.9% | 31.2% |
+| ms per searched decision | 961 | 970 | 4,272 | 3,683 |
+| ms per simulation | 19.7 | 19.9 | 22.0 | 19.0 |
+
+Gumbel against UCB1 at the same budget: 38 of 114 answers differ at 1x, 27 at 4x. 65 of the 114 roots have two
+actions: Gumbel's k = 2 is one round that splits the budget evenly (top-visit share 0.5 by construction), and the
+answer is the higher mean value; so the top-visit share is mostly structural here and not a measure of confidence.
+The pass share is per answer; with Gumbel the answer no longer follows the visit counts. The earlier UCB1 figure (27 of
+117 differ, 1x vs 4x) was measured before the network-at-the-horizon, boundary-value and single-candidate changes.
