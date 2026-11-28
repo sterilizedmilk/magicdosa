@@ -11,6 +11,8 @@ overfit: about N decisions whose recorded choice is not a pass (one-hot targets)
   the encoder frozen and with it trainable (value head never trained); train-set top-1 over the steps.
 invariance: policy and value under a shuffle of the candidate order and of the entity-token order (references
   remapped): share of argmax changes by action identity, mean total variation, max |dp|, max |d value|.
+target-entropy: per decision type, entropy and max probability of the completed-Q target (Q normalization on and
+  off), of the visit ratios and of uniform, on completed-search rows with N and Q.
 cosine: cosine similarity of the candidate encodings (PlayNet.candidates, before the heads) of different candidates
   of the same decision, by pair of candidate kinds.
 """
@@ -198,6 +200,42 @@ def cosine(net, tables) -> Dict[str, Dict[str, float]]:
             for k, v in sorted(acc.items(), key=lambda kv: -len(kv[1]))}
 
 
+def target_entropy(tables) -> Dict[str, Dict[str, float]]:
+    """Per decision type, over completed-search rows with N and Q (finetune.policy_mask, completed-q): mean entropy
+    of the completed-Q target with the Q normalization on and off, of the visit ratios, and of the uniform
+    distribution; mean max probability of each."""
+    from . import finetune
+    on, off = finetune.completed_q_target(q_normalize=True), finetune.completed_q_target(q_normalize=False)
+    acc: Dict[int, Dict[str, float]] = {}
+
+    def ent(p, m):
+        return -(np.where(m & (p > 0), p * np.log(np.where(p > 0, p, 1)), 0)).sum(-1)
+
+    for t in tables:
+        rows = np.arange(t.num_rows)
+        pm = finetune.policy_mask(t, rows, on)
+        if not pm.any():
+            continue
+        rows = rows[pm]
+        b_on = finetune.batch(t, rows, target=on)
+        b_off = finetune.batch(t, rows, target=off)
+        m = b_on["inputs"]["cand_mask"]
+        n = m.sum(-1)
+        multi = n >= 2
+        dtype = b_on["inputs"]["decision_type"]
+        cols = {"on": b_on["targets"]["policy_target"], "off": b_off["targets"]["policy_target"],
+                "visits": b_on["targets"]["visit_ratio"]}
+        for d in np.unique(dtype[multi]):
+            s = multi & (dtype == d)
+            a = acc.setdefault(int(d), {"rows": 0, "uniform": 0.0})
+            a["rows"] += int(s.sum())
+            a["uniform"] += float(np.log(n[s]).sum())
+            for k, p in cols.items():
+                a[k + "_entropy"] = a.get(k + "_entropy", 0.0) + float(ent(p, m)[s].sum())
+                a[k + "_maxp"] = a.get(k + "_maxp", 0.0) + float(np.where(m, p, 0).max(-1)[s].sum())
+    return {k: {f: (v if f == "rows" else v / a["rows"]) for f, v in a.items()} for k, a in sorted(acc.items())}
+
+
 CAND_KEYS = ("cand_kind", "cand_ref0", "cand_ref1", "cand_card", "cand_key", "cand_string", "cand_feat", "cand_mask")
 TOKEN_KEYS = ("token_kind", "token_card", "token_key", "token_feat", "token_mask")
 
@@ -297,11 +335,14 @@ def main(argv=None) -> None:
     v.add_argument("--checkpoint", required=True)
     v.add_argument("--games", nargs="+", required=True)
     v.add_argument("--out", required=True)
+    e = sub.add_parser("target-entropy")
+    e.add_argument("--games", nargs="+", required=True)
+    e.add_argument("--out", required=True)
     c = sub.add_parser("cosine")
     c.add_argument("--checkpoint", required=True)
     c.add_argument("--games", nargs="+", required=True)
     c.add_argument("--out", required=True)
-    for s in (g, o, c, v):
+    for s in (g, o, c, v, e):
         s.add_argument("--threads", type=int, default=4)
     a = ap.parse_args(argv)
     from .pretrain import _setup_threads
@@ -311,6 +352,8 @@ def main(argv=None) -> None:
     if a.cmd == "agreement":
         net, _ = finetune.load_net(a.checkpoint)
         out = agreement(net, tables)
+    elif a.cmd == "target-entropy":
+        out = target_entropy(tables)
     elif a.cmd == "invariance":
         net, _ = finetune.load_net(a.checkpoint)
         out = invariance(net, tables)

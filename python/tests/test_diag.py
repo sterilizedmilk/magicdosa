@@ -35,3 +35,12 @@ def test_overfit_rows_are_non_pass_play_decisions(table):
     for _, r in picks:
         assert dtype[r] not in shards.NOT_PLAY_POLICY and len(kinds[r]) >= 2
         assert kinds[r][chosen[r]] != diag.CAND_PASS
+
+
+def test_target_entropy(table):
+    from test_finetune import _searched
+    t, _, _ = _searched(table, np.full(table.num_rows, shards.STATUS_COMPLETED))
+    r = diag.target_entropy([t])
+    assert r
+    for v in r.values():
+        assert v["rows"] > 0 and 0 <= v["on_entropy"] <= v["uniform"] + 1e-6 and v["off_entropy"] <= v["uniform"] + 1e-6
