@@ -101,6 +101,9 @@ class TreeReuseTest {
         assertEquals(Math.max(300 - r.inheritedVisits, 2), r.iterations);
         assertEquals(r.inheritedVisits + r.determinizations, r.visits(0) + r.visits(1));
         assertEquals(0, r.chosen(), r.toString());
+        // protocol 17: the run records the reuse and the visits taken over at the root
+        assertEquals(r.inheritedVisits, r.method().getRan().getInheritedVisits());
+        assertEquals(TreeReuse.MODE == TreeReuse.Mode.ON, r.method().getRan().getTreeReuse());
     }
 
     @Test

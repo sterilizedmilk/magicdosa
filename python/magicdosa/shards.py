@@ -73,7 +73,7 @@ def search_status(table: pa.Table) -> np.ndarray:
 
 def with_schema2_columns(table: pa.Table) -> pa.Table:
     """The table with the shard-schema-2 columns: an older shard gets search_status derived from its method columns,
-    search_root_value NaN and empty per-candidate lists (no N, Q or prior was recorded then)."""
+    search_root_value NaN, no tree reuse and empty per-candidate lists (no N, Q or prior was recorded then)."""
     n = table.num_rows
     if "search_status" not in table.column_names:
         table = table.append_column(pa.field("search_status", pa.int32(), nullable=False),
@@ -81,6 +81,9 @@ def with_schema2_columns(table: pa.Table) -> pa.Table:
     if "search_root_value" not in table.column_names:
         table = table.append_column(pa.field("search_root_value", pa.float32(), nullable=False),
                                     pa.array(np.full(n, np.nan, dtype=np.float32)))
+    for name, kind in (("search_tree_reuse", pa.int32()), ("search_inherited_visits", pa.int64())):
+        if name not in table.column_names:   # no tree reuse before protocol 17
+            table = table.append_column(pa.field(name, kind, nullable=False), pa.array(np.zeros(n), type=kind))
     for name, kind in (("cand_visits", pa.int32()), ("cand_q", pa.float32()), ("cand_prior", pa.float32())):
         if name not in table.column_names:
             table = table.append_column(name, pa.array([[] for _ in range(n)], type=pa.list_(kind)))

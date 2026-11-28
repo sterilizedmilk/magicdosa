@@ -5,14 +5,14 @@ import java.util.Deque;
 import java.util.Map;
 
 /**
- * Tree reuse between the searches of one seat (2026-11-28 directive; {@code -Dmagicdosa.search.treeReuse}, off by
- * default): the next search starts from the subtree of the previous tree that holds the next real decision, found by the
+ * Tree reuse between the searches of one seat (2026-11-28 directive; {@code -Dmagicdosa.search.treeReuse}, on by
+ * default since 2026-11-28, protocol 17 records it in SearchRun): the next search starts from the subtree of the previous tree that holds the next real decision, found by the
  * real request's canonical information key ({@link CanonicalKey}) under the action the seat played. Modes:
  * <ul>
- *   <li>{@code false} (default): fresh trees, nothing computed for reuse.</li>
+ *   <li>{@code false}: fresh trees, nothing computed for reuse.</li>
  *   <li>{@code measure}: fresh trees keyed as without reuse (the same searches); the canonical keys are kept beside them
  *       to count how often and with how many visits the next decision is in the previous tree.</li>
- *   <li>{@code true}: the tree is keyed canonically and the found subtree becomes the next root. Inherited visits count
+ *   <li>{@code true} (default): the tree is keyed canonically and the found subtree becomes the next root. Inherited visits count
  *       toward the budget ({@link IsMcts#search(SearchGame, long, Inherited)}).</li>
  * </ul>
  * The caller falls back to a fresh tree on anything that breaks the chain (no previous search, another turn, a shadow
@@ -21,7 +21,7 @@ import java.util.Map;
 public final class TreeReuse {
     public enum Mode { OFF, MEASURE, ON }
 
-    public static final Mode MODE = mode(System.getProperty("magicdosa.search.treeReuse", "false"));
+    public static final Mode MODE = mode(System.getProperty("magicdosa.search.treeReuse", "true"));
     /** Diagnosis only: on a miss, print how the real request differs from the nearest tree node of the seat. */
     static final boolean DEBUG = Boolean.getBoolean("magicdosa.search.reuseDebug");
     private static int debugPrinted;

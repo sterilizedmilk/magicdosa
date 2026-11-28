@@ -280,6 +280,10 @@ message SearchRun {
   // protocol 17: the value estimate of the root position for the root seat, in [0, 1]: the leaf network's value of the
   // root request when a leaf model is loaded, else root_value (the visit-weighted mean)
   float root_estimate = 13;
+  // protocol 17: the search started from the previous search's subtree (tree reuse), and the root visits it took over
+  // from there; the root's visit counts (the policy target) include them
+  bool tree_reuse = 14;
+  uint64 inherited_visits = 15;
 }
 
 // Where a simulation stops when the game has not ended. NEXT_TURN is a temporary default for speed (2026-11-26 user
