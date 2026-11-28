@@ -240,6 +240,8 @@ final class Scenario {
     /** Seat 0's requests go to the live shadow, the game's stream as well (as agent-core gets them). */
     /** The real game's stream as seat 0 got it (a test checks the scenario still does what it is for). */
     final List<magicdosa.protocol.v1.Event> events = java.util.Collections.synchronizedList(new ArrayList<>());
+    /** Seat 0's requests in the real game, as agent-core got them. */
+    final List<DecisionRequest> requests = java.util.Collections.synchronizedList(new ArrayList<>());
 
     private final class ShadowClient implements DecisionClient {
         final LiveShadow shadow;
@@ -267,6 +269,7 @@ final class Scenario {
 
         @Override
         public DecisionResponse decide(DecisionRequest r) throws Exception {
+            requests.add(r);
             return shadow.decide(r);
         }
     }

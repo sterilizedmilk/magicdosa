@@ -1944,10 +1944,10 @@ public class AgentPlayerController extends ObservedAiController {
         for (Card c : options) {
             candidates.add(Candidate.newBuilder().setCardId(session.ids().idOf(c)).build());
         }
-        List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_CARDS, method, candidates,
-            SelectionConstraints.newBuilder().setMin(min).setMax(max).setOrdered(ordered).build(),
+        List<Integer> chosen = session.whileShown(decider, options, () -> decide(DecisionType.DECISION_TYPE_CHOOSE_CARDS, method,
+            candidates, SelectionConstraints.newBuilder().setMin(min).setMax(max).setOrdered(ordered).build(),
             context(sa).setEnginePrompt(prompt == null ? method : prompt).build(),
-            () -> forgeAi == null ? null : indicesOf(options, forgeAi.get()));
+            () -> forgeAi == null ? null : indicesOf(options, forgeAi.get())));
         if (chosen == null) {
             return null;
         }
@@ -1971,9 +1971,9 @@ public class AgentPlayerController extends ObservedAiController {
         for (T o : options) {
             candidates.add(Candidate.newBuilder().setTarget(session.ref(o)).build());
         }
-        List<Integer> chosen = decide(DecisionType.DECISION_TYPE_CHOOSE_CARDS, method, candidates, between(min, max),
-            context(sa).setEnginePrompt(prompt == null ? method : prompt).build(),
-            () -> forgeAi == null ? null : indicesOf(options, forgeAi.get()));
+        List<Integer> chosen = session.whileShown(decider, cards, () -> decide(DecisionType.DECISION_TYPE_CHOOSE_CARDS, method,
+            candidates, between(min, max), context(sa).setEnginePrompt(prompt == null ? method : prompt).build(),
+            () -> forgeAi == null ? null : indicesOf(options, forgeAi.get())));
         if (chosen == null) {
             return null;
         }
@@ -2464,7 +2464,8 @@ public class AgentPlayerController extends ObservedAiController {
     protected boolean answerWillPutCardOnTop(Card c) {
         session.showTo(decider, List.of(c));
         try {
-            return yesNo("willPutCardOnTop", null, "put on top", () -> forgeAi(() -> super.answerWillPutCardOnTop(c)));
+            return session.whileShown(decider, List.of(c),
+                () -> yesNo("willPutCardOnTop", null, "put on top", () -> forgeAi(() -> super.answerWillPutCardOnTop(c))));
         } catch (NoAnswer e) {
             return forgeAi(() -> super.answerWillPutCardOnTop(c));
         }

@@ -298,6 +298,8 @@ final class ObservationBuilder {
             .setFaceDown(c.isFaceDown());
         int viewerSeat = session.seat(viewer);
         boolean known = z == ZoneType.Library && session.facts().knows(viewerSeat, c) // E3: scried, put back
+            // a library card the viewer is shown for the choice it is asked now (search, look at, scry, surveil)
+            || z == ZoneType.Library && session.shownForChoice(viewerSeat, c)
             // a card in a hand the viewer has seen as this object (revealed from that hand, or seen before it went
             // there): confirmed information
             || z == ZoneType.Hand && session.seen(viewerSeat, session.ids().idOf(c));
