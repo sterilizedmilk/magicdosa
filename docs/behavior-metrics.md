@@ -42,3 +42,12 @@ records are never read.
   logged (it is not logged in gate-1 logs, so network rows show `-` there).
 
 Shares print as `percent (count/denominator)`, and `-` means the denominator is 0.
+
+## Trend by generation
+
+One row for each run and seat mode, over all matchups. The per-matchup tables are in `E:/magicdosa-runs/metrics/<run>.md`.
+
+| run (generation, date) | mode | games | win % | ① kill not closed | ② free damage missed | ③ land not played | ④ pass share | ⑤ mean turns | ⑤ turns from value ≥ 0.9 to end (games, won %) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| gate1-search-vs-net (gen2-c, 2026-11-28, protocol 15, Izzet mirror, 1× search vs network alone) | search | 388 | 92.0 | n/a (protocol < 17) | 25.1% (678/2701) | 48.4% (1695/3504) | 58.2% (12938/22223) | 25.7 | 13.2 (358, 98%) |
+| gate1-search-vs-net (same games) | network | 388 | 8.0 | n/a (protocol < 17) | 2.9% (4/136) | 84.6% (3736/4415) | 89.8% (26279/29278) | 25.7 | - |
