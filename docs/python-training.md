@@ -312,6 +312,43 @@ soft cross-entropy then teaches a near-uniform policy with a small pass tilt, an
 breaking lands on pass. The sampled early turns do not touch the targets (only the played move). The recipe is
 unchanged; changing it (sharper targets, more simulations, tie handling in the search) is a planning decision.
 
+**Correction (2026-11-28):** every "AUC by turn" column above (generations 1-3) bucketed rows by half the game turn
+(the encoder stores min(40, turn) / 40; finetune decoded / 20, fixed in 3f5d48f). The overall AUC, Brier and policy
+numbers are unaffected. Correct per-turn numbers are below.
+
+## Holdout measurements (`magicdosa.measure`, 2026-11-28)
+
+Holdout: the validation + test games of the gen-3 split (354 shards of `selfplay\b0021`-`b0040`, Izzet mirror only;
+no model below trained on them). 30.1k value rows, no draws, no unintended fallbacks.
+
+Pass bias, PRIORITY (20.7k rows, 20.3k searched): the move the search played was a pass in 56.0% of searched rows
+(58.7% after the sampled turns 1-4); the network's argmax is a pass in gen0-run2 55.4%, gen2-c 72.6%, gen3-d 64.6%
+(66.6% after turn 4). The networks trained on visit ratios pass more than the search that produced them (gen3 +8,
+gen2-c +17 points); gen-3 narrowed the gap.
+
+Value error (BCE / Brier / ECE, gen0-run2 → gen2-c → gen3-d):
+
+| Slice | Rows | gen0-run2 | gen2-c | gen3-d |
+| --- | --- | --- | --- | --- |
+| all | 30099 | .615 / .211 / .106 | .486 / .160 / .047 | .482 / .157 / .042 |
+| turn 1-2 | 1847 | .762 / .279 / .162 | .648 / .230 / .095 | .644 / .227 / .061 |
+| turn 3-4 | 2347 | .748 / .271 / .161 | .623 / .216 / .060 | .609 / .212 / .058 |
+| turn 5-6 | 2621 | .688 / .242 / .121 | .593 / .203 / .089 | .553 / .186 / .057 |
+| turn 7-8 | 2772 | .618 / .211 / .097 | .550 / .179 / .068 | .487 / .157 / .031 |
+| turn 9-10 | 2805 | .653 / .220 / .120 | .481 / .154 / .054 | .454 / .144 / .065 |
+| turn 11-14 | 5475 | .546 / .184 / .109 | .407 / .125 / .033 | .412 / .126 / .054 |
+| turn 15+ | 9942 | .532 / .174 / .119 | .373 / .115 / .038 | .399 / .121 / .058 |
+| turns remaining 0 | 1463 | .323 / .096 / .046 | .172 / .048 / .055 | .215 / .060 / .015 |
+| turns remaining 1 | 1689 | .854 / .287 / .350 | .419 / .127 / .168 | .425 / .128 / .177 |
+| turns remaining 2 | 1812 | .303 / .088 / .045 | .213 / .063 / .074 | .202 / .057 / .055 |
+| turns remaining 3-4 | 3196 | .570 / .188 / .131 | .331 / .104 / .024 | .349 / .110 / .045 |
+| turns remaining 5+ | 21939 | .648 / .227 / .115 | .557 / .186 / .065 | .547 / .181 / .047 |
+
+Late-game error is smaller than early/mid-game error (gen3 BCE .64 at turns 1-2 → .40 at 15+), except one turn before
+the end: with one turn remaining the deciding seat (on its own turn, about to lose on the opponent's) wins 17.2%, and
+gen3 predicts 0.35 on average (ECE .18). The net does not see a coming lethal attack. The shards carry no KillCheck
+outcome, so confirmed kills/deaths cannot be split out yet.
+
 ## Placeholders
 
 Everything here exists only to make the pipeline run. None of it is a design decision.
