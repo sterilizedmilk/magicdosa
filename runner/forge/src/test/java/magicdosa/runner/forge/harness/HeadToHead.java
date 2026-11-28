@@ -24,7 +24,9 @@ import java.util.Set;
  * game and writes its own shards ({@code <logs>/shards-<label>}). Agent-core A takes seat 0 in even matches and seat 1 in
  * odd ones, so neither side always sits in the same seat (the first game's starting player comes from the seed, later
  * games from Forge's loser-chooses rule). Settings of A and B: the run's system properties, with
- * {@code -Dmagicdosa.agentBudgetMultiplierA/B} and {@code -Dmagicdosa.agentPolicyA/B} replacing the shared ones.
+ * {@code -Dmagicdosa.agentBudgetMultiplierA/B} and {@code -Dmagicdosa.agentPolicyA/B} replacing the shared ones, and
+ * {@code -Dmagicdosa.sideA.<key>=<value>} (or {@code sideB}) setting any agent-core setting for one side only, e.g.
+ * {@code -Dmagicdosa.sideA.magicdosa.search.algorithm=ucb1} or {@code -Dmagicdosa.sideA.magicdosa.agentBudgetPerCandidate=1}.
  *
  * <pre>HeadToHead &lt;abs decks dir&gt; deck0 deck1 matches &lt;abs log dir&gt; [match prefix]</pre>
  */
@@ -197,6 +199,12 @@ public final class HeadToHead {
     private static Map<String, String> settings(Path logDir, String side, String label) throws Exception {
         Map<String, String> m = new java.util.HashMap<>();
         m.put("magicdosa.agentLabel", label);
+        String sidePrefix = "magicdosa.side" + side + ".";
+        for (String k : new java.util.TreeSet<>(System.getProperties().stringPropertyNames())) {
+            if (k.startsWith(sidePrefix)) {
+                m.put(k.substring(sidePrefix.length()), System.getProperty(k)); // one side's own setting
+            }
+        }
         String multiplier = System.getProperty("magicdosa.agentBudgetMultiplier" + side);
         if (multiplier != null) {
             m.put("magicdosa.agentBudgetMultiplier", multiplier);
