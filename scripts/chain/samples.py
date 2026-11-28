@@ -11,7 +11,10 @@ import pyarrow.ipc as ipc
 root, label = sys.argv[1], sys.argv[2]
 count = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 wins, losses = [], []
-for f in sorted(glob.glob(os.path.join(root, "n*", "shards-" + label, "*.arrow"))):
+files = sorted(glob.glob(os.path.join(root, "n*", "shards-" + label, "*.arrow")))
+if not files:  # a one-agent run (RandomGames) writes n*/shards
+    files = sorted(glob.glob(os.path.join(root, "n*", "shards", "*.arrow")))
+for f in files:
     stem = os.path.basename(f)[:-len(".arrow")]
     log = os.path.join(os.path.dirname(os.path.dirname(f)), stem + ".pb.gz")
     if not os.path.exists(log):
