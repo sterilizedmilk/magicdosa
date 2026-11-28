@@ -24,7 +24,7 @@ cd $C
 
 log() { echo "$(date '+%F %T') $*" | tee -a $C/diag.log; }
 classpath() { local win cp; win=$(cygpath -w $1); cp=$(cat $C/cp-template.txt); echo "${cp//__CLASSES__/$win}"; }
-current_build() { head -1 $C/builds/current.txt | tr -d '\r'; }
+current_build() { echo d957f4b; }  # pinned 2026-11-28: the models here are encoder 5, a later encoder-6 build cannot load them
 sha_of() { sha256sum "$(cygpath -u "$1")" | cut -c1-16; }
 
 run_unit() {
