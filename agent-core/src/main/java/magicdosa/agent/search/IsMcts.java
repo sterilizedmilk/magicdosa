@@ -50,6 +50,8 @@ public final class IsMcts {
         final int seat;
         final boolean continuation;
         long visits;
+        /** Gumbel: the network's value of this node for its seat (the leaf value of the walk that added it); NaN. */
+        double netValue = Double.NaN;
         final Map<String, Edge> edges = new LinkedHashMap<>();
 
         Node(int seat) {
@@ -123,7 +125,7 @@ public final class IsMcts {
             out.inheritedNodes = inherited.nodes();
             simulations = Math.max(budget - root.visits, n);
         }
-        Halving halving = gumbel == null ? null : new Halving(rootActions, gumbel, budget, seed);
+        Halving halving = gumbel == null ? null : new Halving(rootActions, gumbel, budget, seed, game.rootValue());
         for (long it = 0; it < simulations; it++) {
             String forced = null;
             if (halving != null) {
@@ -169,6 +171,9 @@ public final class IsMcts {
                 continue;
             }
             out.determinizations++;
+            if (walk.created != null && game.leafIsNetwork()) {
+                walk.created.netValue = walk.created.seat == root.seat ? v : 1 - v; // the network's value of that node
+            }
             for (int i = 0; i < walk.path.size(); i++) {
                 Node at = walk.pathNodes.get(i);
                 Edge e = walk.path.get(i);
@@ -288,7 +293,7 @@ public final class IsMcts {
      * candidates with the highest g + logits enter (g: Gumbel(0, 1) noise from the seed when {@code noise}, else 0;
      * logits all 0, a uniform prior; ties by a per-action rank from the seed). ceil(log2 k) rounds: each gives every
      * remaining candidate budget / (rounds * remaining) simulations (at least one), the last round what is left, then
-     * keeps the better half by g + logits + sigma(q_hat). Every started simulation counts, so the total never exceeds
+     * keeps the better half by g + logits + sigma(q_tilde). Every started simulation counts, so the total never exceeds
      * the budget. The answer is the best remaining candidate by the same score.
      */
     static final class Halving {
@@ -305,7 +310,11 @@ public final class IsMcts {
         /** This round's simulations still to start, as a queue of actions. */
         final java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
 
-        Halving(List<String> actions, SearchConfig.Gumbel gumbel, long budget, long seed) {
+        /** The network's value of the root (NaN without a network: the visit-weighted mean stands in). */
+        final double rootValue;
+
+        Halving(List<String> actions, SearchConfig.Gumbel gumbel, long budget, long seed, double rootValue) {
+            this.rootValue = rootValue;
             this.actions = actions;
             this.gumbel = gumbel;
             this.budget = budget;
@@ -328,20 +337,26 @@ public final class IsMcts {
                 .thenComparingDouble(a -> rank.get(a));
         }
 
-        /** g + logits + sigma(q_hat) of a root action. */
+        /** g + logits + sigma(q_tilde) of a root action (q_hat over all the root's children, v_mix completing). */
         double score(Node root, String a) {
-            long maxN = 0;
-            double rewards = 0;
-            long visits = 0;
-            for (Edge e : root.edges.values()) {
-                maxN = Math.max(maxN, e.visits);
-                rewards += e.reward;
-                visits += e.visits;
+            return g.get(a) + sigmas(root).get(a);
+        }
+
+        /** sigma(q_tilde) of every root action, from the visits now (GumbelMath, the targets.py formula). */
+        java.util.Map<String, Double> sigmas(Node root) {
+            List<Edge> edges = new ArrayList<>(root.edges.values());
+            long[] n = new long[edges.size()];
+            double[] q = new double[edges.size()];
+            for (int i = 0; i < n.length; i++) {
+                n[i] = edges.get(i).visits;
+                q[i] = n[i] == 0 ? Double.NaN : edges.get(i).reward / n[i];
             }
-            double v = visits == 0 ? 0.5 : rewards / visits; // the root's mean: the completed Q of unvisited ones
-            Edge e = root.edges.get(a);
-            double q = e.visits > 0 ? e.reward / e.visits : v;
-            return g.get(a) + GumbelMath.sigma(q, maxN, gumbel.cVisit(), gumbel.cScale());
+            double[] s = GumbelMath.sigmas(null, n, q, rootValue, null, gumbel.cVisit(), gumbel.cScale(), gumbel.normalize());
+            java.util.Map<String, Double> out = new java.util.HashMap<>();
+            for (int i = 0; i < n.length; i++) {
+                out.put(edges.get(i).action, s[i]);
+            }
+            return out;
         }
 
         /** The root action of the next simulation; null when the budget is spent. */
@@ -444,7 +459,7 @@ public final class IsMcts {
                 best = actions.indexOf(halving.best(root));
                 tie = halving.tied(root) ? SearchResult.Tie.SEED : SearchResult.Tie.NONE;
             } else {
-                double[] score = completedScores(node, v, mean);
+                double[] score = completedScores(node, v, mean, node == root ? Double.NaN : node.netValue);
                 List<Integer> top = new ArrayList<>();
                 double bestScore = Double.NEGATIVE_INFINITY;
                 for (int j = 0; j < v.length; j++) {
@@ -479,23 +494,14 @@ public final class IsMcts {
         return out;
     }
 
-    /** logits + sigma(q_hat) per action of a node (logits 0; the node's mean value completes unvisited ones). */
-    private double[] completedScores(Node node, long[] visits, double[] mean) {
+    /** logits + sigma(q_tilde) per action of a node (logits 0; v_mix from the node's network value completes). */
+    private double[] completedScores(Node node, long[] visits, double[] mean, double netValue) {
         SearchConfig.Gumbel gm = config.gumbel();
-        long maxN = 0;
-        double rewards = 0;
-        long total = 0;
-        for (Edge e : node.edges.values()) {
-            maxN = Math.max(maxN, e.visits);
-            rewards += e.reward;
-            total += e.visits;
-        }
-        double v = total == 0 ? 0.5 : rewards / total;
-        double[] out = new double[visits.length];
+        double[] q = new double[visits.length];
         for (int j = 0; j < visits.length; j++) {
-            out[j] = GumbelMath.sigma(visits[j] > 0 ? mean[j] : v, maxN, gm.cVisit(), gm.cScale());
+            q[j] = visits[j] > 0 ? mean[j] : Double.NaN;
         }
-        return out;
+        return GumbelMath.sigmas(null, visits, q, netValue, null, gm.cVisit(), gm.cScale(), gm.normalize());
     }
 
     /** An action drawn in proportion to its visits; {@code fallback} when nothing was visited. */
@@ -533,6 +539,8 @@ public final class IsMcts {
         private boolean outOfTree;
         /** Gumbel: the root action sequential halving gave this simulation. */
         private final String forcedRoot;
+        /** The node this walk added (at most one), for its network value. */
+        Node created;
         /** Why the root decision did not match, also when the engine swallowed the exception. */
         String mismatch;
 
@@ -582,7 +590,8 @@ public final class IsMcts {
                 node = last.next.get(key);
                 if (node == null) {
                     // expansion: one new node per simulation, then the rollout policy plays on
-                    last.next.put(key, new Node(d.seat(), d.continuation()));
+                    created = new Node(d.seat(), d.continuation());
+                    last.next.put(key, created);
                     nodes[0]++;
                     outOfTree = true;
                     return ROLLOUT;
@@ -624,18 +633,17 @@ public final class IsMcts {
             long[] n = new long[m];
             double[] q = new double[m];
             long total = 0;
-            double rewards = 0;
             for (int j = 0; j < m; j++) {
                 Edge e = node.edges.get(actions.get(avail.get(j)));
                 e.available++;
                 n[j] = e.visits;
                 q[j] = e.visits == 0 ? Double.NaN : e.reward / e.visits;
                 total += e.visits;
-                rewards += e.reward;
             }
-            double v = total == 0 ? 0.5 : rewards / total;
             SearchConfig.Gumbel gm = config.gumbel();
-            double[] pi = GumbelMath.improvedPolicy(null, n, q, v, null, gm.cVisit(), gm.cScale());
+            // v_mix from the node's network value (its visit-weighted mean without one), q_tilde over the sample's actions
+            double[] pi = GumbelMath.improvedPolicy(null, n, q, node.netValue, null, gm.cVisit(), gm.cScale(),
+                gm.normalize());
             List<Integer> top = new ArrayList<>();
             double best = Double.NEGATIVE_INFINITY;
             for (int j = 0; j < m; j++) {

@@ -87,6 +87,10 @@
           <workingDirectory>${forge.home}/forge-gui</workingDirectory>
           <!-- Arrow (shard tests) needs java.nio opened; -Dtest.heap sets the test JVM's heap -->
           <argLine>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED -Xmx${test.heap}</argLine>
+          <systemPropertyVariables>
+            <!-- shared fixtures (python/tests/data) read by Java tests -->
+            <magicdosa.repo>${project.basedir}/..</magicdosa.repo>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
       <plugin>

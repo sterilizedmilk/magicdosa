@@ -15,8 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * rule below it, the same seed the same search, noise only when asked.
  */
 class GumbelSearchTest {
-    private static final SearchConfig.Gumbel EVAL = new SearchConfig.Gumbel(false, 16, 50, 0.1);
-    private static final SearchConfig.Gumbel SELF_PLAY = new SearchConfig.Gumbel(true, 16, 50, 0.1);
+    private static final SearchConfig.Gumbel EVAL = new SearchConfig.Gumbel(false, 16, 50, 0.1, true);
+    private static final SearchConfig.Gumbel SELF_PLAY = new SearchConfig.Gumbel(true, 16, 50, 0.1, true);
 
     /** One decision of seat 0; action i is worth exactly value[i] (no randomness in the value). */
     private record Values(double[] value) implements SearchGame {
@@ -93,6 +93,7 @@ class GumbelSearchTest {
             assertEquals(16, run.getGumbelK());
             assertEquals(50f, run.getCVisit(), 0);
             assertEquals(0.1f, run.getCScale(), 1e-7);
+            assertTrue(run.getQNormalize());
         }
         assertEquals(magicdosa.protocol.v1.SearchAlgorithm.SEARCH_ALGORITHM_UCB1, new IsMcts(oneX(null))
             .search(new Values(flat(3, 0, 0.6)), 1).method().getRan().getAlgorithm());

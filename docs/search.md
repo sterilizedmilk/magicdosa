@@ -240,10 +240,14 @@ least, the same inputs give the same search).
 Danihelka et al., "Policy improvement by planning with Gumbel" (ICLR 2022). The default algorithm; UCB1 stays as the
 comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
 
-- **Shared formula** (`GumbelMath`, the same as python/magicdosa/targets.py `completed_q`; the fixture
-  `agent-core/src/test/resources/completed_q_fixture.txt` is checked by GumbelMathTest and test_targets_fixture.py):
-  sigma(q) = (c_visit + max_b N(b)) * c_scale * q (`-Dmagicdosa.search.cVisit` 50, `.cScale` 0.1); q_hat = Q where
-  visited, else the value estimate; logits all 0 (uniform; no policy head anywhere in the search).
+- **Shared formula** (`GumbelMath`, the same as python/magicdosa/targets.py `completed_q`; both sides check the
+  fixtures python/tests/data/completed_q_fixtures.json: GumbelMathTest and tests/test_targets.py). q_hat = Q where
+  visited, else v_mix = (v + sum_b N(b) * Q_bar) / (1 + sum_b N(b)), v = the network's value of the node (the root
+  request's value at the root; at a tree node the leaf value of the walk that added it), or the visit-weighted mean Q
+  without a network; Q_bar the prior-weighted mean Q of the visited children (uniform prior: the plain mean). Gumbel v2
+  (2026-11-28): q_tilde = (q_hat - min) / (max - min + 1e-8) over the node's children, on by default
+  (`-Dmagicdosa.search.gumbelNormalize`); sigma(q) = (c_visit + max_b N(b)) * c_scale * q of q_tilde
+  (`-Dmagicdosa.search.cVisit` 50, `.cScale` 0.1); logits all 0 (uniform; no policy head anywhere in the search).
 - **Root:** k = min(16, actions) (`.gumbelK`) candidates by g + logits, g ~ Gumbel(0, 1) from the seed with
   `-Dmagicdosa.search.gumbelNoise=true` (self-play), else 0 (the default: evaluation and gates; ties by a per-action
   rank drawn from the seed). Budget n = actions x 12 x multiplier, as before. ceil(log2 k) rounds of
@@ -257,9 +261,9 @@ comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
 - **Tree reuse** is off in Gumbel mode: an inherited root would carry visits the halving schedule did not give, so the
   rounds would no longer split the budget as defined. `SearchRun.tree_reuse` records false. Reuse stays with UCB1.
 - **Recorded** (protocol 18): `SearchRun.algorithm` (UCB1 / Gumbel), `gumbel_noise`, `gumbel_k`, `c_visit`,
-  `c_scale`; shard schema 3 columns `search_algorithm`, `search_gumbel_noise` (older shards: UCB1 where search ran).
+  `c_scale`, `q_normalize` (false in the runs made before it, which had no stretch); shard schema 3 columns `search_algorithm`, `search_gumbel_noise` (older shards: UCB1 where search ran).
 
-**Measurement** (2026-11-28; the 117-root set of docs/search-quality-2026-11.md: the first game of each
+**Measurement** (2026-11-28, before Gumbel v2's v_mix and normalization; the 117-root set of docs/search-quality-2026-11.md: the first game of each
 `gate3-step3-gen2` unit, 30 decisions each, gen2-c leaf, `SearchReplay -Dfollow=true`, reproducible; 114 roots are
 searched now, the 3 others have one candidate and are skipped). Gumbel without noise (the gate setting); UCB1 with
 tree reuse off, so both start from a fresh tree. One run each; the machine ran other sessions' JVMs.
