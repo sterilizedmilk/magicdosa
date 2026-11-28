@@ -353,6 +353,25 @@ public final class ShadowGame {
     private magicdosa.agent.search.IsMcts justSearched;
     private magicdosa.agent.search.ForgeSearchGame justSearchedGame;
 
+    /**
+     * Protocol 17: the run's root estimate, the leaf network's value of the root request over the first step's
+     * candidates when a leaf model is loaded (else the root mean stays). Recorded only; the search does not read it.
+     */
+    private static void rootEstimate(magicdosa.agent.search.SearchResult r, magicdosa.agent.search.ForgeSearchGame g,
+                                     DecisionRequest real) {
+        magicdosa.agent.model.Evaluator net = magicdosa.agent.model.LeafNetwork.get();
+        if (net == null || r.steps.isEmpty()) {
+            return;
+        }
+        List<Integer> candidates = new ArrayList<>();
+        for (String a : r.steps.get(0).actions()) {
+            candidates.add(g.rootCandidate(a));
+        }
+        long t = magicdosa.agent.Timing.start(); // measurement only
+        r.withRootEstimate(net.evaluate(real, candidates, List.of()).value());
+        magicdosa.agent.Timing.addHistogram("search.rootEstimate", t);
+    }
+
     private DecisionResponse searched(DecisionRequest real) {
         justSearched = null;
         DecisionResponse resp = searchedOnce(real);
@@ -494,6 +513,7 @@ public final class ShadowGame {
             }
             return b.build();
         }
+        rootEstimate(r, g, real);
         // one protocol step per pick of the root decision (a multi-select's steps; one for a single pick), each with
         // the visit ratios of its node
         List<Integer> chosen = new ArrayList<>();
@@ -506,7 +526,8 @@ public final class ShadowGame {
                 b.addCandidates(idx < 0 ? magicdosa.protocol.v1.StepCandidate.newBuilder().setDone(true)
                     : magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(idx));
             }
-            b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios());
+            b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios())
+                .addAllCandidateStats(magicdosa.agent.search.SearchResult.candidateStats(s));
             out.addSteps(b);
             int idx = g.rootCandidate(s.actions().get(s.chosen()));
             if (idx < 0) {

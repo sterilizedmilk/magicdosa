@@ -51,6 +51,39 @@ def read_shard(path: Path | str, protocols: Optional[Sequence[int]] = None) -> p
     for key, value in expected.items():
         if meta.get(key) != str(value):
             raise VersionMismatch(f"{path}: {key} {meta.get(key)}, expected {value}")
+    schema = int(meta.get("shard_schema_version", "1"))
+    if schema > versions.SHARD_SCHEMA_VERSION:
+        raise VersionMismatch(f"{path}: shard_schema_version {schema}, newer than {versions.SHARD_SCHEMA_VERSION}")
+    return with_schema2_columns(table)
+
+
+# search_status values (agent-core ShardWriter.STATUS_*): no search decision on the step, search ran (every step of a
+# multi-step search), skipped for a cause (search_skip_reason), aborted by the wall-clock safety net (shadow stopped).
+STATUS_NONE, STATUS_COMPLETED, STATUS_SKIPPED, STATUS_ABORTED = 0, 1, 2, 3
+SKIP_REASON_SHADOW_STOPPED = 6
+
+
+def search_status(table: pa.Table) -> np.ndarray:
+    """search_status as agent-core derives it, from search_ran and search_skip_reason (for shards written before it)."""
+    ran = table.column("search_ran").to_numpy(zero_copy_only=False).astype(bool)
+    skip = table.column("search_skip_reason").to_numpy()
+    out = np.where(skip == SKIP_REASON_SHADOW_STOPPED, STATUS_ABORTED, np.where(skip != 0, STATUS_SKIPPED, STATUS_NONE))
+    return np.where(ran, STATUS_COMPLETED, out).astype(np.int32)
+
+
+def with_schema2_columns(table: pa.Table) -> pa.Table:
+    """The table with the shard-schema-2 columns: an older shard gets search_status derived from its method columns,
+    search_root_value NaN and empty per-candidate lists (no N, Q or prior was recorded then)."""
+    n = table.num_rows
+    if "search_status" not in table.column_names:
+        table = table.append_column(pa.field("search_status", pa.int32(), nullable=False),
+                                    pa.array(search_status(table), type=pa.int32()))
+    if "search_root_value" not in table.column_names:
+        table = table.append_column(pa.field("search_root_value", pa.float32(), nullable=False),
+                                    pa.array(np.full(n, np.nan, dtype=np.float32)))
+    for name, kind in (("cand_visits", pa.int32()), ("cand_q", pa.float32()), ("cand_prior", pa.float32())):
+        if name not in table.column_names:
+            table = table.append_column(name, pa.array([[] for _ in range(n)], type=pa.list_(kind)))
     return table
 
 
@@ -164,7 +197,12 @@ def read_shards(paths: Sequence[Path | str]) -> pa.Table:
     for i in range(0, len(names), 3):
         if names[i:i + 3] != first:
             raise VersionMismatch(f"{paths[i // 3]}: feature names differ from {paths[0]}")
-    return pa.concat_tables(tables).replace_schema_metadata(tables[0].schema.metadata)
+    meta = tables[0].schema.metadata
+    order = tables[0].column_names
+    # an older shard's added columns come at the end: in the first shard's column order for the concat
+    tables = [t if t.column_names == order or set(t.column_names) != set(order) else t.select(order) for t in tables]
+    tables = [t.cast(tables[0].schema.remove_metadata()) if set(t.column_names) == set(order) else t for t in tables]
+    return pa.concat_tables(tables).replace_schema_metadata(meta)
 
 
 def policy_target_rows(table: pa.Table) -> np.ndarray:

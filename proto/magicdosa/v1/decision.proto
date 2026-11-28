@@ -213,6 +213,16 @@ message DecisionStep {
   Decider decider = 4;
   Method method = 5;
   Diagnostics diagnostics = 6;
+  // protocol 17 (2026-11-28 user directive): what the search found for each of this step's candidates, parallel to
+  // `candidates`; empty when no search ran or the tree did not reach this step
+  repeated CandidateStats candidate_stats = 7;
+}
+
+// One root candidate of a search step (protocol 17).
+message CandidateStats {
+  uint64 visits = 1;                // N
+  optional float mean_value = 2;    // Q: the root seat's mean win probability in [0, 1]; unset when N = 0
+  optional float prior = 3;         // the policy prior's logit; unset when the search has no policy prior (uniform)
 }
 
 message StepCandidate {
@@ -267,6 +277,9 @@ message SearchRun {
   // file name and the first 16 hex digits of its SHA-256; empty without a network (leaf_evaluation values them all)
   string leaf_model = 11;
   string leaf_model_sha256 = 12;
+  // protocol 17: the value estimate of the root position for the root seat, in [0, 1]: the leaf network's value of the
+  // root request when a leaf model is loaded, else root_value (the visit-weighted mean)
+  float root_estimate = 13;
 }
 
 // Where a simulation stops when the game has not ended. NEXT_TURN is a temporary default for speed (2026-11-26 user

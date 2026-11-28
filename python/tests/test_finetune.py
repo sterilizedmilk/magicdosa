@@ -66,6 +66,29 @@ def test_compatible_protocols_read_without_asking(table, tmp_path):
     assert shards.read_shards([p15]).num_rows == table.num_rows
 
 
+def test_protocol16_shards_read_with_the_schema2_columns(table, tmp_path):
+    # protocol 17 / shard schema 2 added search_status, search_root_value and the per-candidate N, Q and prior
+    added = ["search_status", "search_root_value", "cand_visits", "cand_q", "cand_prior"]
+    old = table.drop_columns([c for c in added if c in table.column_names])
+    p16 = write(old, tmp_path / "p16.arrow", protocol_version="16")
+    t = shards.read_shard(p16)
+    ran = old.column("search_ran").to_pylist()
+    assert t.column("search_status").to_pylist() == [
+        shards.STATUS_COMPLETED if r else shards.search_status(old)[i] for i, r in enumerate(ran)]
+    assert all(np.isnan(v) for v in t.column("search_root_value").to_pylist())
+    assert t.column("cand_visits").to_pylist() == [[]] * table.num_rows
+    # mixed with a schema-2 shard whose columns sit where agent-core puts them
+    new = write(t.select(list(reversed(t.column_names))), tmp_path / "p17.arrow", protocol_version="17",
+                shard_schema_version="2")
+    assert shards.read_shards([p16, new]).num_rows == 2 * table.num_rows
+
+
+def test_a_newer_shard_schema_is_refused(table, tmp_path):
+    newer = write(table, tmp_path / "s9.arrow", shard_schema_version=str(versions.SHARD_SCHEMA_VERSION + 1))
+    with pytest.raises(shards.VersionMismatch):
+        shards.read_shard(newer)
+
+
 def test_load_drops_columns_only_some_shards_carry(table, tmp_path):
     a = write(table, tmp_path / "a.arrow")
     b = write(table.drop_columns(["search_rollout"]), tmp_path / "b.arrow")

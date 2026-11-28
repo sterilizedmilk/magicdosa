@@ -1,9 +1,13 @@
 """Versions checked against agent-core. Keep in step with magicdosa.protocol.Versions and AgentCore.ENCODER_VERSION."""
 
-PROTOCOL_VERSION = 16
-# Older protocols whose shards have the same columns and tensors, read without being asked for: 15 (protocol 16 only
-# added LEAF_EVALUATION_NETWORK, a new value of the search_leaf_evaluation column, 2026-11-28).
-COMPATIBLE_PROTOCOLS = (15,)
+PROTOCOL_VERSION = 17
+# Older protocols whose shards have the same tensors, read without being asked for: 15 (protocol 16 only added
+# LEAF_EVALUATION_NETWORK, a new value of the search_leaf_evaluation column, 2026-11-28) and 16 (protocol 17 added the
+# per-candidate search statistics; read_shard fills their columns for older shards).
+COMPATIBLE_PROTOCOLS = (15, 16)
+# Shard layout (schema metadata shard_schema_version; agent-core ShardWriter.SHARD_SCHEMA_VERSION). A shard without it
+# is 1. 2 (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior.
+SHARD_SCHEMA_VERSION = 2
 ENCODER_VERSION = 5
 VOCAB_VERSION = 3
 # Play-network structure (inputs, layers, heads, outputs). Raise it whenever a checkpoint of the old structure can no
