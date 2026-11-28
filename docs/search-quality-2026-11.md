@@ -102,10 +102,18 @@ next-turn horizon.
 | --- | --- | --- | --- | --- |
 | network at the tree exit (now) | 79 s | 13.5 ms | 0% (30% at the horizon, static score) | - |
 | plain 4x, for cost | 415 s | 18.5 ms | 0% (43% at the horizon) | 27 / 117 |
-| playout, policy head | 471 s | 110 ms (49,399 policy calls, 108 s) | 95% (5% 3 turns, 11 game ends) | 71 / 117 |
+| ~~playout, policy head~~ (invalid, see below) | 471 s | 110 ms (49,399 policy calls, 108 s) | 95% (5% 3 turns, 11 game ends) | 71 / 117 |
 | playout, Forge AI | 423 s | 98 ms | 95% (15 game ends) | 58 / 117 |
 
 No simulation failed. A playout costs about what 4x costs; whether it plays better is for games (after gate 1).
+
+**The policy-head playout row is invalid (2026-11-28 user directive).** The gen2-c policy head plays worse than random
+(network alone, argmax, vs random: 28.6%, 95% Wilson 23.2-34.7%; sampled at T=1: 49.0%), so a playout led by it says
+nothing about the playout idea. Until the policy is repaired, the policy head is not used as a prior, in rollouts or as
+the playout's fast policy: fast policy = Forge AI or random only (`-Dmagicdosa.search.leafPlayout=forge-ai|random`;
+`policy` stays for comparison runs only). The Forge AI row stands. Re-measure with a random fast policy on the same 117
+roots (and Forge AI and plain 1x again on the same build, for one comparable set): queued for 2026-11-29 02:00, results
+to follow here.
 
 ## The value network at the horizon (2026-11-28, protocol 16)
 

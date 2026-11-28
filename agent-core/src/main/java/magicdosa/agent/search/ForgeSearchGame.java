@@ -117,20 +117,25 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
      */
     public ForgeSearchGame withNetworkLeaf(magicdosa.agent.model.Evaluator network) {
         this.leafNetwork = network;
-        if (!LEAF_PLAYOUT.isEmpty() && !LEAF_PLAYOUT.equals("policy") && !LEAF_PLAYOUT.equals("forge-ai")) {
-            throw new IllegalArgumentException("unknown leaf playout " + LEAF_PLAYOUT + " (policy, forge-ai)");
+        if (!LEAF_PLAYOUT.isEmpty() && !LEAF_PLAYOUT.equals("policy") && !LEAF_PLAYOUT.equals("forge-ai")
+                && !LEAF_PLAYOUT.equals("random")) {
+            throw new IllegalArgumentException("unknown leaf playout " + LEAF_PLAYOUT + " (policy, forge-ai, random)");
         }
         this.playoutPolicy = network == null ? null : new magicdosa.agent.policy.NetworkPolicy(network, "playout");
         return this;
     }
+
+    /** The leaf playout's uniform random player ({@link #LEAF_PLAYOUT} "random"), its numbers from each request's seed. */
+    private static final magicdosa.agent.policy.RandomPolicy RANDOM_PLAYOUT = new magicdosa.agent.policy.RandomPolicy();
 
     /** The leaf playout's policy head player ({@link #LEAF_PLAYOUT} "policy"). */
     private magicdosa.agent.policy.NetworkPolicy playoutPolicy;
 
     /**
      * Leaf-horizon experiment (2026-11-27 planning decision; off by default, not recorded in SearchRun): with a network
-     * leaf, {@code -Dmagicdosa.search.leafPlayout=policy|forge-ai} plays a simulation on after it leaves the tree, with
-     * the network's policy head (its most probable action at each step) or Forge AI on the decision layer, until the
+     * leaf, {@code -Dmagicdosa.search.leafPlayout=policy|forge-ai|random} plays a simulation on after it leaves the tree,
+     * with the network's policy head (its most probable action at each step), Forge AI on the decision layer, or the
+     * uniform random policy (from each request's seed), until the
      * opponent's next turn has ended (the root seat's first turn start after an opponent turn began after the root's
      * turn); the network then values the first request asked there. The in-tree walk stops at that boundary as well, in
      * place of the horizon. The copy stays observed (the network reads each request's observation).
@@ -841,7 +846,11 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
             return card == null ? -1 : card.getId();
         }
 
-        /** A playout step ({@link #LEAF_PLAYOUT}): the policy head's answer, or the request handed to Forge AI. */
+        /**
+         * A playout step ({@link #LEAF_PLAYOUT}): the policy head's answer, a uniform random answer, or the request handed
+         * to Forge AI. Until the policy head is repaired the fast policy is Forge AI or random only (2026-11-28 user
+         * directive); "policy" stays for comparison only.
+         */
         private DecisionResponse playoutAnswer(DecisionRequest r, DecisionResponse.Builder out) {
             if (r.getConstraints().getMax() == 0) {
                 return out.build();
@@ -852,6 +861,10 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
                 magicdosa.agent.Timing.addHistogram("search.playoutPolicy", tp);
                 count("playout policy " + r.getType().name().replace("DECISION_TYPE_", ""));
                 return out.addAllChosen(chosen).build();
+            }
+            if (LEAF_PLAYOUT.equals("random")) {
+                count("playout random " + r.getType().name().replace("DECISION_TYPE_", ""));
+                return out.addAllChosen(RANDOM_PLAYOUT.decide(r).getChosenList()).build();
             }
             delegate = true;
             delegatedAt = magicdosa.agent.Timing.start();
