@@ -40,3 +40,21 @@ def test_critic_gradient_stays_off_the_shared_encoder(table, config):
     critic(pooled, to_tensors(b["privileged"])).sum().backward()
     assert all(p.grad is None for p in net.parameters())
     assert any(p.grad is not None for p in critic.parameters())
+
+
+def test_reset_policy_head_keeps_encoder_and_value(config):
+    from magicdosa.model import POLICY_HEAD, PlayNet, reset_policy_head
+    torch.manual_seed(1)
+    net = PlayNet(config)
+    before = {k: v.clone() for k, v in net.state_dict().items()}
+    reset_policy_head(net, seed=7)
+    after = net.state_dict()
+    for k, v in after.items():
+        top = k.split(".")[0]
+        if top in POLICY_HEAD and v.dtype.is_floating_point and v.numel() > 1:
+            assert not torch.equal(v, before[k]), k
+        elif top not in POLICY_HEAD:
+            assert torch.equal(v, before[k]), k
+    again = PlayNet(config)
+    reset_policy_head(again, seed=7)
+    assert all(torch.equal(again.state_dict()[k], v) for k, v in after.items() if k.split(".")[0] in POLICY_HEAD)

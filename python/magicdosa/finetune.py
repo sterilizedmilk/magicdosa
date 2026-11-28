@@ -311,6 +311,8 @@ def main(argv: Iterable[str] | None = None) -> None:
                    help="completed-Q from N, Q, prior and root value (shard schema 2) or the visit ratios")
     p.add_argument("--c-visit", type=float, default=50.0)
     p.add_argument("--c-scale", type=float, default=0.1)
+    p.add_argument("--reset-policy-head", action="store_true",
+                   help="keep the init checkpoint's encoder and value head, re-initialize the policy head")
     p.add_argument("--seed", type=int, default=1)
     a = p.parse_args(argv)
     from .pretrain import _setup_threads
@@ -368,6 +370,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         return
 
     net, _ = load_net(a.init)
+    if a.reset_policy_head:
+        from .model import reset_policy_head
+        reset_policy_head(net, a.seed)
     torch.manual_seed(a.seed)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.weight_decay)
     steps_per_epoch = (len(train_rows) + a.batch - 1) // a.batch

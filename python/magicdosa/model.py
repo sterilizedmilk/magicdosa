@@ -170,6 +170,21 @@ class PlayNet(nn.Module):
         return logits, value, pooled
 
 
+# The policy head: everything that turns (pooled observation, tokens) into candidate scores. The encoder (which also
+# owns the card and ability-key embeddings the candidates share) and the value head are not part of it.
+POLICY_HEAD = ("cand_kind", "cand_string", "cand_feat", "ref0", "ref1", "type_emb", "heads")
+
+
+def reset_policy_head(net: PlayNet, seed: int = 0) -> PlayNet:
+    """Re-initializes the policy head in place (fresh initialization of the same structure, from `seed`); the
+    encoder and the value head keep their weights. The model version does not change (same structure)."""
+    torch.manual_seed(seed)
+    fresh = PlayNet(net.config)
+    for name in POLICY_HEAD:
+        getattr(net, name).load_state_dict(getattr(fresh, name).state_dict())
+    return net
+
+
 class Critic(nn.Module):
     """Training-only asymmetric value (PerfectDou PTIE). Reads the hidden cards on its own path; never exported.
     PLACEHOLDER inputs: the shared pooled observation, detached so no hidden-information gradient reaches the shared
