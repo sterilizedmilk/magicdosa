@@ -1273,7 +1273,7 @@ public class AgentPlayerController extends ObservedAiController {
         if (checkingCosts || max == 0) {
             return new CardCollection(grave.subList(0, max)); // castability checks assume the largest reduction
         }
-        int min = Math.max(0, Math.min(max, genericAmount - player.getManaPool().totalMana()));
+        int min = delveMinimum(player, player.getPaidForSA(), genericAmount, max);
         List<Card> cards = toList(grave);
         List<Candidate> candidates = new ArrayList<>();
         cards.forEach(c -> candidates.add(Candidate.newBuilder().setCardId(session.ids().idOf(c)).build()));
@@ -1286,6 +1286,37 @@ public class AgentPlayerController extends ObservedAiController {
         CardCollection out = new CardCollection();
         chosen.forEach(i -> out.add(cards.get(i)));
         return out;
+    }
+
+    /**
+     * The fewest graveyard cards to exile for delve so that the pool pays the rest of the cost: the smallest n for which
+     * the spell's colored shards plus {@code genericAmount - n} generic can be paid with pool mana (restrictions and
+     * Phyrexian life as the payment checks them). Counting the pool's total mana against the generic part alone
+     * offered too few (diag-gen2c n0 d3u0-33-g2 D71-D76: Murktide Regent {5}{U}{U}, pool R U U, offered 2..5 where only
+     * 4 or 5 can be paid, refused three times and an unintended fallback). {@code max} when nothing smaller pays (the
+     * castability check assumed the largest reduction).
+     */
+    public static int delveMinimum(Player player, SpellAbility sa, int genericAmount, int max) {
+        if (sa == null || sa.getPayCosts() == null || sa.getPayCosts().getTotalMana() == null) {
+            return Math.max(0, Math.min(max, genericAmount - player.getManaPool().totalMana()));
+        }
+        ManaCostBeingPaid base = new ManaCostBeingPaid(sa.getPayCosts().getTotalMana());
+        // the generic part as Forge has it now (after cost changes), the colored shards as printed
+        int now = base.getGenericManaAmount();
+        if (genericAmount > now) {
+            base.increaseGenericMana(genericAmount - now);
+        } else if (genericAmount < now) {
+            base.decreaseGenericMana(now - genericAmount);
+        }
+        int life = ManaPayments.lifeBudget(player, sa, false);
+        for (int n = 0; n < max; n++) {
+            ManaCostBeingPaid rest = new ManaCostBeingPaid(base);
+            rest.decreaseGenericMana(n);
+            if (ManaPayments.payable(player, rest, sa, List.of(), life)) {
+                return n;
+            }
+        }
+        return max;
     }
 
     // ---- choices while casting: X, modes, optional and alternative costs, mana colors ----
