@@ -235,7 +235,7 @@ least, the same inputs give the same search).
 - Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
   `search_skip_reason`, `search_root_value` NaN, empty per-candidate lists, no tree reuse and `kill_check` 0.
 
-## Gumbel search (2026-11-28 user directive "Gumbel v2", protocol 18)
+## Gumbel search (2026-11-28 user directive "Gumbel v2", protocols 18 and 19)
 
 Danihelka et al., "Policy improvement by planning with Gumbel" (ICLR 2022). The default algorithm; UCB1 stays as the
 comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
@@ -261,7 +261,8 @@ comparison switch `-Dmagicdosa.search.algorithm=ucb1`.
 - **Tree reuse** is off in Gumbel mode: an inherited root would carry visits the halving schedule did not give, so the
   rounds would no longer split the budget as defined. `SearchRun.tree_reuse` records false. Reuse stays with UCB1.
 - **Recorded** (protocol 18): `SearchRun.algorithm` (UCB1 / Gumbel), `gumbel_noise`, `gumbel_k`, `c_visit`,
-  `c_scale`, `q_normalize` (false in the runs made before it, which had no stretch); shard schema 3 columns `search_algorithm`, `search_gumbel_noise` (older shards: UCB1 where search ran).
+  `c_scale`; protocol 19 adds `q_normalize` and marks v_mix completion (protocol 18 runs completed with the root value
+  and had no stretch); shard schema 3 columns `search_algorithm`, `search_gumbel_noise` (older shards: UCB1 where search ran).
 
 **Measurement** (2026-11-28, before Gumbel v2's v_mix and normalization; the 117-root set of docs/search-quality-2026-11.md: the first game of each
 `gate3-step3-gen2` unit, 30 decisions each, gen2-c leaf, `SearchReplay -Dfollow=true`, reproducible; 114 roots are
