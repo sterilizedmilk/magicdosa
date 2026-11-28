@@ -1,6 +1,7 @@
 #!/bin/bash
 # New gate 1 with Gumbel search (2026-11-28 coordinator request; user rule: no game runs before 2026-11-29 02:00).
-# Waits until 02:00 and until diag-at.sh and checks-at.sh are done (one game workload at a time), then:
+# Waits until 02:00, until diag-at.sh is done and until checks-at.sh logged PASS for the build named in
+# chain/gate-build.txt (it stops and logs why on FAIL, or when that build lacks the per-side HeadToHead), then:
 #   1. gate1-gumbel-vs-greedy: B = 1x Gumbel search (protocol 18 defaults: gumbelNoise off, logits 0, tree reuse off),
 #      A = one-ply value greedy as diag 3 (ucb1, 1 simulation per root candidate, widening off, tree reuse off); gen3-d
 #      leaf on both sides, Izzet mirror, seats alternating, reproducible, shards on; 5 units x 40 matches, seeds
@@ -10,26 +11,35 @@
 #      (same-state 1x/4x agreement, ms per searched decision): E:/magicdosa-runs/gumbel-replay-{g1,g4,u1}.txt.
 #   After 1 and 2: eval summary, gate_stats (root top-visit share, ms per searched decision), BehaviorMetrics
 #   (metrics/<run>.md) and 3 LogText samples (log-samples/<run>/).
-# Build: chain/builds-gate/7516c31h = frozen 7516c31 (protocol 18, encoder 5) with the per-side HeadToHead (1a786e7).
+# Build: chain/builds/<chain/gate-build.txt>, the coordinator's frozen merge (Gumbel v_mix + Q normalization, the
+# library-identity fix, the per-side HeadToHead 1a786e7); written when the hash is known.
 # Cancel: create chain/GATE-STOP (or chain/DIAG-STOP), or kill the bash process running chain/gate-at.sh.
 C=/e/magicdosa-runs/chain
 RUNS=/e/magicdosa-runs
 DECKS=E:/workspace/magicdosa/.claude/worktrees/phase3-search-b28914/decks
 FORGE_GUI=E:/workspace/magicdosa/forge/forge-gui
 JAVA=/e/jdk/jdk17/bin/java
-BUILD=$C/builds-gate/7516c31h
 G3=E:/magicdosa-runs/gen3/d/gen3-d.onnx
 TAB=$(printf '\t')
 log() { echo "$(date '+%F %T') $*" >> $C/diag.log; }
 stop() { [ -f $C/GATE-STOP ] || [ -f $C/DIAG-STOP ]; }
-CP=$(cat $C/cp-template.txt); CP=${CP//__CLASSES__/$(cygpath -w $BUILD)}
-
-log "gate-at: waiting for 2026-11-29 02:00, diag-at and checks-at (pid $$)"
+log "gate-at: waiting for 2026-11-29 02:00, diag-at and a checks-at verdict (pid $$)"
 until [ "$(date +%Y%m%d%H%M)" -ge 202611290200 ] && grep -q "diag-at: \(done\|stopped\|cancelled\)" $C/diag.log \
-    && grep -q "checks-at: \(done\|stopped\|cancelled\)" $C/diag.log; do
+    && grep -q "checks-at: \(PASS\|FAIL\|stopped\|cancelled\)" $C/diag.log; do
   stop && { log "gate-at: cancelled while waiting"; exit 0; }
   sleep 60
 done
+V=$(grep "checks-at: \(PASS\|FAIL\|stopped\|cancelled\)" $C/diag.log | tail -1)
+B=$(echo "$V" | sed -n 's/.*checks-at: PASS \([0-9a-f]*\).*/\1/p')
+if [ -z "$B" ] || [ "$B" != "$(head -1 $C/gate-build.txt | tr -d '\r ')" ]; then
+  log "gate-at: stopped, no gate: the checks did not pass on the build in chain/gate-build.txt ($V)"; exit 0
+fi
+BUILD=$C/builds/$B
+if ! grep -aq "magicdosa.side" $BUILD/runner/forge/target/test-classes/magicdosa/runner/forge/harness/HeadToHead.class; then
+  log "gate-at: stopped, no gate: build $B has no per-side HeadToHead (1a786e7 not merged)"; exit 0
+fi
+CP=$(cat $C/cp-template.txt); CP=${CP//__CLASSES__/$(cygpath -w $BUILD)}
+log "gate-at: checks passed on $B, starting the gates"
 
 run_unit() {
   local out=$1 seed=$2 matches=$3 prefix=$4; shift 4
@@ -47,7 +57,7 @@ gate_run() {
   local dir=$1 seed=$2 matches=$3 prefix=$4 label=$5 notes=$6 name try i started; shift 6
   name=$(basename $dir)
   mkdir -p $dir
-  [ -f $dir/seeds.txt ] || echo "seeds $seed-$((seed+400+matches-1)) (bases $seed+100*i, i 0-4, matches 0-$((matches-1))); $notes; leaf $G3 $(sha256sum "$(cygpath -u $G3)" | cut -c1-16); build 7516c31h ($(cat $BUILD/commit.txt))" > $dir/seeds.txt
+  [ -f $dir/seeds.txt ] || echo "seeds $seed-$((seed+400+matches-1)) (bases $seed+100*i, i 0-4, matches 0-$((matches-1))); $notes; leaf $G3 $(sha256sum "$(cygpath -u $G3)" | cut -c1-16); build $B" > $dir/seeds.txt
   for try in 1 2 3; do
     started=0
     for i in 0 1 2 3 4; do
