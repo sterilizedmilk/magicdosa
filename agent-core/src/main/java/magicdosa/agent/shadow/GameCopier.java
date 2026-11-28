@@ -378,14 +378,8 @@ public class GameCopier {
                 continue;
             }
             boolean allSideboard = zone == ZoneType.Sideboard && sideboardRead(origGame);
-            java.util.Set<Card> effectSources = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-            if (zone == ZoneType.Sideboard && !allSideboard) {
-                for (StaticEffect e : origGame.getStaticEffects().getEffects()) {
-                    effectSources.add(e.getSource());
-                }
-            }
             for (Card card : origGame.getCardsIn(zone)) {
-                if (zone == ZoneType.Sideboard && !allSideboard && !effectSources.contains(card) && !actsFromSideboard(card)) {
+                if (zone == ZoneType.Sideboard && !allSideboard && !actsFromSideboard(card)) {
                     sideboardLeftOut++;
                     continue;
                 }
@@ -510,22 +504,19 @@ public class GameCopier {
     /**
      * Whether a sideboard card does anything from the sideboard, so the copy needs it: a static ability, trigger or
      * replacement that works there ("EffectZone$ All": devoid's colour, Thief of Existence), an ability that may be
-     * used from there, a companion, or (checked by the caller) the source of a static effect now in force. Any other
-     * sideboard card is never looked at by the rules or Forge AI while no card reads the sideboard
-     * ({@link #sideboardRead}), and none of our code tracks the zone (entity IDs, observations), so leaving it out
-     * changes nothing a copy plays. Nothing changes a card in the sideboard, so the answer is its script's: cached by
-     * card name.
+     * used from there, a companion, or the source of a static effect now in force. Any other sideboard card is never
+     * looked at by the rules or Forge AI while no card reads the sideboard ({@link #sideboardRead}), and none of our
+     * code tracks the zone (entity IDs, observations), so leaving it out changes nothing a copy plays.
      */
-    private static boolean actsFromSideboard(Card c) {
+    private boolean actsFromSideboard(Card c) {
         if (c.getPaperCard() == null || c.isToken() || c.isImmutable()) {
             return true;
         }
-        return ACTS_FROM_SIDEBOARD.computeIfAbsent(c.getPaperCard().getName(), n -> scriptActsFromSideboard(c));
-    }
-
-    private static final Map<String, Boolean> ACTS_FROM_SIDEBOARD = new java.util.concurrent.ConcurrentHashMap<>();
-
-    private static boolean scriptActsFromSideboard(Card c) {
+        for (StaticEffect e : origGame.getStaticEffects().getEffects()) {
+            if (e.getSource() == c) {
+                return true;
+            }
+        }
         if (!c.getKeywords(forge.game.keyword.Keyword.COMPANION).isEmpty()) {
             return true;
         }
