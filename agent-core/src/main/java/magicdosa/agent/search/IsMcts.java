@@ -385,17 +385,22 @@ public final class IsMcts {
             if (!unvisited.isEmpty()) {
                 return unvisited.get(rng.nextInt(unvisited.size()));
             }
-            int best = -1;
+            List<Integer> best = new ArrayList<>();
             double bestScore = Double.NEGATIVE_INFINITY;
             for (int i : allowed) {
                 Edge e = node.edges.get(actions.get(i));
                 double score = e.reward / e.visits + config.exploration() * Math.sqrt(Math.log(e.available) / e.visits);
-                if (score > bestScore) { // ties: the first in candidate order
+                if (score > bestScore) {
                     bestScore = score;
-                    best = i;
+                    best.clear();
+                    best.add(i);
+                } else if (score == bestScore) {
+                    best.add(i);
                 }
             }
-            return best;
+            // exact ties: a pick drawn from the simulation's seeded random, never the first in candidate order (which
+            // favoured candidate 0, pass at priority; 2026-11-28 user directive)
+            return best.size() == 1 ? best.get(0) : best.get(rng.nextInt(best.size()));
         }
 
         private List<Integer> widened(Node node, List<String> actions, List<Integer> avail) {

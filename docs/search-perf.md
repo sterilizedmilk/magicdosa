@@ -199,3 +199,33 @@ speed, to be switched off later (they weaken play; nothing is to be built on the
 `SearchRun.horizon` / `leaf_evaluation` (protocol 15; the switches are now `next-turn`/`own-turn` and
 `forge-static`/`forge-combat`). The network leaf stays off. With the new defaults the two games' 149 searches equal
 the "Both" row's (same visits and root values).
+
+## Horizon valued at the turn boundary (2026-11-28 directive, option 2; protocol 17)
+
+Before: a walk that reached the next-turn horizon inside the tree played on to the new turn's first request, built its
+legal actions and observation, and ran the network on it (protocol 16). Now (`-Dmagicdosa.search.boundary=on`, the
+default) the boundary is valued at once: the session's existing `reask` builds the observation of the seat asked first
+in the new turn (the active player), in the header the first request would have (PRIORITY, upkeep, priority with the
+active player, one of one) with a single pass candidate, and `Evaluator.evaluate` runs; only the value is read. No
+encoder or model change. `first-request` is the protocol-16 way, `measure` does it and also computes the boundary value
+for comparison. Recorded as `LEAF_EVALUATION_NETWORK_BOUNDARY` (protocol 17). `-Dmagicdosa.search.boundaryView=root`
+(measurement only) takes the root seat's observation instead.
+
+Root set as "Copy cost" (52 searches, gen2-c leaf, follow, reproducible), main = this branch with
+`treeReuse=false boundary=first-request` (its searches are main's). 1x: two alternating runs each; 4x: one run each.
+The machine ran a 15-JVM chain.
+
+| | 1x main | 1x boundary | 4x main | 4x boundary |
+| --- | --- | --- | --- | --- |
+| ms per simulation (`search.simulation`) | 28.7 | 21.9 (-24%) | 25.0 | 18.8 (-25%) |
+| ms per decision | 1183 | 974 (-18%) | 4119 | 3363 (-18%) |
+| Answers that differ from main | - | 8 of 52 | - | 14 of 52 |
+| With tree reuse too (the new defaults): ms per decision | | 777 (-34%) | | 2591 (-37%) |
+| ... answers that differ from main | | 16 of 52 | | 16 of 52 |
+
+At 1x, 581 of 1644 simulations reach the horizon in the tree; a boundary value costs 2.4 ms (the observation and one
+network run).
+
+**Boundary value against the first request's value on the same states** (`measure`, 1x, 583 horizons): mean absolute
+difference 0.081 with the active player's observation (the default), 0.122 with the root seat's. `measure` prints the
+same 52 searches as `first-request`. Values are P(win) in [0, 1] for the root seat.

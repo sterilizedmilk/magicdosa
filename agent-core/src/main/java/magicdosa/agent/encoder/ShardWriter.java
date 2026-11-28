@@ -56,7 +56,7 @@ public final class ShardWriter {
     private static final ArrowType F32 = new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
 
     private static final List<String> INT_COLS = List.of("game_number", "seat", "acting_seat", "decision_type", "step",
-        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "chosen",
+        "steps", "bundle_step", "decider", "prior", "search_skip_reason", "search_rollout", "search_horizon", "search_leaf_evaluation", "search_status", "search_tree_reuse", "kill_check", "kill_check_approximate", "chosen",
         "end_reason", "turns", "oov");
     private static final List<String> FLOAT_LISTS = List.of("global", "token_feat", "cand_feat", "visit_ratio", "cand_q",
         "cand_prior");
@@ -66,7 +66,8 @@ public final class ShardWriter {
 
     /**
      * Shard layout version (schema metadata {@code shard_schema_version}; Python's versions.SHARD_SCHEMA_VERSION). 2
-     * (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior. A shard without it is 1.
+     * (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior, search_tree_reuse,
+     * search_inherited_visits, kill_check, kill_check_approximate. A shard without it is 1.
      */
     public static final int SHARD_SCHEMA_VERSION = 2;
 
@@ -261,12 +262,16 @@ public final class ShardWriter {
         r.put("search_rollout", step.getMethod().hasRan() ? step.getMethod().getRan().getRolloutValue() : 0);
         r.put("search_horizon", step.getMethod().hasRan() ? step.getMethod().getRan().getHorizonValue() : 0);
         r.put("search_leaf_evaluation", step.getMethod().hasRan() ? step.getMethod().getRan().getLeafEvaluationValue() : 0);
+        r.put("search_tree_reuse", step.getMethod().hasRan() && step.getMethod().getRan().getTreeReuse() ? 1 : 0);
+        r.put("search_inherited_visits", step.getMethod().hasRan() ? step.getMethod().getRan().getInheritedVisits() : 0L);
         r.put("search_nodes", step.getMethod().hasRan() ? step.getMethod().getRan().getNodes() : 0L);
         r.put("search_budget", step.getMethod().hasRan() ? step.getMethod().getRan().getBudget() : 0L);
         r.put("search_seed", step.getMethod().hasRan() ? step.getMethod().getRan().getSeed() : 0L);
         r.put("chosen", step.getChosen());
         r.put("visit_ratio", toList(step.getVisitRatioList()));
         r.put("search_status", searchStatus(step));
+        r.put("kill_check", d.response().getKillCheckValue());    // per decision: the same on every step of it
+        r.put("kill_check_approximate", d.response().getKillCheckApproximate() ? 1 : 0);
         r.put("search_root_value", step.getMethod().hasRan() ? step.getMethod().getRan().getRootEstimate() : Float.NaN);
         // per candidate of the step (parallel to visit_ratio): N, Q and the prior logit, NaN where missing
         List<Integer> visits = new ArrayList<>();
@@ -370,6 +375,7 @@ public final class ShardWriter {
         fields.add(new Field("match_id", FieldType.notNullable(ArrowType.Utf8.INSTANCE), null));
         fields.add(new Field("decision_id", FieldType.notNullable(I64), null));
         fields.add(new Field("bundle_id", FieldType.notNullable(I64), null));
+        fields.add(new Field("search_inherited_visits", FieldType.notNullable(I64), null));
         fields.add(new Field("search_nodes", FieldType.notNullable(I64), null));
         fields.add(new Field("search_budget", FieldType.notNullable(I64), null));
         fields.add(new Field("search_seed", FieldType.notNullable(I64), null));
@@ -397,6 +403,7 @@ public final class ShardWriter {
                 ((VarCharVector) root.getVector("match_id")).setSafe(i, ((String) r.get("match_id")).getBytes(StandardCharsets.UTF_8));
                 ((BigIntVector) root.getVector("decision_id")).setSafe(i, (Long) r.get("decision_id"));
                 ((BigIntVector) root.getVector("bundle_id")).setSafe(i, (Long) r.get("bundle_id"));
+                ((BigIntVector) root.getVector("search_inherited_visits")).setSafe(i, (Long) r.get("search_inherited_visits"));
                 ((BigIntVector) root.getVector("search_nodes")).setSafe(i, (Long) r.get("search_nodes"));
                 ((BigIntVector) root.getVector("search_budget")).setSafe(i, (Long) r.get("search_budget"));
                 ((BigIntVector) root.getVector("search_seed")).setSafe(i, (Long) r.get("search_seed"));

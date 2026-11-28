@@ -60,6 +60,9 @@ def read_shard(path: Path | str, protocols: Optional[Sequence[int]] = None) -> p
 # search_status values (agent-core ShardWriter.STATUS_*): no search decision on the step, search ran (every step of a
 # multi-step search), skipped for a cause (search_skip_reason), aborted by the wall-clock safety net (shadow stopped).
 STATUS_NONE, STATUS_COMPLETED, STATUS_SKIPPED, STATUS_ABORTED = 0, 1, 2, 3
+# kill_check values (protocol KillCheckOutcome), from the deciding seat's view: not checked, checked with no confirmed
+# kill or death, attacking with everything is a confirmed kill, the attack is lethal whatever is blocked
+KILL_CHECK_NOT_CHECKED, KILL_CHECK_NONE, KILL_CHECK_KILL, KILL_CHECK_DEATH = 0, 1, 2, 3
 SKIP_REASON_SHADOW_STOPPED = 6
 
 
@@ -73,7 +76,7 @@ def search_status(table: pa.Table) -> np.ndarray:
 
 def with_schema2_columns(table: pa.Table) -> pa.Table:
     """The table with the shard-schema-2 columns: an older shard gets search_status derived from its method columns,
-    search_root_value NaN and empty per-candidate lists (no N, Q or prior was recorded then)."""
+    search_root_value NaN, no tree reuse and empty per-candidate lists (no N, Q or prior was recorded then)."""
     n = table.num_rows
     if "search_status" not in table.column_names:
         table = table.append_column(pa.field("search_status", pa.int32(), nullable=False),
@@ -81,6 +84,10 @@ def with_schema2_columns(table: pa.Table) -> pa.Table:
     if "search_root_value" not in table.column_names:
         table = table.append_column(pa.field("search_root_value", pa.float32(), nullable=False),
                                     pa.array(np.full(n, np.nan, dtype=np.float32)))
+    for name, kind in (("search_tree_reuse", pa.int32()), ("search_inherited_visits", pa.int64()),
+                       ("kill_check", pa.int32()), ("kill_check_approximate", pa.int32())):
+        if name not in table.column_names:   # no tree reuse and no kill-check verdict recorded before protocol 17
+            table = table.append_column(pa.field(name, kind, nullable=False), pa.array(np.zeros(n), type=kind))
     for name, kind in (("cand_visits", pa.int32()), ("cand_q", pa.float32()), ("cand_prior", pa.float32())):
         if name not in table.column_names:
             table = table.append_column(name, pa.array([[] for _ in range(n)], type=pa.list_(kind)))

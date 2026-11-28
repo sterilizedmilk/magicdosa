@@ -45,6 +45,7 @@ public final class SearchReplay {
             System.out.printf("total %.1f s, gc %d ms%n", (System.nanoTime() - t0) / 1e9, gcMillis() - gc0);
             System.out.println(LiveShadow.totals());
             System.out.println(Timing.line());
+            System.out.println(magicdosa.agent.search.ForgeSearchGame.boundaryDiff());
         } catch (Throwable t) {
             t.printStackTrace();
             code = 1;

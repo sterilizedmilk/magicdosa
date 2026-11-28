@@ -200,6 +200,19 @@ message DecisionResponse {
   // One step per pick; a single-pick decision has one step. Kept in the log from the start, because visit ratios
   // exist only at play time (design: 학습 전략과 보상 "프로토타입 우선"). Each step is one Arrow sample.
   repeated DecisionStep steps = 4;
+  // protocol 17 (2026-11-28): the confirmed-kill checker's verdict on this decision from the deciding seat's view,
+  // wherever it runs (attack and block declarations); measurement only, the answer does not read it
+  KillCheckOutcome kill_check = 5;
+  bool kill_check_approximate = 6;  // the verdict leaves factors out (menace, combat triggers, ...)
+}
+
+enum KillCheckOutcome {
+  KILL_CHECK_OUTCOME_UNSPECIFIED = 0; // not checked (not a combat declaration, or the check failed)
+  KILL_CHECK_OUTCOME_NONE = 1;        // checked: no confirmed kill or death
+  // Attack declaration: attacking with every possible attacker is lethal against the defender's best blocks.
+  KILL_CHECK_OUTCOME_KILL = 2;
+  // Block declaration: the attack is lethal whatever the deciding seat blocks.
+  KILL_CHECK_OUTCOME_DEATH = 3;
 }
 
 // One pick of a (possibly multi-select) decision. Order is free; search merges branches that reach the same set
@@ -280,6 +293,10 @@ message SearchRun {
   // protocol 17: the value estimate of the root position for the root seat, in [0, 1]: the leaf network's value of the
   // root request when a leaf model is loaded, else root_value (the visit-weighted mean)
   float root_estimate = 13;
+  // protocol 17: the search started from the previous search's subtree (tree reuse), and the root visits it took over
+  // from there; the root's visit counts (the policy target) include them
+  bool tree_reuse = 14;
+  uint64 inherited_visits = 15;
 }
 
 // Where a simulation stops when the game has not ended. NEXT_TURN is a temporary default for speed (2026-11-26 user
@@ -306,6 +323,10 @@ enum LeafEvaluation {
   // the first request asked there). Protocol 15 runs with a leaf model recorded FORGE_STATIC: their horizon leaves had
   // Forge's static score.
   LEAF_EVALUATION_NETWORK = 3;
+  // protocol 17 (2026-11-28 directive, option 2): as NETWORK at the tree exit, but the horizon is valued at the turn
+  // boundary itself, from the observation of the seat asked first in the new turn (in a priority-at-upkeep header with
+  // one placeholder candidate), without playing on to that request or building its legal actions.
+  LEAF_EVALUATION_NETWORK_BOUNDARY = 4;
 }
 
 // The rollout policy of a search (2026-11-26 user decision): plain Forge AI is a temporary early-stage choice (phase 3

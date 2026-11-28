@@ -140,8 +140,8 @@ class SearchScenarioTest {
     }
 
     /**
-     * With a leaf network, a walk that reaches the horizon inside the tree is valued by the network at the first
-     * request there, never by Forge's score (2026-11-28 user decision, protocol 16), and the run records it.
+     * With a leaf network, a walk that reaches the horizon inside the tree is valued by the network, never by Forge's
+     * score (2026-11-28 user decision, protocol 16): since protocol 17 at the turn boundary itself, and the run records it.
      */
     @Test
     void theHorizonIsValuedByTheLeafNetwork() throws Exception {
@@ -167,10 +167,12 @@ class SearchScenarioTest {
             ShadowGame.Result r = s.play(2);
             LiveShadow.Stats st = s.stats;
             String why = st.line() + " samples: " + r.samples;
-            assertTrue(st.search.getOrDefault("horizon: network", 0) > 0, why);
+            // protocol 17 default: the turn boundary itself is valued (no request with candidates is played on to)
+            assertTrue(st.search.getOrDefault("horizon: boundary value", 0) > 0, why);
+            assertEquals(0, st.search.getOrDefault("horizon: network", 0), why);
             assertEquals(0, st.search.getOrDefault("horizon", 0), why);
             assertTrue(calls.get() > 0, why);
-            assertEquals(magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK,
+            assertEquals(magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK_BOUNDARY,
                 magicdosa.agent.search.SearchResult.recordedLeafEvaluation(s.search), why);
         } finally {
             magicdosa.agent.model.LeafNetwork.use(null, "");

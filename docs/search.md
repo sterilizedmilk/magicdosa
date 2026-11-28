@@ -161,14 +161,14 @@ board size: at most about 1.9 s for 18 attackers, no blowup.
 21 searches, 126 simulations, 126 backed up, 145 tree nodes, every simulation reached the horizon, every shadow
 decision matched. No games or gates were run (the phase-2 final gate held the machine).
 
-## Tree reuse (2026-11-28 directive, `-Dmagicdosa.search.treeReuse`, off by default)
+## Tree reuse (2026-11-28 directive, `-Dmagicdosa.search.treeReuse`, on by default since protocol 17)
 
 The next search of a seat can start from the subtree of its previous tree that holds the next real decision, instead
 of a fresh tree.
 
-- **Modes:** `false` (default: fresh trees, nothing computed for reuse; searches identical to before), `measure` (fresh
+- **Modes:** `false` (fresh trees, nothing computed for reuse; searches identical to before), `measure` (fresh
   trees keyed as before, the canonical keys kept beside them to count hits; searches identical to `false`), `true`
-  (reuse).
+  (reuse, the default since 2026-11-28 user decision).
 - **Finding the node:** the tree's information keys are hashes of a copy session's request, whose entity IDs a copy
   numbers from 1 at the search root; the real session numbers them over the whole game. `CanonicalKey` replaces every
   entity ID (fields `id`, `ids`, `*_id`, `*_ids`) by the object's place in an order of the objects' contents (game
@@ -187,8 +187,9 @@ of a fresh tree.
   at least one per root action. `SearchResult.inheritedVisits` / `inheritedNodes` and the debug line
   (`inherited=visits/nodes`, `reuse=found(...)`) report it.
 - **Policy target:** with reuse the root visit counts (the ExIt target in the shards) include the inherited visits,
-  which were grown under the previous root. `SearchRun` does not record reuse yet (needs a protocol field: asked, not
-  added); keep reuse off for data runs until it does.
+  which were grown under the previous root. Protocol 17 records it: `SearchRun.tree_reuse` and
+  `SearchRun.inherited_visits` (shard columns `search_tree_reuse`, `search_inherited_visits`; the Python reader fills
+  both with 0 for protocol 15 and 16 shards).
 
 **Measurement** (same root set as docs/search-perf.md "Copy cost": `gate3-step3-gen2` `n00-g1` + `n10-g1`, first 30
 agent decisions each, 52 searches, gen2-c network leaf, `-Dfollow=true` so every setting searches the same roots and
@@ -225,5 +226,11 @@ least, the same inputs give the same search).
   `cand_prior` (lists parallel to `visit_ratio`, NaN where missing), `search_root_value` (NaN without search),
   `search_status` (0 no search decision, 1 completed: search ran, every step of it; 2 skipped: `search_skip_reason`
   says why; 3 aborted: the wall-clock safety net stopped the shadow, `SEARCH_SKIP_REASON_SHADOW_STOPPED`). `chosen` is
-  unchanged. Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
-  `search_skip_reason`, `search_root_value` NaN and empty per-candidate lists.
+  unchanged.
+- **Kill check per decision:** `DecisionResponse.kill_check` (`KillCheckOutcome`, from the deciding seat's view: 0 not
+  checked, 1 none, 2 confirmed kill: attacking with everything is lethal against the best blocks, 3 confirmed death:
+  the attack is lethal whatever is blocked) and `kill_check_approximate`, wherever the checker runs (attack and block
+  declarations, after the answer; measurement only). Shard columns `kill_check`, `kill_check_approximate`, the same on
+  every step of the decision.
+- Python reads protocol 15 and 16 shards (schema 1) with `search_status` derived from `search_ran` and
+  `search_skip_reason`, `search_root_value` NaN, empty per-candidate lists, no tree reuse and `kill_check` 0.

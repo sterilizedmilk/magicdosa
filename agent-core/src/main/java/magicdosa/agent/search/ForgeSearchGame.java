@@ -184,6 +184,56 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
 
     /** Scale of the score difference in the leaf value's logistic (property magicdosa.search.evalScale). */
     static final double EVAL_SCALE = Double.parseDouble(System.getProperty("magicdosa.search.evalScale", "400"));
+    /**
+     * How the network values the horizon (2026-11-28 directive, option 2): {@code on} (default) values the turn boundary
+     * at once, from the observation alone ({@link #boundaryValue}); {@code first-request} plays on to the new turn's
+     * first request and values it with its legal actions (protocol 16's way); {@code measure} does the latter and also
+     * computes the boundary value, to compare the two ({@link #boundaryDiff}). Property magicdosa.search.boundary.
+     */
+    enum Boundary { ON, FIRST_REQUEST, MEASURE }
+
+    static final Boundary BOUNDARY = switch (System.getProperty("magicdosa.search.boundary", "on")) {
+        case "on", "true" -> Boundary.ON;
+        case "first-request", "false" -> Boundary.FIRST_REQUEST;
+        case "measure" -> Boundary.MEASURE;
+        default -> throw new IllegalArgumentException("magicdosa.search.boundary: on, first-request or measure");
+    };
+    /** Whose request the boundary value is: the active player's (who is asked first in the new turn) or the root seat's. */
+    static final boolean BOUNDARY_ROOT_VIEW = "root".equals(System.getProperty("magicdosa.search.boundaryView", "active"));
+    private static final java.util.concurrent.atomic.DoubleAdder BOUNDARY_DIFF = new java.util.concurrent.atomic.DoubleAdder();
+    private static final java.util.concurrent.atomic.LongAdder BOUNDARY_N = new java.util.concurrent.atomic.LongAdder();
+
+    /** Measurement ({@link Boundary#MEASURE}): simulations compared and the mean absolute difference, boundary - first request. */
+    public static String boundaryDiff() {
+        long n = BOUNDARY_N.sum();
+        return "boundary value vs first request: n=" + n + " meanAbsDiff=" + (n == 0 ? "-" : String.format("%.4f", BOUNDARY_DIFF.sum() / n));
+    }
+
+    /**
+     * The value at the turn boundary for the root seat, without the new turn's legal actions: the observation of the
+     * seat that is asked first in the new turn (the active player; {@link #BOUNDARY_ROOT_VIEW}: the root seat), in the
+     * header the first request would have (priority in the upkeep, held by the active player, one of one), with a single
+     * pass candidate the network's policy output is not read for. Only the value head is used; the encoder and the model
+     * are the ones every request goes through ({@code ForgeGameSession.reask}, {@code Evaluator.evaluate}).
+     */
+    private double boundaryValue(ForgeGameSession s, Game copy) {
+        long t = magicdosa.agent.Timing.start(); // measurement only
+        int active = copy.getRegisteredPlayers().indexOf(copy.getPhaseHandler().getPlayerTurn());
+        int seat = BOUNDARY_ROOT_VIEW ? rootSeat : active;
+        DecisionRequest header = DecisionRequest.newBuilder().setGameId(root.getGameId()).setSeat(seat)
+            .setType(DecisionType.DECISION_TYPE_PRIORITY)
+            .setConstraints(SelectionConstraints.newBuilder().setMin(1).setMax(1))
+            .addCandidates(Candidate.newBuilder().setPass(magicdosa.protocol.v1.PassCandidate.getDefaultInstance()))
+            .build();
+        DecisionRequest r = s.reask(header);
+        magicdosa.protocol.v1.Observation.Builder o = r.getObservation().toBuilder();
+        o.getGameBuilder().setStep(magicdosa.protocol.v1.Step.STEP_UPKEEP).setPrioritySeat(active);
+        r = r.toBuilder().setObservation(o).build();
+        double v = leafNetwork.evaluate(r, List.of(0), List.of()).value();
+        magicdosa.agent.Timing.addHistogram("search.boundaryValue", t);
+        return seat == rootSeat ? v : 1 - v;
+    }
+
     /** Safeguard against a copy that never reaches the horizon (loop steps, never time). */
     static final int MAX_LOOP_STEPS = Integer.getInteger("magicdosa.search.maxLoopSteps", 20_000);
 
@@ -547,6 +597,15 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
                         count("horizon");
                         break; // the start of the root seat's next turn (3단계 기획 쟁점 4)
                     }
+                    if (!client.valueNext && BOUNDARY != Boundary.FIRST_REQUEST) {
+                        double vb = boundaryValue(s, copy);
+                        if (BOUNDARY == Boundary.ON) {
+                            client.leafValue = vb;
+                            count("horizon: boundary value");
+                            break;
+                        }
+                        client.boundaryValue = vb; // measure: compared with the first request's value below
+                    }
                     if (!client.valueNext) {
                         // 2026-11-28 user decision (one evaluator for every leaf): with a leaf network the horizon is
                         // valued by it too, at the first request asked there, never by Forge's score
@@ -577,6 +636,10 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
             }
             if (client.leafValue != null) {
                 count("leaf: network");
+                if (client.boundaryValue != null) {
+                    BOUNDARY_DIFF.add(Math.abs(client.boundaryValue - client.leafValue));
+                    BOUNDARY_N.increment();
+                }
                 return client.leafValue;
             }
             long tv = magicdosa.agent.Timing.start();
@@ -658,6 +721,8 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
         final List<String> path = new ArrayList<>();
         /** {@link #LEAF_PLAYOUT}: the boundary is passed, the network values the next request with candidates. */
         boolean valueNext;
+        /** {@link #BOUNDARY} measure: the boundary value of this simulation's horizon, for the root seat. */
+        Double boundaryValue;
         /** {@link #DEPTH_STATS}: tree steps chosen, requests after the root, and the copy's turn and phase at the root. */
         int treeSteps;
         int requests;

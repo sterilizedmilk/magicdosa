@@ -31,6 +31,8 @@ public final class SearchResult {
     /** Tree reuse: root visits and nodes taken over from the previous search's tree (0 for a fresh tree). */
     public final long inheritedVisits;
     public final long inheritedNodes;
+    /** Tree reuse was on for this search (its root may still be fresh: nothing to inherit). */
+    public final boolean treeReuse;
     /** Value of the root seat's position, the visit-weighted mean reward; NaN when nothing was backed up. */
     public final double rootValue;
     private final long[] visits;
@@ -89,6 +91,7 @@ public final class SearchResult {
         this.nodes = b.nodes;
         this.inheritedVisits = b.inheritedVisits;
         this.inheritedNodes = b.inheritedNodes;
+        this.treeReuse = TreeReuse.MODE == TreeReuse.Mode.ON;
         this.rootValue = rootValue;
         this.visits = visits.clone();
         this.problems = Collections.unmodifiableMap(new TreeMap<>(b.problems));
@@ -175,16 +178,19 @@ public final class SearchResult {
             .setHorizon(config.horizon()).setLeafEvaluation(recordedLeafEvaluation(config))
             .setLeafModel(magicdosa.agent.model.LeafNetwork.fileName())
             .setLeafModelSha256(magicdosa.agent.model.LeafNetwork.sha256())
-            .setRootEstimate((float) rootEstimate())).build();
+            .setRootEstimate((float) rootEstimate())
+            .setTreeReuse(treeReuse).setInheritedVisits(inheritedVisits)).build();
     }
 
     /**
      * How the run's leaves were valued: by the leaf network whenever one is loaded (protocol 16: at the tree exit and at
-     * the horizon), else by Forge's score as the settings say.
+     * the horizon; protocol 17: the horizon at the turn boundary by default), else by Forge's score as the settings say.
      */
     public static magicdosa.protocol.v1.LeafEvaluation recordedLeafEvaluation(SearchConfig config) {
         return magicdosa.agent.model.LeafNetwork.fileName().isEmpty() ? config.leafEvaluation()
-            : magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK;
+            : ForgeSearchGame.BOUNDARY == ForgeSearchGame.Boundary.ON
+                ? magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK_BOUNDARY
+                : magicdosa.protocol.v1.LeafEvaluation.LEAF_EVALUATION_NETWORK;
     }
 
     @Override

@@ -126,6 +126,49 @@ class IsMctsTest {
         assertTrue(!a.toString().equals(c.toString()), "another seed should give another run");
     }
 
+    /**
+     * 2026-11-28: exact ties in the tree's UCB pick are broken by the seeded random, not by candidate order. Every action
+     * is worth the same, so after each round of visits all scores tie: candidate order gave candidate 0 the extra visit
+     * of every unfinished round (and so the answer); the seeded pick spreads it, and the same seed gives the same search.
+     */
+    @Test
+    void ucbTiesAreBrokenByTheSeedNotByCandidateOrder() {
+        int firstLeads = 0;
+        for (long seed = 1; seed <= 20; seed++) {
+            SearchResult r = new IsMcts(SearchConfig.of(31)).search(new Constant(3), seed);
+            if (r.visits(0) > r.visits(1) && r.visits(0) > r.visits(2)) {
+                firstLeads++;
+            }
+            assertEquals(r.toString(), new IsMcts(SearchConfig.of(31)).search(new Constant(3), seed).toString());
+        }
+        assertTrue(firstLeads < 20, "candidate 0 took the odd visit for every seed");
+    }
+
+    /** One decision of seat 0 whose every action is worth exactly 0.5 (no randomness in the value). */
+    private record Constant(int n) implements SearchGame {
+        @Override
+        public int rootSeat() {
+            return 0;
+        }
+
+        @Override
+        public List<String> rootActions() {
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                out.add("a" + i);
+            }
+            return out;
+        }
+
+        @Override
+        public Simulation determinize(SplittableRandom rng) {
+            return chooser -> {
+                chooser.choose(new Decision(0, "root", rootActions()));
+                return 0.5;
+            };
+        }
+    }
+
     /** 2026-11-25: the budget by root is its actions x simulations per action x the multiplier. */
     @Test
     void theBudgetPerCandidateScalesWithTheRoot() {

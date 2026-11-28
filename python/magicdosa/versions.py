@@ -6,7 +6,8 @@ PROTOCOL_VERSION = 17
 # per-candidate search statistics; read_shard fills their columns for older shards).
 COMPATIBLE_PROTOCOLS = (15, 16)
 # Shard layout (schema metadata shard_schema_version; agent-core ShardWriter.SHARD_SCHEMA_VERSION). A shard without it
-# is 1. 2 (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior.
+# is 1. 2 (protocol 17): search_status, search_root_value, cand_visits, cand_q, cand_prior, search_tree_reuse,
+# search_inherited_visits, kill_check (0 not checked, 1 none, 2 confirmed kill, 3 confirmed death), kill_check_approximate.
 SHARD_SCHEMA_VERSION = 2
 ENCODER_VERSION = 5
 VOCAB_VERSION = 3

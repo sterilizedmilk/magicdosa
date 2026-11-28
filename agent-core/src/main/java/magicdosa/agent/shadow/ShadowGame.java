@@ -220,11 +220,14 @@ public final class ShadowGame {
      * attacking with everything was a confirmed kill and whether the answer kept it; at its block declaration, whether
      * the answer took lethal damage that some blocks would have prevented. Counted in the live stats ("kill: ...").
      */
-    private void judgeCombat(DecisionRequest real, DecisionResponse resp) {
+    private DecisionResponse judgeCombat(DecisionRequest real, DecisionResponse resp) {
         if (live == null || (real.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_DECLARE_ATTACKERS
                 && real.getType() != magicdosa.protocol.v1.DecisionType.DECISION_TYPE_DECLARE_BLOCKERS)) {
-            return;
+            return resp;
         }
+        // protocol 17: the verdict, from the deciding seat's view, recorded on the answer
+        magicdosa.protocol.v1.KillCheckOutcome verdict = magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_UNSPECIFIED;
+        boolean approximate = false;
         Map<String, Integer> out = new java.util.TreeMap<>();
         try {
             int actingSeat = real.hasActingSeat() ? real.getActingSeat() : real.getSeat();
@@ -252,6 +255,9 @@ public final class ShadowGame {
                 magicdosa.agent.search.KillCheck.Outcome all = magicdosa.agent.search.KillCheck.evaluate(possible, opp);
                 int life = opp.getLife();
                 verifyKillCheck(out, "attack", possible, opp, all);
+                verdict = all.lethal(life) ? magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_KILL
+                    : magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_NONE;
+                approximate = all.lethal(life) && all.approximate();
                 if (all.lethal(life)) {
                     out.put("kill: available", 1);
                     if (!magicdosa.agent.search.KillCheck.evaluate(chosen, opp).lethal(life)) {
@@ -264,7 +270,7 @@ public final class ShadowGame {
             } else {
                 forge.game.combat.Combat combat = game.getPhaseHandler().getCombat();
                 if (combat == null) {
-                    return;
+                    return resp;
                 }
                 List<forge.game.card.Card> attackers = new ArrayList<>();
                 for (forge.game.card.Card a : combat.getAttackers()) {
@@ -286,6 +292,9 @@ public final class ShadowGame {
                 magicdosa.agent.search.KillCheck.Outcome best = magicdosa.agent.search.KillCheck.evaluate(attackers, me);
                 int life = me.getLife();
                 verifyKillCheck(out, "block", attackers, me, best);
+                verdict = best.lethal(life) ? magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_DEATH
+                    : magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_NONE;
+                approximate = best.lethal(life) && best.approximate();
                 int took = magicdosa.agent.search.KillCheck.damageWith(attackers, blockOf);
                 if (best.lethal(life)) {
                     out.put("kill: lethal attack unpreventable", 1);
@@ -298,10 +307,13 @@ public final class ShadowGame {
             }
         } catch (RuntimeException e) {
             out.put("kill: check failed: " + e.getClass().getSimpleName(), 1);
+            verdict = magicdosa.protocol.v1.KillCheckOutcome.KILL_CHECK_OUTCOME_UNSPECIFIED;
+            approximate = false;
         }
         if (!out.isEmpty()) {
             live.searched(null, out);
         }
+        return resp.toBuilder().setKillCheck(verdict).setKillCheckApproximate(approximate).build();
     }
 
     /**
@@ -2206,8 +2218,7 @@ public final class ShadowGame {
             }
             out.addSteps(magicdosa.protocol.v1.DecisionStep.newBuilder()
                 .setDecider(magicdosa.protocol.v1.Decider.DECIDER_INTENDED_DELEGATION));
-            DecisionResponse delegatedAnswer = out.build();
-            judgeCombat(real, delegatedAnswer);
+            DecisionResponse delegatedAnswer = judgeCombat(real, out.build());
             live.answer(delegatedAnswer, "shadow Forge AI: " + engineDecision);
             decisionIdx++;
             afterAnswer(real);
@@ -2568,11 +2579,11 @@ public final class ShadowGame {
                 }
                 if (stage != 3) {
                     resp = searched(real);
-                    judgeCombat(real, resp);
+                    resp = judgeCombat(real, resp);
                     live.answer(resp, "search");
                 } else {
                     resp = live.withoutShadow(real, "search skipped: " + stageCause);
-                    judgeCombat(real, resp);
+                    resp = judgeCombat(real, resp);
                     live.answer(resp, "without shadow");
                 }
                 decisionIdx++;
