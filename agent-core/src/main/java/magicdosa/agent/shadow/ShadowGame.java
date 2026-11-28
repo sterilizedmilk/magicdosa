@@ -422,6 +422,11 @@ public final class ShadowGame {
         return f;
     }
 
+    /** A step with nothing to choose: search skipped, cause single candidate (no visit ratios, no statistics). */
+    static final magicdosa.protocol.v1.Method SINGLE_CANDIDATE = magicdosa.protocol.v1.Method.newBuilder()
+        .setPrior(magicdosa.protocol.v1.Prior.PRIOR_UNIFORM)
+        .setSkipped(magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SINGLE_CANDIDATE).build();
+
     private DecisionResponse searchedOnce(DecisionRequest real) {
         if (real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
             // the anchor for searches of the decisions inside the action this priority decision may start
@@ -438,10 +443,9 @@ public final class ShadowGame {
         }
         DecisionResponse.Builder out = DecisionResponse.newBuilder().setGameId(real.getGameId())
             .setDecisionId(real.getDecisionId());
-        if (real.getCandidatesCount() == 1 && real.getType() == magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY) {
-            step.setChosen(0).setMethod(magicdosa.protocol.v1.Method.newBuilder()
-                .setPrior(magicdosa.protocol.v1.Prior.PRIOR_UNIFORM)
-                .setSkipped(magicdosa.protocol.v1.SearchSkipReason.SEARCH_SKIP_REASON_SINGLE_CANDIDATE));
+        if (magicdosa.agent.search.ForgeSearchGame.forced(real)) {
+            // one candidate that must be chosen (2026-11-28 user directive: any decision type, no budget spent)
+            step.setChosen(0).setMethod(SINGLE_CANDIDATE);
             live.searched(null, java.util.Map.of("single candidate", 1));
             return out.addChosen(0).addSteps(step).build();
         }
@@ -538,8 +542,13 @@ public final class ShadowGame {
                 b.addCandidates(idx < 0 ? magicdosa.protocol.v1.StepCandidate.newBuilder().setDone(true)
                     : magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(idx));
             }
-            b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios())
-                .addAllCandidateStats(magicdosa.agent.search.SearchResult.candidateStats(s));
+            if (s.actions().size() == 1) {
+                // a step of the decision with one action and no "done": forced, nothing was chosen here
+                b.setChosen(0).setMethod(SINGLE_CANDIDATE);
+            } else {
+                b.setChosen(s.chosen()).addAllVisitRatio(s.visitRatios())
+                    .addAllCandidateStats(magicdosa.agent.search.SearchResult.candidateStats(s));
+            }
             out.addSteps(b);
             int idx = g.rootCandidate(s.actions().get(s.chosen()));
             if (idx < 0) {
@@ -563,7 +572,8 @@ public final class ShadowGame {
                     break;
                 }
                 magicdosa.protocol.v1.DecisionStep.Builder b = magicdosa.protocol.v1.DecisionStep.newBuilder()
-                    .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL).setMethod(r.method());
+                    .setDecider(magicdosa.protocol.v1.Decider.DECIDER_MODEL)
+                    .setMethod(fit.size() == 1 ? SINGLE_CANDIDATE : r.method()); // one fitting candidate, may not stop
                 for (int i : fit) {
                     b.addCandidates(magicdosa.protocol.v1.StepCandidate.newBuilder().setIndex(i));
                 }

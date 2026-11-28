@@ -1125,6 +1125,20 @@ public final class ForgeSearchGame implements SearchGame, TreeReuse.Names {
         return chosen.size() >= c.getMin() && complete(r, chosen) && !(c.getMin() == 1 && c.getMax() == 1);
     }
 
+    /**
+     * Whether the request leaves nothing to choose: one candidate that must be chosen (priority with one candidate, or a
+     * selection of at least one from one that fits). Such a decision is answered without search (single candidate).
+     */
+    public static boolean forced(DecisionRequest r) {
+        if (r.getCandidatesCount() != 1) {
+            return false;
+        }
+        if (r.getType() == DecisionType.DECISION_TYPE_PRIORITY) {
+            return true;
+        }
+        return r.getConstraints().getMax() >= 1 && !mayStop(r, List.of()) && fitting(r, List.of(0), List.of()).size() == 1;
+    }
+
     /** {@link #doneAllowed}, for the answer's own steps. */
     public static boolean mayStop(DecisionRequest r, List<Integer> chosen) {
         return chosen.size() >= r.getConstraints().getMin() && complete(r, chosen);

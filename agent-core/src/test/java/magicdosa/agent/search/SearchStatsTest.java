@@ -70,6 +70,24 @@ class SearchStatsTest {
         assertEquals(0.25f, r.method().getRan().getRootEstimate(), 1e-6);
     }
 
+    /** 2026-11-28: a decision with one candidate that must be chosen is answered without search, any type. */
+    @Test
+    void oneCandidateThatMustBeChosenIsForced() {
+        magicdosa.protocol.v1.Candidate c = magicdosa.protocol.v1.Candidate.newBuilder().setCardId(7).build();
+        magicdosa.protocol.v1.DecisionRequest.Builder one = magicdosa.protocol.v1.DecisionRequest.newBuilder()
+            .setType(magicdosa.protocol.v1.DecisionType.DECISION_TYPE_TARGET).addCandidates(c);
+        assertTrue(ForgeSearchGame.forced(one.setConstraints(constraints(1, 1)).build()));
+        assertTrue(ForgeSearchGame.forced(one.setConstraints(constraints(1, 3)).build()));
+        assertFalse(ForgeSearchGame.forced(one.setConstraints(constraints(0, 1)).build()), "it or nothing: a choice");
+        assertFalse(ForgeSearchGame.forced(one.addCandidates(c).setConstraints(constraints(1, 1)).build()), "two candidates");
+        assertTrue(ForgeSearchGame.forced(magicdosa.protocol.v1.DecisionRequest.newBuilder()
+            .setType(magicdosa.protocol.v1.DecisionType.DECISION_TYPE_PRIORITY).addCandidates(c).build()));
+    }
+
+    private static magicdosa.protocol.v1.SelectionConstraints constraints(int min, int max) {
+        return magicdosa.protocol.v1.SelectionConstraints.newBuilder().setMin(min).setMax(max).build();
+    }
+
     @Test
     void searchStatusPerStep() {
         SearchResult r = new IsMcts(SearchConfig.of(9)).search(new Three(), 5);
